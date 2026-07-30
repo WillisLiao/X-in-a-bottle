@@ -23,8 +23,21 @@ const EXTENT := Vector3(0.80, 1.45, 0.70)
 var _camera: Camera3D
 var _bolts: Array[Bolt] = []
 var _since_spawn: float = 0.0
-var _charge: float = 0.0
 var _look: Vector2 = Vector2.ZERO
+
+var _charge := Charge.new()
+
+## Smoothed device motion, in G with gravity removed. Heavy smoothing, because
+## one spike from a door closing must not empty someone's bottle.
+var _agitation: float = 0.0
+var _touched_this_frame := false
+
+## Where the phone is tilted, smoothed. Drives the parallax.
+var _tilt: Vector2 = Vector2.ZERO
+
+## True when the device actually has sensors. On a desktop the camera falls
+## back to a slow orbit so the scene can still be judged.
+var _has_sensors := false
 
 ## Set from the command line so a still can be captured without a device.
 var _capture_path: String = ""
@@ -38,43 +51,99 @@ func _ready() -> void:
 	_build_finish()
 	_read_capture_args()
 
+	_has_sensors = OS.has_feature("mobile")
+
 	# The bottle is never empty. Something is in there the moment it opens.
-	for i in 2:
+	for i in Charge.STARTING_OBJECTS:
 		_spawn()
 
 
 func _process(delta: float) -> void:
 	_elapsed += delta
 
-	# Standing in for the real charge until the motion and touch rules are
-	# ported across from the native version.
-	_charge = min(_charge + delta * 0.06, 1.0)
+	_read_motion(delta)
 
-	var wanted: int = max(2, int(round(CAPACITY * pow(_charge, 0.45))))
+	var was_disturbed := _charge.is_disturbed
+	_charge.update(delta, _agitation, _touched_this_frame)
+	_touched_this_frame = false
+
+	if _charge.is_disturbed and not was_disturbed:
+		_shake_loose()
+
+	var wanted: int = _charge.population(CAPACITY)
 
 	_since_spawn += delta
 	if _bolts.size() < wanted and _since_spawn > SPAWN_SECONDS:
 		_spawn()
 		_since_spawn = 0.0
 
+	# Everything goes cold while the phone is being handled, so the cost is
+	# visible in the instant it happens rather than only later as fewer bolts.
+	var energy := 0.25 if _charge.is_disturbed else 1.0
 	for bolt in _bolts:
-		bolt.set_energy(1.0)
+		bolt.set_energy(energy)
 
-	_drift_camera(delta)
+	_move_camera(delta)
 	_maybe_capture()
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventScreenTouch or event is InputEventScreenDrag \
+			or event is InputEventMouseButton:
+		_touched_this_frame = true
+		_charge.disturb()
+
+
+## Accelerometer minus gravity is user acceleration, the same quantity the
+## native build reads from CoreMotion. Godot reports it in m/s squared, so it is
+## converted to G to keep one threshold across both codebases.
+func _read_motion(delta: float) -> void:
+	if not _has_sensors:
+		return
+
+	var raw := Input.get_accelerometer() - Input.get_gravity()
+	var magnitude := raw.length() / 9.81
+	_agitation = _agitation * 0.82 + magnitude * 0.18
+
+
+## Shaken loose. Not all of them: losing the lot would make a disturbance a
+## reset rather than a cost, and the cost is the product.
+func _shake_loose() -> void:
+	var leaving := int(ceil(_bolts.size() * 0.30))
+	for i in leaving:
+		if _bolts.size() <= Charge.STARTING_OBJECTS:
+			break
+		var index := randi() % _bolts.size()
+		_bolts[index].queue_free()
+		_bolts.remove_at(index)
 
 
 ## Slow orbit, so the bolts move against each other and the scene reads as
 ## having depth. On device this is driven by the gyroscope instead: a gentle
 ## tilt looks into the bottle, while actually moving the phone is still a
 ## disturbance.
-func _drift_camera(delta: float) -> void:
-	_look.x += delta * 0.10
-	var yaw := sin(_look.x) * 0.22
-	var pitch := sin(_look.x * 0.6) * 0.10
-
+func _move_camera(delta: float) -> void:
 	var distance := 4.0
-	_camera.position = Vector3(sin(yaw) * distance, pitch * 1.6, cos(yaw) * distance)
+
+	if _has_sensors:
+		# Tilting looks into the bottle. This is the payoff for being in 3D at
+		# all, and it costs nothing in disturbance: gravity is removed before
+		# the agitation is measured, so leaning the phone is free while picking
+		# it up is not.
+		var g := Input.get_gravity()
+		if g.length() > 0.1:
+			g = g.normalized()
+			_tilt = _tilt.lerp(Vector2(g.x, g.z), clampf(delta * 2.2, 0.0, 1.0))
+
+		var yaw := _tilt.x * 0.55
+		var pitch := (_tilt.y + 1.0) * 0.45
+		_camera.position = Vector3(sin(yaw) * distance, pitch, cos(yaw) * distance)
+	else:
+		_look.x += delta * 0.10
+		var yaw := sin(_look.x) * 0.22
+		var pitch := sin(_look.x * 0.6) * 0.10
+		_camera.position = Vector3(sin(yaw) * distance, pitch * 1.6, cos(yaw) * distance)
+
 	_camera.look_at(Vector3.ZERO, Vector3.UP)
 
 
