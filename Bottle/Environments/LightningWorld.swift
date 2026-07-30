@@ -33,12 +33,13 @@ final class LightningWorld: Environment {
 
     var onCatch: ((Double) -> Void)?
 
-    func update(delta: Double, charge: Double, disturbance: Double) {
+    let capacity = Int(kMaxBolts)
+
+    func update(delta: Double, population: Int, charge: Double, disturbance: Double) {
         time += delta
         arrival = max(0, arrival - delta * 1.6)
 
-        // How many bolts this much stillness has earned.
-        let wanted = Int((Double(kMaxBolts) * charge).rounded())
+        let wanted = min(population, capacity)
         let held = bolts.filter { !$0.losing }.count
 
         // Spaced out so the bottle fills visibly rather than all at once when

@@ -14,7 +14,8 @@
 #define kMaxBolts   12
 #define kBoltPoints 9
 #define kMaxBlocks  20
-#define kMaxGenies  14
+#define kMaxElves   14
+#define kMaxBranches 44
 
 typedef struct {
     vector_float2 resolution;
@@ -66,13 +67,13 @@ typedef struct {
 typedef struct {
     vector_float2 resolution;
 
-    vector_float2 positions[kMaxGenies];
-    float phases[kMaxGenies];
-    float alphas[kMaxGenies];
-    float scales[kMaxGenies];
+    vector_float2 positions[kMaxElves];
+    float phases[kMaxElves];
+    float alphas[kMaxElves];
+    float scales[kMaxElves];
 
-    // -1 or 1. Which way a genie is turned.
-    float facings[kMaxGenies];
+    // -1 or 1. Which way an elf is facing.
+    float facings[kMaxElves];
 
     // Screen displacement during an earthquake.
     vector_float2 shake;
@@ -82,6 +83,33 @@ typedef struct {
     float disturbance;
     float ditherAmount;
     int count;
-} GenieUniforms;
+} ElfUniforms;
+
+typedef struct {
+    vector_float2 resolution;
+
+    // Every branch is a tapered segment. The trunk is branch 0.
+    vector_float2 starts[kMaxBranches];
+    vector_float2 ends[kMaxBranches];
+    float widthStart[kMaxBranches];
+    float widthEnd[kMaxBranches];
+    float alphas[kMaxBranches];
+
+    // How much foliage sits at this branch's tip. Only outer branches carry it.
+    float leaves[kMaxBranches];
+
+    // Sway phase, so the canopy does not move as one rigid piece.
+    float phases[kMaxBranches];
+
+    float time;
+    float charge;
+    float disturbance;
+
+    // Spikes when a cut happens, and drives the falling leaves.
+    float cut;
+
+    float ditherAmount;
+    int count;
+} TreeUniforms;
 
 #endif /* BottleTypes_h */

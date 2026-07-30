@@ -1,15 +1,15 @@
 import MetalKit
 import simd
 
-/// Genies in a Bottle. Paid.
+/// Elves in a Bottle. Paid.
 ///
 /// They arrive one at a time while the phone is left alone and stay, drifting
 /// between places and working at nothing in particular. Moving the phone is an
 /// earthquake and some of them flee.
-final class GenieWorld: Environment {
+final class ElfWorld: Environment {
 
-    let title = "Genies in a Bottle"
-    let fragmentFunction = "genies_fragment"
+    let title = "Elves in a Bottle"
+    let fragmentFunction = "elves_fragment"
     let isPaid = true
 
     private static let fadeSeconds: Double = 1.6
@@ -18,7 +18,7 @@ final class GenieWorld: Environment {
     /// everything makes a disturbance a reset rather than a cost.
     private static let fleeFraction: Double = 0.28
 
-    private struct Genie {
+    private struct Elf {
         var position: SIMD2<Double>
         var target: SIMD2<Double>
         var phase: Double
@@ -29,7 +29,7 @@ final class GenieWorld: Environment {
         var restless: Double
     }
 
-    private var genies: [Genie] = []
+    private var elves: [Elf] = []
     private var time: Double = 0
     private var shake: SIMD2<Double> = .zero
     private var shakeEnergy: Double = 0
@@ -37,7 +37,9 @@ final class GenieWorld: Environment {
 
     var onArrive: (() -> Void)?
 
-    func update(delta: Double, charge: Double, disturbance: Double) {
+    let capacity = Int(kMaxElves)
+
+    func update(delta: Double, population: Int, charge: Double, disturbance: Double) {
         time += delta
 
         // Decaying random walk, so an earthquake rattles rather than slides.
@@ -45,22 +47,22 @@ final class GenieWorld: Environment {
         shake = SIMD2(Double.random(in: -1...1), Double.random(in: -1...1))
             * shakeEnergy * 0.040
 
-        let wanted = Int((Double(kMaxGenies) * charge).rounded())
-        let held = genies.filter { !$0.fleeing }.count
+        let wanted = min(population, capacity)
+        let held = elves.filter { !$0.fleeing }.count
 
         sinceSpawn += delta
-        if held < wanted, sinceSpawn > 1.6, genies.count < Int(kMaxGenies) {
-            genies.append(spawn())
+        if held < wanted, sinceSpawn > 1.6, elves.count < Int(kMaxElves) {
+            elves.append(spawn())
             sinceSpawn = 0
             onArrive?()
         }
 
-        if held > wanted, let index = genies.firstIndex(where: { !$0.fleeing }) {
-            genies[index].fleeing = true
+        if held > wanted, let index = elves.firstIndex(where: { !$0.fleeing }) {
+            elves[index].fleeing = true
         }
 
-        for i in genies.indices {
-            var g = genies[i]
+        for i in elves.indices {
+            var g = elves[i]
 
             let target: Double = g.fleeing ? 0 : 1
             g.alpha += (target - g.alpha) * min(delta / Self.fadeSeconds, 1)
@@ -78,30 +80,47 @@ final class GenieWorld: Environment {
             g.position += (g.target - g.position) * min(delta * 0.18, 1)
             g.phase += delta
 
-            genies[i] = g
+            elves[i] = g
         }
 
-        genies.removeAll { $0.fleeing && $0.alpha < 0.02 }
+        elves.removeAll { $0.fleeing && $0.alpha < 0.02 }
     }
 
     func disturbed() {
         shakeEnergy = 1
 
-        let held = genies.filter { !$0.fleeing }
+        let held = elves.filter { !$0.fleeing }
         let leaving = Int((Double(held.count) * Self.fleeFraction).rounded(.up))
         guard leaving > 0 else { return }
 
         var lost = 0
-        for i in genies.indices.shuffled() where !genies[i].fleeing {
-            genies[i].fleeing = true
+        for i in elves.indices.shuffled() where !elves[i].fleeing {
+            elves[i].fleeing = true
             lost += 1
             if lost >= leaving { break }
         }
     }
 
-    private func spawn() -> Genie {
-        let at = SIMD2(Double.random(in: 0.16...0.84), Double.random(in: 0.18...0.82))
-        return Genie(position: at,
+    private func spawn() -> Elf {
+        // Placed away from the others. Purely random placement clumps badly:
+        // with fourteen of them in one screen a third of the bottle ends up
+        // empty and the rest is a pile.
+        var at = SIMD2(Double.random(in: 0.16...0.84), Double.random(in: 0.18...0.82))
+        var best = -1.0
+        for _ in 0..<14 {
+            let candidate = SIMD2(Double.random(in: 0.16...0.84),
+                                  Double.random(in: 0.18...0.82))
+            let nearest = elves
+                .filter { !$0.fleeing }
+                .map { simd_distance($0.position, candidate) }
+                .min() ?? .greatestFiniteMagnitude
+            if nearest > best {
+                best = nearest
+                at = candidate
+            }
+        }
+
+        return Elf(position: at,
                      target: at,
                      phase: Double.random(in: 0..<(2 * .pi)),
                      alpha: 0,
@@ -116,7 +135,7 @@ final class GenieWorld: Environment {
                         size: CGSize,
                         charge: Double,
                         disturbance: Double) {
-        var u = GenieUniforms()
+        var u = ElfUniforms()
         u.resolution = SIMD2(Float(size.width), Float(size.height))
         u.time = Float(time)
         u.charge = Float(charge)
@@ -124,7 +143,7 @@ final class GenieWorld: Environment {
         u.shake = SIMD2(Float(shake.x), Float(shake.y))
         u.ditherAmount = 1.0 / 1023.0
 
-        let visible = Array(genies.prefix(Int(kMaxGenies)))
+        let visible = Array(elves.prefix(Int(kMaxElves)))
         u.count = Int32(visible.count)
 
         withUnsafeMutableBytes(of: &u.positions) { raw in
@@ -150,6 +169,6 @@ final class GenieWorld: Environment {
             for (i, g) in visible.enumerated() { b[i] = Float(g.facing) }
         }
 
-        encoder.setFragmentBytes(&u, length: MemoryLayout<GenieUniforms>.stride, index: 0)
+        encoder.setFragmentBytes(&u, length: MemoryLayout<ElfUniforms>.stride, index: 0)
     }
 }

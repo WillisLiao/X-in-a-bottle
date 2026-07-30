@@ -32,11 +32,13 @@ final class IceWorld: Environment {
 
     var onForm: (() -> Void)?
 
-    func update(delta: Double, charge: Double, disturbance: Double) {
+    let capacity = Int(kMaxBlocks)
+
+    func update(delta: Double, population: Int, charge: Double, disturbance: Double) {
         time += delta
         melt = max(0, melt - delta * 1.1)
 
-        let wanted = Int((Double(kMaxBlocks) * charge).rounded())
+        let wanted = min(population, capacity)
         let held = blocks.filter { !$0.melting }.count
 
         sinceSpawn += delta

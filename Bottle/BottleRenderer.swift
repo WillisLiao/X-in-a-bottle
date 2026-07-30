@@ -11,8 +11,9 @@ final class BottleRenderer: NSObject, CanvasRenderer {
 
     private(set) var environments: [any Environment] = [
         LightningWorld(),
+        TreeWorld(),
         IceWorld(),
-        GenieWorld(),
+        ElfWorld(),
     ]
 
     private(set) var index = 0
@@ -45,8 +46,10 @@ final class BottleRenderer: NSObject, CanvasRenderer {
                 }
             case let world as IceWorld:
                 world.onForm = { [weak self] in self?.caught(intensity: 0.35) }
-            case let world as GenieWorld:
+            case let world as ElfWorld:
                 world.onArrive = { [weak self] in self?.caught(intensity: 0.30) }
+            case let world as TreeWorld:
+                world.onGrow = { [weak self] in self?.caught(intensity: 0.28) }
             default:
                 break
             }
@@ -98,7 +101,10 @@ final class BottleRenderer: NSObject, CanvasRenderer {
         }
         wasDisturbed = charge.isDisturbed
 
-        active.update(delta: delta, charge: charge.level, disturbance: disturbance)
+        active.update(delta: delta,
+                      population: charge.population(capacity: active.capacity),
+                      charge: charge.level,
+                      disturbance: disturbance)
     }
 
     func encodeUniforms(into encoder: MTLRenderCommandEncoder) {

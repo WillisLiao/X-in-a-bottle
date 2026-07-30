@@ -3,22 +3,24 @@ import simd
 
 /// One world inside the bottle.
 ///
-/// Every environment shares the same contract: stillness fills it, disturbance
-/// empties it faster. What that looks like is entirely up to the world. Charge
-/// is a storm gathering, or ice spreading, or genies arriving, and disturbance
-/// is a blowout, a thaw, or an earthquake.
+/// Every environment obeys the same rule: things are caught and kept. Stillness
+/// adds another object and it stays; disturbance takes a share away. What that
+/// looks like is entirely up to the world - lightning held in the air, ice
+/// stacking up, elves arriving, a tree putting out branches.
 @MainActor
 protocol Environment: AnyObject {
 
-    /// Shown once when the environment is swiped to, then never again.
+    /// Shown briefly when swiped to, then it fades away.
     var title: String { get }
 
     var fragmentFunction: String { get }
 
-    /// True for everything except the default, which ships free.
-    var isPaid: Bool { get }
+    /// How many things a completely full bottle holds.
+    var capacity: Int { get }
 
-    func update(delta: Double, charge: Double, disturbance: Double)
+    /// `population` is how many objects the bottle has earned right now. The
+    /// world's job is to converge on it, gradually, so filling is watchable.
+    func update(delta: Double, population: Int, charge: Double, disturbance: Double)
 
     /// Called on the frame a disturbance begins, so the world can react in its
     /// own idiom rather than only shrinking in the background.
