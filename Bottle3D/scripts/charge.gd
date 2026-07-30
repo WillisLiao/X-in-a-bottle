@@ -58,12 +58,20 @@ func disturb() -> void:
 
 ## How many things the bottle holds right now, out of `capacity`.
 ##
-## Front-loaded. A linear count needs over a minute of perfect stillness before
-## the first object appears, which is indistinguishable from the app being
-## broken. The curve puts something in the bottle within seconds and then slows
-## right down, so a full bottle still costs the whole fifteen minutes.
+## Front-loaded hard. A linear count needs over a minute of stillness before
+## anything appears at all, which is indistinguishable from the app being
+## broken.
+##
+## The exponent was 0.45 first, which put the third object at 52 seconds and the
+## fourth at nearly two minutes - working, but slow enough that it read as
+## nothing happening. At 0.30 the early arrivals land at roughly 13s, 39s and
+## 89s, so the bottle is visibly alive in the first minute, while a full one
+## still costs the entire fifteen. The point of the curve is that early feedback
+## is cheap and the last few are expensive.
+const CURVE := 0.30
+
 func population(capacity: int) -> int:
 	var grown := 0
 	if level > 0.0:
-		grown = int(round(float(capacity) * pow(level, 0.45)))
+		grown = int(round(float(capacity) * pow(level, CURVE)))
 	return maxi(STARTING_OBJECTS, grown)
