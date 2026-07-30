@@ -3,47 +3,54 @@
 
 #include <simd/simd.h>
 
-// The phone is the bottle. Nothing here draws a vessel: every environment fills
-// the screen edge to edge, and the glass is the one you are holding.
+// The phone is the bottle. Nothing draws a vessel: every environment fills the
+// screen edge to edge and the glass is the one you are holding.
+//
+// The rule every environment obeys: things are CAUGHT AND KEPT. Stillness adds
+// another object to the bottle and it stays there. Disturbance takes some away.
+// Nothing here is an event that flashes and vanishes, because a bottle you
+// cannot see filling is not a bottle.
 
-// A bolt is a polyline built by midpoint displacement, four passes deep.
-// Two points become 3, 5, 9, then 17.
-#define kMaxBoltPoints 17
-#define kMaxCrystals   26
-#define kMaxGenies     22
+#define kMaxBolts   12
+#define kBoltPoints 9
+#define kMaxBlocks  20
+#define kMaxGenies  14
 
 typedef struct {
     vector_float2 resolution;
 
-    // Normalised view space, origin top left. Only the first boltCount count.
-    vector_float2 boltPoints[kMaxBoltPoints];
+    // kMaxBolts polylines laid end to end, kBoltPoints each.
+    vector_float2 points[kMaxBolts * kBoltPoints];
+
+    // Per-bolt bounds, so a pixel can skip a bolt it is nowhere near. Without
+    // this the inner loop is 12 bolts x 8 segments for every pixel on screen.
+    vector_float2 boundsMin[kMaxBolts];
+    vector_float2 boundsMax[kMaxBolts];
+
+    float alphas[kMaxBolts];
+
+    // Each captured bolt breathes on its own phase, so a full bottle looks
+    // alive rather than like a photograph of wires.
+    float phases[kMaxBolts];
 
     float time;
-
-    // The sky lighting up. Decays slowly, so the afterglow outlasts the bolt
-    // exactly as it does in a real storm.
-    float flash;
-
-    // The bolt itself. Decays fast, because a strike is over long before the
-    // light it threw has finished fading.
-    float boltAlpha;
-
-    // How full the bottle is, 0 to 1.
     float charge;
-
-    // Rises while the phone is touched or moved.
     float disturbance;
 
+    // Brief bloom as a new bolt is caught.
+    float arrival;
+
     float ditherAmount;
-    int boltCount;
+    int count;
 } LightningUniforms;
 
 typedef struct {
     vector_float2 resolution;
 
-    // Crystal seeds, and how far each has grown.
-    vector_float2 seeds[kMaxCrystals];
-    float radii[kMaxCrystals];
+    vector_float2 centers[kMaxBlocks];
+    vector_float2 sizes[kMaxBlocks];
+    float rotations[kMaxBlocks];
+    float alphas[kMaxBlocks];
 
     float time;
     float charge;
@@ -60,20 +67,19 @@ typedef struct {
     vector_float2 resolution;
 
     vector_float2 positions[kMaxGenies];
-
-    // Bobbing offset, so no two drift in step.
     float phases[kMaxGenies];
-
-    // Fades in on arrival and out on fleeing, so nothing ever pops.
     float alphas[kMaxGenies];
+    float scales[kMaxGenies];
 
-    float time;
-    float charge;
-    float disturbance;
+    // -1 or 1. Which way a genie is turned.
+    float facings[kMaxGenies];
 
     // Screen displacement during an earthquake.
     vector_float2 shake;
 
+    float time;
+    float charge;
+    float disturbance;
     float ditherAmount;
     int count;
 } GenieUniforms;

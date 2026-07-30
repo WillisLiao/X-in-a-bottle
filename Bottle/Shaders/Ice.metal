@@ -1,13 +1,18 @@
 #include "CanvasCommon.h"
 #include "BottleTypes.h"
 
-// Ice in a Bottle. Crystals nucleate and creep outward while the phone is left
-// alone, and thaw when it is not.
+// Ice in a Bottle. Angular blocks form one after another and stay, stacking up
+// from the bottom. Moving the phone melts some of them away.
 
-constant float3 kDeepColor  = float3(0.020, 0.032, 0.055);
-constant float3 kIceColor   = float3(0.640, 0.820, 0.920);
-constant float3 kEdgeColor  = float3(0.880, 0.960, 1.000);
-constant float3 kMeltColor  = float3(0.400, 0.620, 0.780);
+constant float3 kDeepColor = float3(0.020, 0.032, 0.055);
+constant float3 kIceColor  = float3(0.520, 0.740, 0.870);
+constant float3 kEdgeColor = float3(0.900, 0.970, 1.000);
+constant float3 kMeltColor = float3(0.400, 0.620, 0.780);
+
+static float sd_box(float2 p, float2 b, float r) {
+    float2 q = abs(p) - b + r;
+    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
+}
 
 fragment float4 ice_fragment(CanvasVertexOut in [[stage_in]],
                              constant IceUniforms &u [[buffer(0)]]) {
@@ -16,64 +21,55 @@ fragment float4 ice_fragment(CanvasVertexOut in [[stage_in]],
 
     float3 col = srgb_to_linear(kDeepColor);
 
-    // Strongest crystal covering this pixel, and how close it is to an edge.
     float body = 0.0;
     float edge = 0.0;
 
     for (int i = 0; i < u.count; i++) {
-        float r = u.radii[i];
-        if (r <= 0.0005) { continue; }
+        float a = u.alphas[i];
+        if (a <= 0.01) { continue; }
 
-        float2 s = float2(u.seeds[i].x * aspect, u.seeds[i].y);
-        float2 d = p - s;
-        float dist = length(d);
-        if (dist > r * 1.6) { continue; }
+        float2 c = float2(u.centers[i].x * aspect, u.centers[i].y);
+        float2 d = p - c;
 
-        // A slow breathing so the ice never looks like a frozen screenshot.
-        float breathe = 1.0 + 0.02 * sin(u.time * 0.5 + float(i));
-        float reach = r * breathe;
-        float norm = dist / max(reach, 1e-4);
+        // Cheap reject before the rotation and the box.
+        if (dot(d, d) > 0.055) { continue; }
 
-        // Six-fold symmetry, as thin spurs rather than as lobes on a disc.
-        // Modulating a circle's radius by cos(6θ) - the obvious approach - gives
-        // fat rounded petals that read as a flower, which is exactly what the
-        // first attempt looked like. Folding the angle into a wedge and putting
-        // a narrow gaussian across it gives arms that actually taper.
-        float theta = atan2(d.y, d.x) + canvas_hash(u.seeds[i]) * 6.2831853;
-        float sector = abs(fract(theta * 6.0 / 6.2831853) - 0.5) * 2.0;
+        float s = sin(u.rotations[i]);
+        float k = cos(u.rotations[i]);
+        float2 local = float2(d.x * k - d.y * s, d.x * s + d.y * k);
 
-        float arm = exp(-(sector * sector) / 0.026) * (1.0 - smoothstep(0.12, 1.0, norm));
+        // A block, not a crystal. Barely rounded corners, because ice broken
+        // off a sheet has edges and this environment is the one that has to
+        // look solid.
+        // Not named `half`: that is a reserved type in Metal.
+        float2 extent = float2(u.sizes[i].x * aspect, u.sizes[i].y);
+        float sd = sd_box(local, extent, 0.012);
 
-        // Barbs branching off each spur, close to the middle, which is what
-        // separates frost from a plain star.
-        float barb = exp(-(sector * sector) / 0.34)
-            * (1.0 - smoothstep(0.0, 0.42, norm)) * 0.55;
+        // Forming blocks grow into place rather than fading in flat.
+        float grow = mix(0.55, 1.0, a);
+        sd += (1.0 - grow) * 0.05;
 
-        // A small hard hexagonal heart. Crisp on purpose: everything else here
-        // is soft, and ice needs at least one edge you could cut yourself on.
-        float core = 1.0 - smoothstep(0.14, 0.18, norm);
+        float fill = 1.0 - smoothstep(-0.004, 0.004, sd);
+        body = max(body, fill * a);
 
-        float fill = clamp(max(core, max(arm, barb)), 0.0, 1.0);
-        body = max(body, fill);
-
-        // Bright line right at the growing front, where real frost is thickest.
-        edge = max(edge, fill * exp(-pow((norm - 0.55) / 0.30, 2.0)));
+        // Bright line along the edge, where a real block catches light.
+        edge = max(edge, exp(-abs(sd) / 0.006) * a);
     }
 
-    // Internal facets. Only visible inside the ice, so the crystal has depth
-    // instead of being a flat cut-out.
-    float facet = canvas_fbm(p * 26.0 + float2(u.time * 0.01, 0.0));
-    facet = smoothstep(0.42, 0.78, facet);
+    // Internal fracture planes, only visible inside the ice, so a block has
+    // depth instead of being a flat cut-out.
+    float facet = canvas_fbm(p * 22.0 + float2(u.time * 0.008, 0.0));
+    facet = smoothstep(0.40, 0.80, facet);
 
-    col += srgb_to_linear(kIceColor) * body * (0.055 + 0.075 * facet);
-    col += srgb_to_linear(kEdgeColor) * edge * 0.16;
+    col += srgb_to_linear(kIceColor) * body * (0.070 + 0.090 * facet);
+    col += srgb_to_linear(kEdgeColor) * edge * 0.20;
 
-    // Thawing. A wet sheen washes across the ice, brightest where it is
-    // thinnest, so a disturbance looks like loss rather than like dimming.
+    // Thawing. A wet sheen washes down the ice, so a disturbance looks like
+    // loss rather than like dimming.
     if (u.melt > 0.0) {
         float wet = canvas_fbm(p * 9.0 - float2(0.0, u.time * 0.6));
-        col += srgb_to_linear(kMeltColor) * u.melt * body * wet * 0.20;
-        col += srgb_to_linear(kMeltColor) * u.melt * (1.0 - body) * 0.010;
+        col += srgb_to_linear(kMeltColor) * u.melt * body * wet * 0.22;
+        col += srgb_to_linear(kMeltColor) * u.melt * 0.008;
     }
 
     col *= smoothstep(1.45, 0.40, distance(in.uv, float2(0.5)));

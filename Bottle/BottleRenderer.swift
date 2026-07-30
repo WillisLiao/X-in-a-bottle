@@ -24,7 +24,7 @@ final class BottleRenderer: NSObject, CanvasRenderer {
     let charge = Charge()
 
     private let motion = MotionMonitor()
-    private let strikeFeedback = UIImpactFeedbackGenerator(style: .rigid)
+    private let arrivalFeedback = UIImpactFeedbackGenerator(style: .rigid)
 
     private var size = CGSize(width: 1, height: 1)
     private var touchedThisFrame = false
@@ -35,19 +35,32 @@ final class BottleRenderer: NSObject, CanvasRenderer {
         super.init()
         motion.start()
 
-        if let storm = environments.first as? LightningWorld {
-            storm.onStrike = { [weak self] charge in
-                // Felt as well as seen, and harder from a fuller bottle, so
-                // building a storm has a physical reward.
-                self?.strikeFeedback.impactOccurred(intensity: 0.25 + 0.6 * charge)
+        // Every environment marks an arrival the same way, because catching
+        // something is the same event whatever it is.
+        for env in environments {
+            switch env {
+            case let world as LightningWorld:
+                world.onCatch = { [weak self] charge in
+                    self?.caught(intensity: 0.30 + 0.5 * charge)
+                }
+            case let world as IceWorld:
+                world.onForm = { [weak self] in self?.caught(intensity: 0.35) }
+            case let world as GenieWorld:
+                world.onArrive = { [weak self] in self?.caught(intensity: 0.30) }
+            default:
+                break
             }
         }
     }
 
-    /// Held steady: a bolt lasts a third of a second, so dropped frames lose
-    /// the lightning. The phone is on a desk being glanced at, not held in the
-    /// dark, so the power trade is the opposite of Lull's.
-    var preferredFPS: Int { 60 }
+    /// Nothing here is a brief event any more: everything caught stays caught,
+    /// so there is no fast moment to miss. 30 is plenty and halves the cost of
+    /// shaders that loop over every object for every pixel.
+    var preferredFPS: Int { 30 }
+
+    private func caught(intensity: Double) {
+        arrivalFeedback.impactOccurred(intensity: intensity)
+    }
 
     /// A bottle is never finished. It is left, not completed.
     var isFinished: Bool { false }
