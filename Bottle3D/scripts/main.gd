@@ -102,6 +102,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventScreenDrag:
 		_disturb()
 	elif event is InputEventMouseButton:
+		# Belt and braces alongside the project setting: an emulated pointer
+		# reports device -1, and handling it as well as the touch it came from
+		# advances the world twice per swipe.
+		if event.device == -1:
+			return
 		if event.pressed:
 			_drag_from = event.position
 		else:

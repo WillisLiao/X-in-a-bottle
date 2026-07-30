@@ -21,6 +21,13 @@ window/stretch/mode="viewport"
 ; exported plist said LandscapeLeft while the phone was held upright.
 window/handheld/orientation=1
 
+[input_devices]
+
+; A touch otherwise fires both a ScreenTouch and an emulated MouseButton, so a
+; single swipe was handled twice and the index advanced by two. Lightning to
+; Ice to Lightning to Ice, with Tree and Elves never once selected.
+pointing/emulate_mouse_from_touch=false
+
 [rendering]
 
 ; Mobile, not Forward+. The phone ran hot enough to notice, and this app sits on
