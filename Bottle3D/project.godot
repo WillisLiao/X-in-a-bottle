@@ -17,12 +17,15 @@ window/size/viewport_width=2622
 window/size/viewport_height=1206
 window/stretch/mode="viewport"
 
-; Landscape. The phone lies on a desk while you work, so width is the axis with
-; room in it - which is why the tree is a grove rather than one trunk.
+; Sensor landscape: either way up, following the phone, but never portrait. The
+; phone lies on a desk while you work, so width is the axis with room in it -
+; which is why the tree is a grove rather than one trunk - but which of the two
+; landscape sides is up is the user's business, not ours.
 ;
 ; This is an enum, not a string: "portrait" silently parses as 0.
-;   0 landscape, 1 portrait, 2 reverse landscape, 3 reverse portrait
-window/handheld/orientation=0
+;   0 landscape, 1 portrait, 2 reverse landscape, 3 reverse portrait,
+;   4 sensor landscape, 5 sensor portrait, 6 sensor
+window/handheld/orientation=4
 
 [input_devices]
 

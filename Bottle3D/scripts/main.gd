@@ -190,7 +190,18 @@ func _move_camera(delta: float) -> void:
 		var g := Input.get_gravity()
 		if g.length() > 0.1:
 			g = g.normalized()
-			_tilt = _tilt.lerp(Vector2(g.x, g.z), clampf(delta * 2.2, 0.0, 1.0))
+
+			# Gravity is reported in the device's own frame, which does not turn
+			# when the screen does. Held the other way up in landscape, the same
+			# lean produces the opposite x, so the parallax would run backwards
+			# on one of the two sides the app now allows.
+			var flipped := DisplayServer.screen_get_orientation() \
+				== DisplayServer.SCREEN_REVERSE_LANDSCAPE
+			var lean := Vector2(g.x, g.z)
+			if flipped:
+				lean.x = -lean.x
+
+			_tilt = _tilt.lerp(lean, clampf(delta * 2.2, 0.0, 1.0))
 		_camera.position = focus + Vector3(
 			sin(_tilt.x * 0.55) * distance,
 			(_tilt.y + 1.0) * 0.45,
