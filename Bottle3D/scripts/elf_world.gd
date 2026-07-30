@@ -43,8 +43,8 @@ func _init() -> void:
 
 	# They stand on a floor. Pulled further back than the first framing, which
 	# was set when they were slighter - at the new proportions it cropped them.
-	focus = Vector3(0, -0.62, 0)
-	distance = 4.3
+	focus = Vector3(0, -0.52, 0)
+	distance = 4.9
 
 	# Warm lamplight, and a fill that is warm-neutral rather than blue. The blue
 	# fill is what made the skin look dead.
@@ -60,8 +60,8 @@ func build() -> void:
 	# Something under their feet. Figures floating in a void read as apparitions
 	# however they are lit.
 	var disc := CylinderMesh.new()
-	disc.top_radius = 1.15
-	disc.bottom_radius = 1.15
+	disc.top_radius = 2.30
+	disc.bottom_radius = 2.30
 	disc.height = 0.05
 	disc.radial_segments = 24
 	disc.rings = 1
@@ -173,9 +173,9 @@ func _floor_y() -> float:
 
 
 func _somewhere() -> Vector3:
-	var angle := randf() * TAU
-	var radius := randf_range(0.15, 0.95)
-	return Vector3(cos(angle) * radius, _floor_y(), sin(angle) * radius)
+	# Spread across the width, shallow in depth. A circle wastes the wide screen
+	# and puts half of them behind each other.
+	return Vector3(randf_range(-1.95, 1.95), _floor_y(), randf_range(-0.5, 0.45))
 
 
 ## A small round figure: big head, short limbs, pointed hat, and a face.

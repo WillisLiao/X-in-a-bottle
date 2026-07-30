@@ -23,8 +23,17 @@ func _init() -> void:
 	title = "Ice in a Bottle"
 	capacity = 18
 	spawn_seconds = 1.1
-	focus = Vector3(0, -0.45, 0)
-	distance = 3.2
+	focus = Vector3(0, -0.30, 0)
+	distance = 4.4
+
+	# Cold, but bright. Ice is a surface that catches light rather than one that
+	# emits, so it needs a key strong enough to strike a facet.
+	key_color = Color("D8ECFF")
+	key_energy = 1.60
+	fill_color = Color("5A86C8")
+	fill_energy = 0.60
+	ambient_color = Color("1C2A3E")
+	ambient_energy = 0.90
 
 
 func held() -> int:
@@ -61,14 +70,14 @@ func _grow() -> bool:
 
 	# Stacked from the bottom, because ice in a vessel would settle. Later
 	# blocks sit higher, with enough scatter that it is a pile and not a column.
+	# A drift spread across the width rather than a column stacked up the middle,
+	# because height is the dimension the landscape screen has least of.
 	var depth := float(_blocks.size()) / float(capacity)
-	var angle := randf() * TAU
-	var spread := 0.55 * (1.0 - depth * 0.45)
 
 	b.target = Vector3(
-		cos(angle) * spread * randf_range(0.3, 1.0),
-		-1.15 + depth * 1.9 + randf_range(-0.08, 0.08),
-		sin(angle) * spread * randf_range(0.3, 1.0))
+		randf_range(-2.1, 2.1),
+		-0.85 + depth * 0.85 + randf_range(-0.10, 0.10),
+		randf_range(-0.55, 0.35))
 	b.spin = Vector3(randf_range(-0.04, 0.04), randf_range(-0.05, 0.05), 0)
 
 	var box := BoxMesh.new()

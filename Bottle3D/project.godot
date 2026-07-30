@@ -13,13 +13,16 @@ boot_splash/show_image=false
 
 [display]
 
-window/size/viewport_width=1206
-window/size/viewport_height=2622
+window/size/viewport_width=2622
+window/size/viewport_height=1206
 window/stretch/mode="viewport"
 
-; Enum, not a string. "portrait" parses as 0, which is landscape, and the
-; exported plist said LandscapeLeft while the phone was held upright.
-window/handheld/orientation=1
+; Landscape. The phone lies on a desk while you work, so width is the axis with
+; room in it - which is why the tree is a grove rather than one trunk.
+;
+; This is an enum, not a string: "portrait" silently parses as 0.
+;   0 landscape, 1 portrait, 2 reverse landscape, 3 reverse portrait
+window/handheld/orientation=0
 
 [input_devices]
 

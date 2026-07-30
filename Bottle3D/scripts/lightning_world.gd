@@ -6,8 +6,9 @@ extends World
 ## Bolts are caught and kept, suspended and breathing. A disturbance shakes some
 ## loose.
 
-## The volume bolts are placed in, in metres, centred on the origin.
-const EXTENT := Vector3(0.80, 1.45, 0.70)
+## The volume bolts are placed in, in metres, centred on the origin. Wide and
+## shallow, because the screen is now wide and shallow.
+const EXTENT := Vector3(2.10, 0.95, 0.80)
 
 var _bolts: Array[Bolt] = []
 var _energy: float = 1.0
@@ -60,10 +61,10 @@ func _shrink() -> void:
 ## corner to corner and leaves nowhere for the eye to rest. Clustering off a
 ## focal point and leaving the lower volume open is what makes it a composition.
 func _fork() -> PackedVector3Array:
-	var focus := Vector3(0.0, 0.28, 0.0)
+	var focus := Vector3(0.0, 0.16, 0.0)
 	var start := Vector3(
-		clampf(focus.x + randfn(0.0, 0.52), -EXTENT.x, EXTENT.x),
-		clampf(focus.y + randfn(0.0, 0.60), -EXTENT.y * 0.45, EXTENT.y),
+		clampf(focus.x + randfn(0.0, 1.05), -EXTENT.x, EXTENT.x),
+		clampf(focus.y + randfn(0.0, 0.46), -EXTENT.y, EXTENT.y),
 		clampf(focus.z + randfn(0.0, 0.44), -EXTENT.z, EXTENT.z))
 
 	var direction := Vector3(
