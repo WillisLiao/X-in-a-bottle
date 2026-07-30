@@ -1,0 +1,69 @@
+name: Lull
+
+options:
+  bundleIdPrefix: com.lull
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+    DEVELOPMENT_TEAM: 45MSS5RXML
+    CODE_SIGN_STYLE: Automatic
+    TARGETED_DEVICE_FAMILY: "1"
+    MTL_FAST_MATH: "YES"
+
+targetTemplates:
+  Canvas:
+    type: application
+    platform: iOS
+    sources:
+      - path: Shared
+    settings:
+      base:
+        MTL_HEADER_SEARCH_PATHS: "$(SRCROOT)/Shared/Shaders $(SRCROOT)/${target_name}/Support"
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/${target_name}/Support"
+        SWIFT_OBJC_BRIDGING_HEADER: "${target_name}/Support/${target_name}-Bridging-Header.h"
+
+targets:
+  Lull:
+    templates: [Canvas]
+    sources:
+      - path: Lull
+    info:
+      path: Lull/Info.plist
+      properties:
+        CFBundleDisplayName: Lull
+        UILaunchScreen: {}
+        UIUserInterfaceStyle: Dark
+        UIStatusBarHidden: true
+        UIViewControllerBasedStatusBarAppearance: false
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIRequiredDeviceCapabilities: [metal]
+        UIRequiresFullScreen: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lull.app
+        PRODUCT_NAME: Lull
+
+  Bottle:
+    templates: [Canvas]
+    sources:
+      - path: Bottle
+    info:
+      path: Bottle/Info.plist
+      properties:
+        CFBundleDisplayName: Bottle
+        UILaunchScreen: {}
+        UIUserInterfaceStyle: Dark
+        UIStatusBarHidden: true
+        UIViewControllerBasedStatusBarAppearance: false
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIRequiredDeviceCapabilities: [metal]
+        UIRequiresFullScreen: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lull.bottle
+        PRODUCT_NAME: Bottle
