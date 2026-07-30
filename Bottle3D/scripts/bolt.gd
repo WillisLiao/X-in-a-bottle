@@ -14,18 +14,27 @@ const SIDES := 6
 
 ## The bright inner filament, and the wider soft sheath around it. A single
 ## tube reads as a wire; it needs a hot core inside a haze.
-const CORE_RADIUS := 0.010
-const SHEATH_RADIUS := 0.055
+const CORE_RADIUS := 0.007
+const SHEATH_RADIUS := 0.070
 
 var _core: MeshInstance3D
 var _sheath: MeshInstance3D
 var _light: OmniLight3D
 var _phase: float = 0.0
 var _energy: float = 0.0
+var _gas: Color = Palette.PLASMA
+
+## Seconds of holding before a bolt is as cool as it gets. The signature of the
+## whole environment: a full bottle is a history, with bright new arrivals
+## against old filaments that have nearly gone out.
+const COOL_SECONDS := 150.0
+
+var _age_seconds: float = 0.0
 
 
-func build(points: PackedVector3Array, phase: float) -> void:
+func build(points: PackedVector3Array, phase: float, gas: Color) -> void:
 	_phase = phase
+	_gas = gas
 
 	_core = MeshInstance3D.new()
 	_core.mesh = _tube(points, CORE_RADIUS)
@@ -43,9 +52,9 @@ func build(points: PackedVector3Array, phase: float) -> void:
 	# than merely being bright itself. This is what sells it as plasma.
 	_light = OmniLight3D.new()
 	_light.position = points[points.size() / 2]
-	_light.light_color = Color(0.62, 0.76, 1.0)
+	_light.light_color = _gas
 	_light.omni_range = 1.5
-	_light.light_volumetric_fog_energy = 0.7
+	_light.light_volumetric_fog_energy = 1.8
 	_light.shadow_enabled = false
 	add_child(_light)
 
@@ -57,20 +66,34 @@ func set_energy(value: float) -> void:
 
 func _process(delta: float) -> void:
 	_phase += delta
-	var breathe := 0.70 + 0.30 * sin(_phase * 2.3)
-	var lit := _energy * breathe
+	_age_seconds += delta
+
+	var age := clampf(_age_seconds / COOL_SECONDS, 0.0, 1.0)
+	var cooled := Palette.cooled(_gas, age)
+
+	# Older bolts breathe more slowly as well as more dimly, so a full bottle
+	# has rhythm in it rather than one uniform pulse.
+	var breathe := 0.70 + 0.30 * sin(_phase * (2.3 - age * 1.1))
+
+	# Never all the way out. A dead filament reads as a bug, not as age.
+	var lit: float = _energy * breathe * (1.0 - age * 0.72)
 
 	_core.material_override.emission_energy_multiplier = 9.0 * lit
-	_sheath.material_override.emission_energy_multiplier = 0.30 * lit
+	_core.material_override.emission = Palette.CORE.lerp(cooled, age * 0.6)
+
+	_sheath.material_override.emission_energy_multiplier = 0.85 * lit
+	_sheath.material_override.emission = cooled
+
 	_light.light_energy = 0.85 * lit
+	_light.light_color = cooled
 
 
 func _core_material() -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.emission_enabled = true
-	mat.emission = Color(0.88, 0.94, 1.0)
-	mat.albedo_color = Color(0.95, 0.97, 1.0)
+	mat.emission = Palette.CORE
+	mat.albedo_color = Palette.CORE
 	return mat
 
 
@@ -83,8 +106,8 @@ func _sheath_material() -> StandardMaterial3D:
 	# presenting a hard silhouette against it.
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.emission_enabled = true
-	mat.emission = Color(0.36, 0.56, 1.0)
-	mat.albedo_color = Color(0.36, 0.56, 1.0, 0.035)
+	mat.emission = _gas
+	mat.albedo_color = Color(_gas.r, _gas.g, _gas.b, 0.075)
 	return mat
 
 

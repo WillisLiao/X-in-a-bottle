@@ -10,7 +10,9 @@ extends Node3D
 const BoltScene := preload("res://scripts/bolt.gd")
 
 ## How many bolts a full bottle holds.
-const CAPACITY := 12
+## Nine, not twelve. Twelve tangles: the filaments cross so often that no
+## single one can be read, and the image becomes texture rather than subject.
+const CAPACITY := 9
 
 ## Gap between arrivals while the bottle is filling.
 const SPAWN_SECONDS := 1.4
@@ -33,6 +35,7 @@ var _elapsed: float = 0.0
 func _ready() -> void:
 	_build_environment()
 	_build_camera()
+	_build_finish()
 	_read_capture_args()
 
 	# The bottle is never empty. Something is in there the moment it opens.
@@ -80,7 +83,7 @@ func _spawn() -> void:
 		return
 
 	var bolt := Bolt.new()
-	bolt.build(_fork(), randf() * TAU)
+	bolt.build(_fork(), randf() * TAU, Palette.gas())
 	bolt.set_energy(1.0)
 	add_child(bolt)
 	_bolts.append(bolt)
@@ -89,17 +92,30 @@ func _spawn() -> void:
 ## A bolt hanging in the volume rather than falling through it. Midpoint
 ## displacement in three dimensions, so it wanders in depth as well as across.
 func _fork() -> PackedVector3Array:
+	# Placed with intent rather than uniformly. Scattering evenly through the
+	# volume fills the frame corner to corner and leaves nowhere for the eye to
+	# rest; clustering off-centre and leaving the lower third open is what makes
+	# it a composition instead of a field.
+	var focus := Vector3(0.0, 0.28, 0.0)
+	var spread := Vector3(
+		randfn(0.0, 0.52),
+		randfn(0.0, 0.60),
+		randfn(0.0, 0.44))
+
 	var start := Vector3(
-		randf_range(-EXTENT.x, EXTENT.x),
-		randf_range(-EXTENT.y * 0.2, EXTENT.y),
-		randf_range(-EXTENT.z, EXTENT.z))
+		clampf(focus.x + spread.x, -EXTENT.x, EXTENT.x),
+		clampf(focus.y + spread.y, -EXTENT.y * 0.45, EXTENT.y),
+		clampf(focus.z + spread.z, -EXTENT.z, EXTENT.z))
 
 	var direction := Vector3(
 		randf_range(-1.0, 1.0),
 		randf_range(-1.0, -0.25),
 		randf_range(-1.0, 1.0)).normalized()
 
-	var points := PackedVector3Array([start, start + direction * randf_range(0.9, 1.7)])
+	# A few long filaments carrying the composition, and more short ones around
+	# them. Uniform lengths read as a pile of identical objects.
+	var length := randf_range(1.3, 2.0) if randf() < 0.3 else randf_range(0.45, 1.0)
+	var points := PackedVector3Array([start, start + direction * length])
 	var offset := 0.20
 
 	for pass_index in 3:
@@ -127,30 +143,38 @@ func _build_environment() -> void:
 	var env := Environment.new()
 
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.008, 0.010, 0.018)
+	env.background_color = Palette.VOID
 
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.10, 0.14, 0.24)
+	env.ambient_light_color = Palette.DEEP_INDIGO
 	env.ambient_light_energy = 0.06
 
 	# Bloom is what turns an emissive tube into plasma. Threshold kept high so
 	# only the hot core blooms and the scene does not wash out.
 	env.glow_enabled = true
-	env.glow_intensity = 0.85
-	env.glow_bloom = 0.30
-	env.glow_hdr_threshold = 1.10
+	env.glow_intensity = 1.30
+	env.glow_bloom = 0.45
+	env.glow_hdr_threshold = 0.70
 	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_ADDITIVE
 
 	# The bolts light this, which is the single biggest reason to be in 3D.
 	env.volumetric_fog_enabled = true
-	env.volumetric_fog_density = 0.008
-	env.volumetric_fog_albedo = Color(0.22, 0.30, 0.48)
+	env.volumetric_fog_density = 0.022
+	env.volumetric_fog_albedo = Palette.DEEP_INDIGO.lightened(0.30)
 	env.volumetric_fog_emission = Color(0.02, 0.03, 0.06)
 	env.volumetric_fog_gi_inject = 0.0
 	env.volumetric_fog_length = 12.0
 
+	# Aerial perspective. Without it every filament is equally present and the
+	# depth the 3D buys is thrown away.
+	env.fog_enabled = true
+	env.fog_light_color = Palette.DEEP_INDIGO
+	env.fog_light_energy = 0.6
+	env.fog_density = 0.018
+	env.fog_sky_affect = 0.0
+
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.tonemap_white = 8.0
+	env.tonemap_white = 4.0
 
 	world.environment = env
 	add_child(world)
@@ -175,6 +199,25 @@ func _build_camera() -> void:
 
 	add_child(_camera)
 	_camera.current = true
+
+
+## Grain and vignette over the whole frame. Both are quiet: enough to bind the
+## image together and take the digital cleanliness off it, not enough to notice
+## as an effect.
+func _build_finish() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 100
+
+	var rect := ColorRect.new()
+	rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var mat := ShaderMaterial.new()
+	mat.shader = load("res://scripts/finish.gdshader")
+	rect.material = mat
+
+	layer.add_child(rect)
+	add_child(layer)
 
 
 func _read_capture_args() -> void:
