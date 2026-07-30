@@ -26,6 +26,15 @@ var focus: Vector3 = Vector3.ZERO
 ## How far back the camera sits.
 var distance: float = 4.0
 
+## Lighting mood, per world. A cold blue fill suits plasma but makes skin look
+## grey and dead, so worlds with characters in them set their own.
+var key_color: Color = Color("BCD2FF")
+var key_energy: float = 0.85
+var fill_color: Color = Color("4A7BF7")
+var fill_energy: float = 0.28
+var ambient_color: Color = Color("131B2F")
+var ambient_energy: float = 0.55
+
 ## Fraction lost per disturbance. Never all of it: losing the lot would make a
 ## disturbance a reset rather than a cost, and the cost is the product.
 const LOSS_FRACTION := 0.30

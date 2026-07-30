@@ -19,6 +19,9 @@ const SWIPE_THRESHOLD := 70.0
 const TITLE_SECONDS := 2.0
 
 var _camera: Camera3D
+var _key: DirectionalLight3D
+var _fill: DirectionalLight3D
+var _env: Environment
 var _worlds: Array[World] = []
 var _index := 0
 var _title: Label
@@ -70,6 +73,7 @@ func _ready() -> void:
 
 	_index = clampi(_index, 0, _worlds.size() - 1)
 	_worlds[_index].visible = true
+	_apply_lighting(_worlds[_index])
 	_announce()
 
 
@@ -129,6 +133,7 @@ func _finish_drag(at: Vector2) -> void:
 	_worlds[_index].visible = false
 	_index = wrapi(_index + (1 if moved.x < 0 else -1), 0, _worlds.size())
 	_worlds[_index].visible = true
+	_apply_lighting(_worlds[_index])
 	_announce()
 
 
@@ -232,6 +237,7 @@ func _build_environment() -> void:
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
 	env.tonemap_white = 4.0
 
+	_env = env
 	world.environment = env
 	add_child(world)
 
@@ -241,19 +247,25 @@ func _build_environment() -> void:
 ## falling across it reads as a silhouette - which is exactly what was wrong
 ## with the flat version.
 func _build_lights() -> void:
-	var key := DirectionalLight3D.new()
-	key.light_color = Color("BCD2FF")
-	key.light_energy = 0.85
-	key.rotation_degrees = Vector3(-42, -34, 0)
-	key.shadow_enabled = false
-	add_child(key)
+	_key = DirectionalLight3D.new()
+	_key.rotation_degrees = Vector3(-42, -34, 0)
+	_key.shadow_enabled = false
+	add_child(_key)
 
-	var fill := DirectionalLight3D.new()
-	fill.light_color = Palette.PLASMA
-	fill.light_energy = 0.28
-	fill.rotation_degrees = Vector3(-14, 152, 0)
-	fill.shadow_enabled = false
-	add_child(fill)
+	_fill = DirectionalLight3D.new()
+	_fill.rotation_degrees = Vector3(-14, 152, 0)
+	_fill.shadow_enabled = false
+	add_child(_fill)
+
+
+## Each world sets the light it wants to be seen in.
+func _apply_lighting(world: World) -> void:
+	_key.light_color = world.key_color
+	_key.light_energy = world.key_energy
+	_fill.light_color = world.fill_color
+	_fill.light_energy = world.fill_energy
+	_env.ambient_light_color = world.ambient_color
+	_env.ambient_light_energy = world.ambient_energy
 
 
 func _build_camera() -> void:
