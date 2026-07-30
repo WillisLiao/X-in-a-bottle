@@ -16,3 +16,6 @@ xcuserdata/
 
 # macOS
 .DS_Store
+
+# Godot
+Bottle3D/.godot/
