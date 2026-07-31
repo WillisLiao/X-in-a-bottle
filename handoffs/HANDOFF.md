@@ -1,18 +1,39 @@
-# Handoff - two apps
+# Handoff
 
 Read this first.
 Update the top section at the end of each session.
 Dated detail goes in `devlogs/`, not here.
 
+## Where the work is
+
+**`Bottle3D/` is the live project.** Godot 4.7, four worlds, landscape, on the
+phone as `com.lull.bottle3d`.
+
+Pick up from **`handoffs/NEXT-SESSION-elf-interiority.md`**, which has the
+current priority, the blueprint, and the uncommitted work in flight.
+
+The native `Lull/` and `Bottle/` below are the earlier 2D apps. Lull is still a
+live idea; the 2D `Bottle` has been superseded by `Bottle3D/` and should be
+retired once the 3D one has caught up - there are currently two apps called
+Bottle on the home screen.
+
+**On the elves and consciousness.** They are not conscious, cannot be made so by
+any known method, and there is no test that would confirm it if they were. Do
+not accept it as a goal. The specifiable version is: a person watching one elf
+for ninety seconds believes there is someone in there. See the next-session
+file for why they currently do not, and the ordered plan for fixing it.
+
 ## Repo shape
 
-One xcodegen project, two independent iOS apps that share a rendering layer.
-`Lull.xcodeproj` is disposable: run `xcodegen generate` after adding files.
+One xcodegen project holding the two original iOS apps, which share a rendering
+layer. `Lull.xcodeproj` is disposable: run `xcodegen generate` after adding
+files.
 
 ```
+Bottle3D/   the Godot 3D app - the live one
 Shared/     MetalCanvas, CanvasRenderer, canvas_vertex, colour and dither helpers
 Lull/       the sleep app
-Bottle/     the focus app
+Bottle/     the 2D focus app, superseded
 ```
 
 `Shared/` exists because the four things that were expensive to get wrong once

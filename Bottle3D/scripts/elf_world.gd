@@ -97,6 +97,13 @@ class Elf:
 	var sociable := 0.0
 	var fidget := 0.0
 
+	# Where this one stands when it approaches something, and how much it curves
+	# on the way. Without these everybody walks the same line to the same spot
+	# and the place reads as a conveyor rather than somewhere people live.
+	var spot := 0.0
+	var route_bias := 0.0
+	var gait := 1.0
+
 	var energy := 1.0
 	var task: Task = Task.NONE
 	var bench: Bench
@@ -106,6 +113,8 @@ class Elf:
 	var carry_kind: Kind
 	var tool: Node3D
 	var target: Vector3
+	var waypoint: Vector3
+	var has_waypoint := false
 	var work_left := 0.0
 	var pause := 0.0
 	var grown := 0.0
@@ -123,14 +132,16 @@ var _pot_in: Pile
 var _pot_out: Pile
 
 var _hearth := Vector3(-1.95, FLOOR_Y, 0.42)
-var _lamp_stand := Vector3(0.35, FLOOR_Y, 0.10)
-var _lamp_at := Vector3(0.05, FLOOR_Y, -0.42)
+var _spire_at := Vector3(1.90, FLOOR_Y, -0.20)
+var _spire_stand := Vector3(1.90, FLOOR_Y, 0.20)
 
-## What the whole workshop is for. Burns down on its own and is topped up by
-## sparks, so a stalled chain is visible as the room going dark.
-var _lamp_fuel := 0.55
-var _lamp_node: MeshInstance3D
-var _lamp_light: OmniLight3D
+## What the workshop is actually for. Every spark carried over becomes a piece
+## of it, permanently, and the thing rises through the session. Sparks used to
+## be burned in a lamp, which meant hours of work left nothing behind - the
+## chain ran but nothing was ever built.
+var _spire: Array[MeshInstance3D] = []
+var _spire_light: OmniLight3D
+const SPIRE_MAX := 26
 
 var _time := 0.0
 var _quake := 0.0
@@ -158,7 +169,7 @@ func build() -> void:
 	_build_seam(Vector3(-1.55, FLOOR_Y, -0.15))
 	_build_anvil(Vector3(-0.45, FLOOR_Y, -0.10))
 	_build_cauldron(Vector3(0.95, FLOOR_Y, -0.15))
-	_build_lamp(_lamp_at)
+	_build_spire(_spire_at)
 	_build_hearth(_hearth)
 
 
@@ -173,15 +184,15 @@ func _tick(delta: float, _population: int, _disturbed: bool) -> void:
 	position = Vector3(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0), 0.0) \
 		* _quake * 0.09
 
-	# The lamp burns whether anyone tends it or not. This is the clock the whole
-	# workshop runs against: let the chain stall and the room dims.
-	_lamp_fuel = maxf(0.0, _lamp_fuel - delta * 0.012)
-	var glow := 0.25 + _lamp_fuel * 1.9
-	if _lamp_node:
-		var mat: StandardMaterial3D = _lamp_node.material_override
-		mat.emission_energy_multiplier = glow + sin(_time * 1.7) * 0.12
-	if _lamp_light:
-		_lamp_light.light_energy = 0.25 + _lamp_fuel * 1.5
+	# The spire lights the room in proportion to how much of it exists, so the
+	# work is legible as a thing that has been achieved rather than a number.
+	var built := float(_spire.size()) / float(SPIRE_MAX)
+	if _spire_light:
+		_spire_light.light_energy = 0.20 + built * 2.1
+		_spire_light.position = _spire_at + Vector3(0, 0.14 + float(_spire.size()) * 0.082, 0)
+	for i in _spire.size():
+		var mat: StandardMaterial3D = _spire[i].material_override
+		mat.emission_energy_multiplier = 0.9 + sin(_time * 1.3 + float(i) * 0.6) * 0.25
 
 	for e in _elves:
 		_tick_elf(e, delta)
@@ -201,7 +212,7 @@ func _decide(e: Elf) -> void:
 	# well past the point a soft one has gone to sit down.
 	if e.energy < 0.18 * e.stamina:
 		e.task = Task.REST
-		e.target = _hearth + Vector3(randf_range(-0.18, 0.18), 0, randf_range(-0.1, 0.1))
+		_head_for(e, _stand_near(e, _hearth))
 		return
 
 	var best := Task.IDLE
@@ -212,8 +223,10 @@ func _decide(e: Elf) -> void:
 
 	# Feeding the lamp. Gets more urgent the darker it gets, which is what pulls
 	# everyone toward the end of the chain when the room starts to fade.
-	if _pot_out.count() > 0:
-		var score := (1.6 - _lamp_fuel) * 1.4
+	if _pot_out.count() > 0 and _spire.size() < SPIRE_MAX:
+		# Building outranks everything else. It is the only step that leaves a
+		# mark, so the closer a spark is to the spire the harder it pulls.
+		var score := 1.5 + float(_pot_out.count()) * 0.18
 		score = _weigh(e, Task.FEED, score, _pot_out.stand)
 		if score > best_score:
 			best_score = score
@@ -259,21 +272,48 @@ func _decide(e: Elf) -> void:
 
 	match best:
 		Task.FEED, Task.CARRY:
-			e.target = best_from.stand
+			_head_for(e, _stand_near(e, best_from.stand))
 		Task.IDLE:
 			# Their own time. Wandering, looking at things, standing near
 			# someone. Not filler: an elf that never does anything unprompted
 			# reads as a machine waiting for input.
-			e.target = _somewhere_own(e)
+			_head_for(e, _somewhere_own(e))
 			e.pause = randf_range(1.5, 5.0)
 		_:
 			if best_bench:
 				best_bench.taken_by = e.id
-				e.target = best_bench.stand
+				_head_for(e, _stand_near(e, best_bench.stand))
 
 
 ## Traits applied to a raw urgency. Distance, taste, tiredness, and a pull
 ## toward or away from whoever else is about.
+## Somewhere near a station rather than exactly on its mark, chosen per elf, so
+## two of them never occupy the same patch of floor and a queue looks like
+## people gathered round rather than a line.
+func _stand_near(e: Elf, at: Vector3) -> Vector3:
+	var r := 0.16 + absf(e.route_bias) * 0.22
+	return at + Vector3(cos(e.spot) * r, 0.0, sin(e.spot) * r * 0.6)
+
+
+## Sets a destination and, if it is far enough away, a waypoint off to one side
+## so the walk there is a curve of this elf's own rather than the straight line
+## everybody else takes.
+func _head_for(e: Elf, at: Vector3) -> void:
+	e.target = at
+	e.has_waypoint = false
+
+	var away := e.node.position.distance_to(at)
+	if away < 0.85 or absf(e.route_bias) < 0.08:
+		return
+
+	var mid := (e.node.position + at) * 0.5
+	var along := (at - e.node.position).normalized()
+	var side := Vector3(-along.z, 0.0, along.x)
+	e.waypoint = mid + side * e.route_bias * away * 0.35
+	e.waypoint.y = FLOOR_Y
+	e.has_waypoint = true
+
+
 func _weigh(e: Elf, task: Task, score: float, at: Vector3) -> float:
 	var away := e.node.position.distance_to(at)
 	score -= away * 0.16
@@ -317,14 +357,40 @@ func _tick_elf(e: Elf, delta: float) -> void:
 	if e.task == Task.NONE:
 		_decide(e)
 
-	var toward := e.target - e.node.position
+	# Steer to the waypoint first if there is one, so the route bends.
+	var aim := e.waypoint if e.has_waypoint else e.target
+	var toward := aim - e.node.position
 	toward.y = 0.0
-	var arrived := toward.length() < 0.08
+
+	if e.has_waypoint and toward.length() < 0.20:
+		e.has_waypoint = false
+		aim = e.target
+		toward = aim - e.node.position
+		toward.y = 0.0
+
+	var arrived := (not e.has_waypoint) and toward.length() < 0.10
 
 	if not arrived:
-		e.node.position += toward.normalized() * minf(delta * e.pace, toward.length())
+		var dir := toward.normalized()
+
+		# Keep out of each other's way. Without this they walk through one
+		# another and converge into a single file down the middle of the room.
+		var push := Vector3.ZERO
+		for other in _elves:
+			if other.id == e.id:
+				continue
+			var gap := e.node.position - other.node.position
+			gap.y = 0.0
+			var d := gap.length()
+			if d > 0.001 and d < 0.34:
+				push += gap.normalized() * (0.34 - d) / 0.34
+		if push.length() > 0.001:
+			dir = (dir + push * 1.15).normalized()
+
+		var step: float = delta * e.pace
+		e.node.position += dir * step
 		e.node.rotation.y = lerp_angle(e.node.rotation.y,
-			atan2(toward.x, toward.z), delta * 2.5)
+			atan2(dir.x, dir.z), delta * 2.5)
 	else:
 		_act(e, delta)
 
@@ -359,7 +425,8 @@ func _act(e: Elf, delta: float) -> void:
 					_finish(e)
 					return
 				_lift(e, e.from_pile)
-				e.target = (_lamp_stand if e.task == Task.FEED else e.to_pile.stand)
+				_head_for(e, _stand_near(e,
+					_spire_stand if e.task == Task.FEED else e.to_pile.stand))
 			else:
 				if e.task == Task.FEED:
 					_burn(e)
@@ -441,12 +508,40 @@ func _drop(e: Elf, pile: Pile) -> void:
 	_finish(e)
 
 
+## The spark is not spent, it is set into the spire. The piece stays there for
+## the rest of the session and the thing is measurably taller than it was.
 func _burn(e: Elf) -> void:
 	e.node.remove_child(e.carrying)
 	e.carrying.queue_free()
 	e.carrying = null
-	_lamp_fuel = minf(1.0, _lamp_fuel + 0.22)
+
+	if _spire.size() < SPIRE_MAX:
+		_place_piece()
+
 	_finish(e)
+
+
+func _place_piece() -> void:
+	var index := _spire.size()
+
+	var piece := MeshInstance3D.new()
+	piece.mesh = Geometry.crystal(0.085 - float(index) * 0.0014, 0.22)
+
+	# A slow twist as it climbs, so a tall one is a spiral rather than a stack.
+	var turn := float(index) * 0.7
+	piece.position = _spire_at + Vector3(
+		cos(turn) * 0.055, 0.10 + float(index) * 0.082, sin(turn) * 0.055)
+	piece.rotation = Vector3(randf_range(-0.3, 0.3), turn, randf_range(-0.3, 0.3))
+
+	var mat := World.solid_material(SPARK_COLOR, 0.25)
+	mat.emission_enabled = true
+	mat.emission = SPARK_COLOR
+	mat.emission_energy_multiplier = 1.0
+	piece.material_override = mat
+	piece.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+	add_child(piece)
+	_spire.append(piece)
 
 
 ## A tool in the hand, and a workpiece to swing it at. Without both, the arm
@@ -523,7 +618,7 @@ func _finish(e: Elf) -> void:
 
 func _animate(e: Elf, delta: float, walking_now: bool) -> void:
 	var walking := 1.0 if walking_now else 0.0
-	var stride := sin(_time * 3.0 * (e.pace / 0.30) + e.phase) * 0.5 * walking
+	var stride := sin(_time * 3.0 * e.gait * (e.pace / 0.30) + e.phase) * 0.5 * walking
 
 	for l in e.legs.size():
 		e.legs[l].rotation.x = -stride * (1.0 if l == 0 else -1.0)
@@ -590,6 +685,9 @@ func _grow() -> bool:
 	# another a smith without anybody deciding it.
 	e.pace = randf_range(0.22, 0.40)
 	e.stamina = randf_range(0.55, 1.0)
+	e.spot = randf() * TAU
+	e.route_bias = randf_range(-0.55, 0.55)
+	e.gait = randf_range(0.82, 1.25)
 	e.sociable = randf_range(-0.25, 0.40)
 	e.fidget = randf_range(0.0, 0.45)
 	e.likes = [Task.CUT, Task.FORGE, Task.BREW, Task.CARRY, Task.FEED][randi() % 5]
@@ -608,6 +706,12 @@ func _grow() -> bool:
 
 func _shrink() -> void:
 	_quake = 1.0
+
+	# The top of the spire comes off. Work is not just interrupted by handling
+	# the phone, it is undone, which is the rule the whole app runs on.
+	for _p in 2:
+		if _spire.size() > 0:
+			_spire.pop_back().queue_free()
 
 	var leaving := int(ceil(float(_elves.size()) * LOSS_FRACTION))
 	for _i in leaving:
@@ -777,29 +881,26 @@ func _build_cauldron(at: Vector3) -> void:
 	_make_bench(Task.BREW, at + Vector3(0, 0, 0.30), _pot_in, _pot_out, 6.5)
 
 
-func _build_lamp(at: Vector3) -> void:
-	_box(at + Vector3(0, 0.30, 0), Vector3(0.028, 0.30, 0.028),
-		World.solid_material(IRON, 0.5))
+func _build_spire(at: Vector3) -> void:
+	# A footing to build on, so the first piece has somewhere to sit.
+	var base := CylinderMesh.new()
+	base.top_radius = 0.19
+	base.bottom_radius = 0.24
+	base.height = 0.10
+	base.radial_segments = 10
+	var base_node := MeshInstance3D.new()
+	base_node.mesh = base
+	base_node.position = at + Vector3(0, 0.05, 0)
+	base_node.material_override = World.solid_material(IRON, 0.6)
+	base_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(base_node)
 
-	var globe := SphereMesh.new()
-	globe.radius = 0.085
-	globe.height = 0.17
-	globe.radial_segments = 10
-	globe.rings = 6
-
-	_lamp_node = MeshInstance3D.new()
-	_lamp_node.mesh = globe
-	_lamp_node.position = at + Vector3(0, 0.64, 0)
-	_lamp_node.material_override = World.glow_material(EMBER, 0.85)
-	_lamp_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(_lamp_node)
-
-	_lamp_light = OmniLight3D.new()
-	_lamp_light.position = at + Vector3(0, 0.64, 0)
-	_lamp_light.light_color = EMBER
-	_lamp_light.omni_range = 2.8
-	_lamp_light.shadow_enabled = false
-	add_child(_lamp_light)
+	_spire_light = OmniLight3D.new()
+	_spire_light.position = at + Vector3(0, 0.2, 0)
+	_spire_light.light_color = SPARK_COLOR
+	_spire_light.omni_range = 3.4
+	_spire_light.shadow_enabled = false
+	add_child(_spire_light)
 
 
 func _build_hearth(at: Vector3) -> void:
