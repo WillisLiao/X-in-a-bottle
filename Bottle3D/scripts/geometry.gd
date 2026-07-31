@@ -92,3 +92,50 @@ static func jagged(from: Vector3, to: Vector3, offset: float,
 		offset *= 0.62
 
 	return points
+
+
+## A faceted crystal.
+##
+## An icosahedron with each vertex pushed in or out at random, and face normals
+## set per triangle rather than averaged. The flat shading is the whole point:
+## smooth normals make any of this read as a pebble, and it is the hard facets
+## catching light at different angles that say ice.
+static func crystal(radius: float, jitter: float) -> ArrayMesh:
+	var phi := (1.0 + sqrt(5.0)) / 2.0
+	var v := [
+		Vector3(-1, phi, 0), Vector3(1, phi, 0),
+		Vector3(-1, -phi, 0), Vector3(1, -phi, 0),
+		Vector3(0, -1, phi), Vector3(0, 1, phi),
+		Vector3(0, -1, -phi), Vector3(0, 1, -phi),
+		Vector3(phi, 0, -1), Vector3(phi, 0, 1),
+		Vector3(-phi, 0, -1), Vector3(-phi, 0, 1),
+	]
+
+	# Squashed on one axis as well as jittered, so a drift of these is a heap of
+	# different shards rather than the same rock twelve times.
+	var squash := Vector3(randf_range(0.7, 1.3), randf_range(0.6, 1.2),
+	                      randf_range(0.7, 1.3))
+
+	for i in v.size():
+		v[i] = v[i].normalized() * radius * (1.0 + randf_range(-jitter, jitter))
+		v[i] *= squash
+
+	var faces := [
+		[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
+		[1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
+		[3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
+		[4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
+	]
+
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for f in faces:
+		var a: Vector3 = v[f[0]]
+		var b: Vector3 = v[f[1]]
+		var c: Vector3 = v[f[2]]
+		st.set_normal((b - a).cross(c - a).normalized())
+		st.add_vertex(a)
+		st.add_vertex(b)
+		st.add_vertex(c)
+
+	return st.commit()
