@@ -20,8 +20,23 @@ Bottle on the home screen.
 **On the elves and consciousness.** They are not conscious, cannot be made so by
 any known method, and there is no test that would confirm it if they were. Do
 not accept it as a goal. The specifiable version is: a person watching one elf
-for ninety seconds believes there is someone in there. See the next-session
-file for why they currently do not, and the ordered plan for fixing it.
+for ninety seconds believes there is someone in there, tested by showing the
+same ninety seconds to two people and seeing whether they describe the same
+character.
+
+The next-session file carries the full plan. Two jobs, done together rather than
+in sequence, because neither lands alone:
+
+- **A land.** The workshop is a 2.45 metre disc with everything visible at once.
+  It should be a small curved world of seven to nine metres, regions far enough
+  apart that journeys take time and pass out of sight, and a house they build
+  from several materials rather than a spire from one.
+- **Interiority.** Ordered from the root cause outward: belief and ignorance
+  first, then gaze, mood, formed preference, private goals, relationships,
+  communication, motor signature.
+
+The two halves depend on each other. A bigger world is what makes ignorance
+possible, and ignorance is what makes the minds work.
 
 ## Repo shape
 
