@@ -278,6 +278,23 @@ func _hash(i: int, j: int, salt: int) -> float:
 ## you are watching and baking them in would mean rebuilding twenty thousand
 ## vertices every few seconds to move a shade of brown. So they arrive as a
 ## small texture the shader mixes in - see `Wear` and `ground.gdshader`.
+## Ground that nobody has worn and nobody is going to yet: the necks between the
+## regions. Same look, without the texture lookup or the six kilobytes.
+##
+## No specular at all, here and in the shader. Roughness one is as matte as a
+## rough surface gets, but that is not the same as no highlight - a fully rough
+## dielectric still returns a broad low sheen, and across a whole hillside under
+## a strong key that sheen is what made the ground look waxed.
+static func plain_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color.WHITE
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 1.0
+	mat.metallic = 0.0
+	mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+	return mat
+
+
 func material(wear: Wear) -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
 	mat.shader = load("res://scripts/ground.gdshader")

@@ -71,6 +71,12 @@ func show_from(active: int) -> void:
 		add_child(node)
 		_built[i] = node
 
+	# The necks, including the two that join the region being lived in - that
+	# land belongs between the regions rather than to either of them, so it is
+	# built here whichever end you are standing at.
+	for pair in Region.links():
+		add_child(Causeway.between(pair.x, pair.y, active))
+
 
 ## Where a region's centre is right now, in the coordinates everything else in
 ## the scene is using. The active region answers with the origin, because that

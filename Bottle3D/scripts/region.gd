@@ -81,9 +81,13 @@ const ORIGINS: Array[Vector3] = [
 	Vector3(-29.0, 0.0, 5.0),
 ]
 
-## Which regions a lantern can reasonably be carried between. Not every pair:
-## the arc is a chain, and the Ice being four hops from the Dunes is the point
-## of putting it there.
+## Which regions are joined to which. Not every pair: the arc is a chain, and
+## the Ice being four hops from the Dunes is the point of putting it there.
+##
+## This is a real thing in the world rather than a rule about one. Each of these
+## pairs has a neck of land between it - see `Causeway` - because a lantern
+## cannot be carried across open haze, and five plates floating apart is a
+## picture of five islands, which is the thing this whole direction replaced.
 const NEIGHBOURS := {
 	0: [3, 4],
 	3: [0, 2],
@@ -91,6 +95,16 @@ const NEIGHBOURS := {
 	4: [0, 1],
 	1: [4],
 }
+
+
+## Every join, once each rather than once from each end.
+static func links() -> Array:
+	var pairs: Array = []
+	for a in NEIGHBOURS:
+		for b in NEIGHBOURS[a]:
+			if int(a) < int(b):
+				pairs.append(Vector2i(int(a), int(b)))
+	return pairs
 
 
 static func origin(index: int) -> Vector3:
