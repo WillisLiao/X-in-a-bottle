@@ -26,6 +26,20 @@ var focus: Vector3 = Vector3.ZERO
 ## How far back the camera sits.
 var distance: float = 4.0
 
+## How high above the focus the camera sits, on top of whatever the tilt adds.
+## A world laid out on a plane wants none; a world curved over a globe wants the
+## camera lifted so you look down onto the near face rather than across it.
+var rise: float = 0.0
+
+## Vertical field of view. A long lens keeps the near shore from swelling to
+## three times the size of the far one.
+var lens: float = 40.0
+
+## How far a lean turns the world. Small worlds want parallax and nothing more.
+## A globe wants a lean to bring the far side round, because half of it is behind
+## the horizon and there is no other way to see what is over there.
+var orbit_gain: float = 0.55
+
 ## Lighting mood, per world. A cold blue fill suits plasma but makes skin look
 ## grey and dead, so worlds with characters in them set their own.
 var key_color: Color = Color("BCD2FF")

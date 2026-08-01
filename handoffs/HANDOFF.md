@@ -6,149 +6,188 @@ Dated detail goes in `devlogs/`, not here.
 
 ## Where the work is
 
-**`Bottle3D/` is the live project.** Godot 4.7, four worlds, landscape, on the
-phone as `com.lull.bottle3d`.
+**`Bottle3D/` is the live project, and it still says Elvle everywhere despite
+the owner having approved the rename to Hobbitle.**
+Godot 4.7, five islands, landscape, `com.lull.elvle`. Do not treat "Elvle" in
+the code or in this doc as current intent - it is leftover that the next
+session is explicitly tasked with removing.
 
-Pick up from **`handoffs/NEXT-SESSION-elf-interiority.md`**, which has the
-current priority, the blueprint, and the uncommitted work in flight.
+Pick up from **`handoffs/NEXT-SESSION-hobbitle-for-real.md`**.
 
-The native `Lull/` and `Bottle/` below are the earlier 2D apps. Lull is still a
-live idea; the 2D `Bottle` has been superseded by `Bottle3D/` and should be
-retired once the 3D one has caught up - there are currently two apps called
-Bottle on the home screen.
+The session before this one did the interiority pass (NPC legibility - the
+double-take, hesitation, walk-speed, stop-to-look, addressing, motor
+signature work) and the two bug fixes from `NEXT-SESSION-hobbitle.md`, which
+is done and tested. It then attempted the rename, the hobbit/troll species,
+the sky, a drag-mode toggle, and a polish pass, and shipped a build to the
+device - but the visible, user-facing half of that work fell short in ways
+the owner called out directly and specifically:
 
-**On the elves and consciousness.** They are not conscious, cannot be made so by
-any known method, and there is no test that would confirm it if they were. Do
-not accept it as a goal. The specifiable version is: a person watching one elf
-for ninety seconds believes there is someone in there, tested by showing the
-same ninety seconds to two people and seeing whether they describe the same
-character.
+- The app was never actually renamed anywhere a user sees it.
+- The hobbit/troll **mechanics** are real (different carry capacity, speed,
+  job restrictions) but the hobbit/troll **design** is the old elf rig with
+  parameters tweaked, not a genuine redesign - it still reads as elves.
+- The sky is still too dark, and the sun/moon are not visibly rendering.
+- The drag-mode toggle is text in the wrong corner; it was asked for as
+  icons in the top right.
 
-The next-session file carries the full plan. Two jobs, done together rather than
-in sequence, because neither lands alone:
+`handoffs/NEXT-SESSION-hobbitle-for-real.md` has the full, specific breakdown
+of each of these, including exactly which lines of code are responsible and
+concrete design direction for the redesign. Read it before touching
+anything - it is written to be executed directly, not re-diagnosed.
 
-- **A land.** The workshop is a 2.45 metre disc with everything visible at once.
-  It should be a small curved world of seven to nine metres, regions far enough
-  apart that journeys take time and pass out of sight, and a house they build
-  from several materials rather than a spire from one.
-- **Interiority.** Ordered from the root cause outward: belief and ignorance
-  first, then gaze, mood, formed preference, private goals, relationships,
-  communication, motor signature.
+The native `Lull/` and `Bottle/` are the earlier 2D apps.
+Lull is still a live idea; the 2D `Bottle` is superseded and should be retired.
 
-The two halves depend on each other. A bigger world is what makes ignorance
-possible, and ignorance is what makes the minds work.
+## What Elvle is
+
+**Elvle**, short for Elves in a Bottle, because the long name truncates on the
+iOS home screen.
+
+The phone is the bottle, so nothing draws a vessel.
+Five islands, each with one three-storey house on it that takes about a week of
+held stillness to finish, and one rule holding the whole thing up:
+
+> **They only build while the phone is still.**
+
+Move it and the elves down tools and some of them leave.
+Put it down and they come back, over the next fifteen minutes, and get on with
+it.
+There is nothing else to do.
+
+**Nothing that has been built ever comes apart.**
+A disturbance costs you hours forwards, by taking the crew away and making them
+walk back, and never backwards.
+That rule changed on 2026-08-01 and it is not going back: against a build that
+takes a week, a mechanic that can undo an evening is one that teaches people not
+to open the app.
+
+**Every hour of building they stop for a quarter of an hour**, and that break
+runs down only while the app is open on that island - not on the menu, not on
+another island, not in a pocket.
+There is deliberately nothing to do while it does.
+Take the break with them and they are ready when you get back; don't, and they
+are still sitting there.
+Movement during a break costs nothing, because charging somebody for picking
+their phone up during a rest would make the rest a second shift.
+
+**Touching the screen is free.**
+It used to cost, and that punished turning the island round to see what was
+happening on the far side - it charged the user for paying attention, in an app
+whose subject is attention.
+The cost is movement alone, on the accelerometer.
+So drag orbits, pinch zooms, and a phone flat on a desk with a finger on it is
+perfectly still.
+
+## The three pieces
+
+**`plan.gd` - the queue.**
+498 works in the order a house is actually built.
+A limekiln, a treadwheel crane, a floor joist and a doorknob are all the same
+type: somewhere on the island, a bill of materials, and geometry that appears
+when the bill is met.
+Sixteen materials, six dug and ten made, every recipe at least two in for one
+out.
+Ten workshops and six machines the elves have to build before they can use them.
+
+Order **is** the tech tree - there is no unlock table, because you cannot pour a
+footing before you have dug for it and you cannot dig before somebody has built
+the thing that digs.
+That also means it cannot deadlock.
+`Plan.EFFORT` multiplies every bill and is the one dial on how long a week is.
+
+**`biome.gd` - the five islands.**
+Shared layout, because it is tuned.
+What differs is palette, relief, trees, and what the ground will give you: the
+Ice has almost no timber, the Dunes give sand for nothing, the Shore is a long
+way from iron, the Green fights you for stone.
+Same blueprint, five different arguments about what to do next.
+
+**`elf_world.gd` - the island and the people on it.**
+Gather, craft, haul, deliver, fit, plus rest, look, idle, private errands and
+fishing.
+Everything carried is a real object lifted off a real heap.
+
+## On the elves
+
+They are not conscious, cannot be made so by any known method, and there is no
+test that would confirm it if they were.
+Do not accept it as a goal.
+
+The specifiable version: **a person watching one elf for ninety seconds believes
+there is somebody in there**, tested by showing the same ninety seconds to two
+people separately and seeing whether they describe the same character.
+That test has never been run against the current build.
+
+What exists: per-elf beliefs about every heap, refreshed only within sight and
+line of sight; gaze; mood in the body; affinities that form rather than being
+born; a private haunt; pairwise bonds; visible handoffs on a path; pointing.
+
+**They are not omniscient, and this is the thing the world is arranged to
+protect.**
+Every time behaviour looks slightly wrong the fix that suggests itself is to let
+one of them read the real number.
+That fix is the whole thing collapsing and it must be refused every time.
+It has already produced one hard deadlock (see the devlog) and the answer was to
+make the world tolerant of them being wrong, not to make them right.
 
 ## Repo shape
 
 One xcodegen project holding the two original iOS apps, which share a rendering
-layer. `Lull.xcodeproj` is disposable: run `xcodegen generate` after adding
-files.
+layer.
+`Lull.xcodeproj` is disposable: run `xcodegen generate` after adding files.
 
 ```
-Bottle3D/   the Godot 3D app - the live one
+Bottle3D/   Elvle, the Godot app - the live one
 Shared/     MetalCanvas, CanvasRenderer, canvas_vertex, colour and dither helpers
 Lull/       the sleep app
 Bottle/     the 2D focus app, superseded
 ```
 
-`Shared/` exists because the four things that were expensive to get wrong once
-live there and are not written twice: the extended-linear Display P3 drawable,
-the overshooting fullscreen triangle, sRGB to linear conversion, and the dither.
-
 Signing: team `45MSS5RXML`, automatic, in `project.yml`.
-Both apps build for device and are installed on the test iPhone 15 Pro.
 
-## Lull
+## Building and looking at it
 
-A game engineered to make you stop playing it, so you can fall asleep.
+```sh
+cd Bottle3D
+./deploy.sh          # export, build, install, launch
+```
 
-No streaks, no score, no fail state, no notifications (the permission is never
-requested). You steer a warm ember through fog. Over twenty minutes the world
-slows, dims and quietens, and after ninety seconds without a touch the ember
-picks its own heading, drifts on without you, and fades to true black.
+Faster loop, no device:
 
-Things hide in the fog and resolve when you reach them. Nothing is ever kept:
-there is no collection and no count, and there never will be.
+```sh
+/Applications/Godot.app/Contents/MacOS/Godot --path . --resolution 2622x1206 \
+  -- --screen=world --island=0 --capture=/tmp/shot.png --after=25
+```
 
-**Verified:** fade measured by mean frame luminance, 19.07 while steering,
-12.71 after letting go, 4.21 mid-fade, 0.00 at the end, then the view pauses.
+`--screen` is `title`, `picker` or `world`; `--island` 0-4; also `--yaw` and
+`--zoom`.
 
-## Bottle - "X in a Bottle"
+After adding any file with a `class_name`, run `--headless --import` once or
+every script referencing it fails to parse.
 
-A focus app. **The phone is the bottle**, so nothing draws a vessel: every
-environment fills the screen edge to edge and the glass is the one in your hand.
-
-Leave the phone alone and the bottle fills. Touch the screen or move it and it
-drains, twelve times faster than it fills. A ten second glance at a notification
-costs two minutes of focus. That asymmetry is the entire mechanism.
-
-There is no interaction. Touching is only ever a disturbance, which is the point.
-
-Swipe left and right for environments. Each expresses the same charge and the
-same disturbance in its own idiom.
-
-| environment | charge is | disturbance is |
-| --- | --- | --- |
-| **Lightning in a Bottle** (free) | strike frequency and reach | the storm blown flat |
-| **Ice in a Bottle** (paid) | crystals nucleating and creeping | a thaw, with a wet sheen |
-| **Genies in a Bottle** (paid) | how many have arrived | an earthquake, and some flee |
-
-Freemium by non-consumable IAP per environment. Bought once, kept forever.
-That is not in tension with the no-subscription rule: the rule is no recurring
-billing, not no money.
-
-Guided Access is the intended companion: the user triple-clicks the side button
-to lock themselves in. **The app cannot do this itself** -
-`UIAccessibility.requestGuidedAccessSession` only works on supervised MDM
-devices, so all we can do is teach the gesture. That is better anyway: choosing
-to lock yourself in is a commitment device, being trapped is a dark pattern.
-
-**Verified in simulator** with the fill time temporarily cut to 10 seconds. All
-three environments render at full charge. Lightning measured 7.59 quiet and
-55.39 during a strike.
-
-## Next
-
-**Both**
-1. Look at both on a real OLED in a dark room. Everything else is guesswork.
-2. `git init`. Still not a repo.
-3. Real names and bundle IDs. `Bottle` and `com.lull.bottle` are placeholders,
-   and "Lull" is very likely taken on the App Store.
-
-**Lull**
-4. Audio on the decay curve, so sound and image wind down together.
-5. The resolve moment needs to become something worth reaching: right now it is
-   a pale ring, not a small beautiful thing.
-6. Play it in bed at 3am. The only test that matters is whether the phone gets
-   put down.
-
-**Bottle**
-7. **Bolts need branches.** A single polyline still reads as one strand rather
-   than lightning. Biggest visual gap in the free environment, which is the one
-   everybody sees first.
-8. **Genies are placeholder art.** The behaviour is real - they arrive, wander,
-   work at nothing in particular, and flee in an earthquake - but they are soft
-   wisps, not characters. This is a paid environment, so it cannot ship looking
-   like this. Needs real character design, not another shader tweak.
-9. Thunder, delayed after the flash and quieter with distance.
-10. Tune `agitationThreshold` (0.035) against real desks. A phone on a wobbly
-    table must not drain, a phone being picked up must.
-11. Nothing marks which environment you are on, or that others exist. The swipe
-    is currently undiscoverable.
-12. StoreKit 2 for the paid environments. Nothing is gated yet - all three are
-    reachable.
-13. Decide what happens at a full bottle. Currently nothing, it just stays full.
+Never leave the Godot editor open while working from the command line.
+It rewrites `project.godot` from its stale in-memory copy and has already
+silently reverted the renderer and the orientation once each.
 
 ## Decisions worth not relitigating
 
-- **One-time purchase, never a subscription**, in both. A sleep product that
-  bills monthly is self-refuting, and so is a focus product.
-- **No clinical claims in Lull, ever.** It is harm reduction against
-  doomscrolling, not a treatment for insomnia. Medical framing is both an App
-  Store risk and a credibility risk.
-- **No AI in the marketing copy.** r/iosapps rule 6 is No AI, and every
-  AI-framed post in the research sat at 0 to 2 upvotes.
-- **Touching never helps in either app.** In Lull it keeps you in the session
-  but never winds the night back up. In Bottle it is purely a cost.
-- **Bottle has no collection, no streak, no history.** The reward for focusing
-  is the storm you are looking at, and it is gone when you leave.
+- **One-time purchase, never a subscription.** A focus product that bills
+  monthly is self-refuting.
+- **No offline progress, ever.** The only thing that moves this app forward is a
+  phone lying still with the screen on. An elf who laid a joist while you were
+  asleep would be a lie about what you did.
+- **No percentage anywhere.** The picker says "Storey 2" and "Services", never
+  "43%". The moment progress is a number somebody optimises it, and the only way
+  to optimise anything here is to leave the phone alone longer than you meant to.
+- **Time spent, never time remaining.** The picker's clock counts the building
+  this island has actually had out of you. A countdown is a thing to wait out; a
+  clock that only moves while you are working is a record of what you did. Same
+  reason the break is a light crossing the sky rather than 14:58.
+- **Progress only ever goes one way.** Nothing the user does can take a finished
+  work off the queue.
+- **No stats UI on the elves, no names, no speech, no thought bubbles.** The
+  viewer believing there is somebody in there is worth everything; being told
+  there is is worth nothing.
+- **Do not make them efficient.** A perfectly optimal workforce reads as
+  machinery. Hesitation, wasted journeys and mild disagreement are the point.
+- **No clinical claims, no AI in the marketing copy.**

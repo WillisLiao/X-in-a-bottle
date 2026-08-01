@@ -12,12 +12,18 @@ GODOT="/Applications/Godot.app/Contents/MacOS/Godot"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="$HERE/build/ios"
 TEAM="45MSS5RXML"
-BUNDLE="com.lull.bottle3d"
+BUNDLE="com.lull.elvle"
 
 DEVICE="${1:-}"
 if [[ -z "$DEVICE" ]]; then
+  # Column-position parsing breaks the moment a device's name has a space in
+  # it - "iPhone的 廖虹凱" is two fields, not one, and shifts everything after
+  # it. The identifier is a UUID and nothing else on the line looks like one,
+  # so pull it out by shape instead of by position.
   DEVICE=$(xcrun devicectl list devices 2>/dev/null \
-    | awk '/connected/ && /iPhone/ {print $(NF-3); exit}')
+    | grep -E "connected" | grep "iPhone" \
+    | grep -oE "[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}" \
+    | head -1)
 fi
 
 if [[ -z "$DEVICE" ]]; then
@@ -28,19 +34,24 @@ fi
 echo "==> Exporting Xcode project"
 rm -rf "$OUT"
 mkdir -p "$OUT"
-"$GODOT" --headless --path "$HERE" --export-debug "iOS" "$OUT/Bottle.xcodeproj" 2>&1 \
+"$GODOT" --headless --path "$HERE" --export-debug "iOS" "$OUT/Elvle.xcodeproj" 2>&1 \
   | grep -viE "^\[|godot engine" || true
 
 echo "==> Building"
-xcodebuild -project "$OUT/Bottle.xcodeproj" -scheme Bottle \
+xcodebuild -project "$OUT/Elvle.xcodeproj" -scheme Elvle \
   -sdk iphoneos -destination "platform=iOS,id=$DEVICE" \
   -configuration Debug -allowProvisioningUpdates \
   DEVELOPMENT_TEAM="$TEAM" PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE" \
   build 2>&1 | grep -E "error:|BUILD SUCCEEDED|BUILD FAILED" | head -20
 
-APP=$(find ~/Library/Developer/Xcode/DerivedData -name "Bottle.app" \
-  -path "*Debug-iphoneos*" -not -path "*Index.noindex*" -newermt "-5 minutes" \
-  2>/dev/null | head -1)
+# "*Debug-iphoneos*" alone also matches the archive intermediate under
+# ArchiveIntermediates/.../BuildProductsPath/Debug-iphoneos/, which looks
+# installable and is not - devicectl rejects it with a bare "not a type it
+# recognizes" error. The one actually meant to be installed sits under
+# Build/Products/Debug-iphoneos/.
+APP=$(find ~/Library/Developer/Xcode/DerivedData -name "Elvle.app" \
+  -path "*/Build/Products/Debug-iphoneos/*" -not -path "*Index.noindex*" \
+  -newermt "-5 minutes" 2>/dev/null | head -1)
 
 if [[ -z "$APP" ]]; then
   echo "Could not find the built app bundle." >&2

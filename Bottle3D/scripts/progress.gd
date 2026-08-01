@@ -1,0 +1,156 @@
+class_name Progress
+extends RefCounted
+
+## What survives being put down.
+##
+## A house takes a week. Nobody focuses for a week without stopping, so the
+## build has to outlive the session or the whole premise collapses into a
+## fifteen-minute toy. Five islands, five independent builds, and closing the app
+## costs nothing.
+##
+## What is deliberately *not* saved is any notion of time passing while you were
+## away. There is no offline progress and there will not be. The only thing that
+## moves this app forward is a phone lying still with the screen on, and an elf
+## who laid a joist while you were asleep would be a lie about what you did.
+##
+## Four things are kept per island.
+##
+## **The queue.** Which works are finished. The house is rebuilt from this on
+## load, instantly and silently, so opening an island on the fourth day shows you
+## the fourth day.
+##
+## **The stock.** How much of each material is lying about. Redistributed to
+## sensible heaps rather than restored heap-by-heap: an elf's beliefs about where
+## things are should not survive a restart, because that ignorance is cheap to
+## recreate and expensive to store.
+##
+## **The residents.** Every elf is generated from one integer, so keeping the
+## integers brings back the same people - the tall one with the crooked hat, the
+## one that always ends up at the kiln. Their formed affinities come back with
+## them, so the specialisms they grew into on Tuesday are still theirs on
+## Saturday. This is the cheapest interiority in the whole app and it is
+## possibly the most effective: recognising somebody is most of believing in
+## them.
+##
+## **The hours.** How much building this island has actually had out of you, plus
+## where it is in the work-and-rest cycle.
+##
+## The hours are the one number the app shows, and it is deliberately a *spent*
+## number rather than a remaining one. A countdown invites you to wait it out; a
+## clock that only moves while you are working is a record of what you did.
+
+const PATH := "user://elvle.cfg"
+
+static var _cfg: ConfigFile = null
+
+
+static func _open() -> ConfigFile:
+	if _cfg != null:
+		return _cfg
+	_cfg = ConfigFile.new()
+	# A missing file is the normal first-run case, not an error.
+	_cfg.load(PATH)
+	return _cfg
+
+
+static func flush() -> void:
+	if _cfg != null:
+		_cfg.save(PATH)
+
+
+static func _key(island: int) -> String:
+	return "island%d" % island
+
+
+static func read(island: int) -> Dictionary:
+	var cfg := _open()
+	var k := _key(island)
+	return {
+		"done": PackedInt32Array(cfg.get_value(k, "done", PackedInt32Array())),
+		"stock": PackedInt32Array(cfg.get_value(k, "stock",
+			_zeroes(Plan.KIND_COUNT))),
+		"focus": float(cfg.get_value(k, "focus", 0.0)),
+		"cycle": float(cfg.get_value(k, "cycle", 0.0)),
+		"rest": float(cfg.get_value(k, "rest", 0.0)),
+		"seeds": PackedInt32Array(cfg.get_value(k, "seeds", PackedInt32Array())),
+		"affinity": cfg.get_value(k, "affinity", {}),
+	}
+
+
+static func write(island: int, state: Dictionary) -> void:
+	var cfg := _open()
+	var k := _key(island)
+	cfg.set_value(k, "done", state["done"])
+	cfg.set_value(k, "stock", state["stock"])
+	cfg.set_value(k, "focus", state["focus"])
+	cfg.set_value(k, "cycle", state["cycle"])
+	cfg.set_value(k, "rest", state["rest"])
+	cfg.set_value(k, "seeds", state["seeds"])
+	cfg.set_value(k, "affinity", state["affinity"])
+
+
+static func last_island() -> int:
+	return int(_open().get_value("app", "island", 0))
+
+
+static func set_last_island(island: int) -> void:
+	_open().set_value("app", "island", island)
+
+
+## Whether the start screen has ever been got past. Used only to decide whether
+## the first thing shown is the title or the island you were last on.
+static func seen_title() -> bool:
+	return bool(_open().get_value("app", "seen", false))
+
+
+static func mark_seen() -> void:
+	_open().set_value("app", "seen", true)
+
+
+# --- what the picker shows ---------------------------------------------------
+
+## How far along an island is, zero to one. Shown as a ring, never as a
+## percentage: a number invites optimisation and the point of this app is that
+## there is nothing to optimise except leaving it alone.
+static func fraction(island: int) -> float:
+	var done: PackedInt32Array = read(island)["done"]
+	return clampf(float(done.size()) / maxf(float(Plan.count()), 1.0), 0.0, 1.0)
+
+
+## The name of what is happening there now. This is the only progress language
+## in the app, and it is deliberately the language of a building site rather than
+## of a game: "Storey 2", "Services", "Lining".
+static func phase(island: int) -> String:
+	var done: PackedInt32Array = read(island)["done"]
+	if done.size() >= Plan.count():
+		return "Finished"
+	if done.is_empty():
+		return "Not started"
+
+	# The furthest thing finished, not the count, because works complete a few at
+	# a time and out of order within the open window.
+	var furthest := 0
+	for i in done:
+		furthest = maxi(furthest, int(i))
+	return Plan.phase_of(mini(furthest + 1, Plan.count() - 1))
+
+
+## How long this island has actually had somebody working on it.
+##
+## Counted only while the world is open, on this island, and building - so it
+## excludes the menu, the other four islands, and the fifteen minutes an hour
+## they spend sitting down. It is the honest answer to "how much of this did I
+## do", which over a week is the only number worth keeping.
+static func build_time(island: int) -> String:
+	var s := int(read(island)["focus"])
+	return "%d:%02d:%02d" % [s / 3600, (s / 60) % 60, s % 60]
+
+
+static func started(island: int) -> bool:
+	return not read(island)["done"].is_empty()
+
+
+static func _zeroes(n: int) -> PackedInt32Array:
+	var a := PackedInt32Array()
+	a.resize(n)
+	return a
