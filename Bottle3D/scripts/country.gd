@@ -24,9 +24,10 @@ extends Node3D
 ## were tuned to be different places rather than one place recoloured, and that
 ## work pays off twice now - it was carrying an island, and it is carrying a map.
 ##
-## **Where you have been**, from the tracks. `Land` only wears paths into a
-## region that has actually been settled, so a lived-in region reads differently
-## from an empty one without a pin, a label or a progress ring.
+## **Where you have been**, from the tracks. They are recorded rather than
+## drawn - see `Wear` - so a region somebody has spent a week in is crossed with
+## paths and one nobody has been to has bare ground, and the difference is
+## legible from across the world without a pin, a label or a progress ring.
 ##
 ## **How far it is**, because the distance on screen is the distance a hobbit
 ## would have to walk. Nothing here is a diagram of the world; it is the world,
@@ -81,15 +82,22 @@ func where(index: int) -> Vector3:
 func _far_region(index: int) -> Node3D:
 	var root := Node3D.new()
 	var land := Land.new(index)
-	var settled := Progress.settled(index)
+
+	# The paths as they were left. Nothing wears here - nobody is walking - but
+	# a region somebody has lived in for a week is criss-crossed with tracks and
+	# one nobody has ever been to has none, and from across the world that is
+	# the whole difference between the two. It is the map's only marker and it
+	# is not a marker: it is the ground.
+	var wear := Wear.new()
+	wear.from_text(String(Progress.read(index)["wear"]))
 
 	var ground := MeshInstance3D.new()
-	ground.mesh = land.mesh(FAR_NX, FAR_NZ, settled)
-	ground.material_override = Land.material()
+	ground.mesh = land.mesh(FAR_NX, FAR_NZ)
+	ground.material_override = land.material(wear)
 	ground.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(ground)
 
-	_scatter_canopy(root, land, index)
+	_scatter_canopy(root, land, wear, index)
 	return root
 
 
@@ -99,7 +107,7 @@ func _far_region(index: int) -> Node3D:
 ## region, off the shoreline, denser where the biome says there is cover - so
 ## the mass sits where the mass would sit. On the Ice that is almost nothing,
 ## which is correct and is the whole reason the Ice needs the Green.
-func _scatter_canopy(root: Node3D, land: Land, index: int) -> void:
+func _scatter_canopy(root: Node3D, land: Land, wear: Wear, index: int) -> void:
 	var b := Biome.of(index)
 	var density: float = b["cover"]
 	if density <= 0.01:
@@ -126,7 +134,7 @@ func _scatter_canopy(root: Node3D, land: Land, index: int) -> void:
 			continue
 		if Vector2(at.x, at.z).distance_to(Vector2(0.3, -0.5)) < 2.6:
 			continue
-		if land.trodden(at) > 0.35:
+		if wear.at(at) > 0.30:
 			continue
 
 		# Taller than they are wide. Squashed the other way they read as

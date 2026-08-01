@@ -400,6 +400,11 @@ var _pace: Dictionary = {}
 ## land for the regions nobody is standing in - see `Land`.
 var _land: Land
 
+## Where they have walked, which is the one record this app keeps of what the
+## user actually did with their attention. See `Wear`.
+var _wear := Wear.new()
+var _since_wear := 0.0
+
 var _elves: Array[Elf] = []
 var _piles: Array[Pile] = []
 var _stations: Array[Station] = []
@@ -483,6 +488,11 @@ func _init(island := 0) -> void:
 
 
 func build() -> void:
+	# Before anything else, because the cover scattered in `_build_clutter` has
+	# to know where the paths are, and by the time somebody reopens a region
+	# they have been living in the paths are a week old.
+	_wear.from_text(String(Progress.read(_island)["wear"]))
+
 	_build_materials()
 	_build_terrain()
 	_build_water()
@@ -641,6 +651,16 @@ func _tick(delta: float, _population: int, disturbed: bool) -> void:
 
 	for e in _elves:
 		_tick_elf(e, delta)
+
+	# The paths go up to the GPU twice a second rather than on every footfall.
+	# A dozen people walking would otherwise upload the same small texture a
+	# dozen times a frame, and nothing about a track appearing over an hour
+	# needs to be seen sooner than this.
+	_since_wear += delta
+	if _since_wear > 0.5:
+		_since_wear = 0.0
+		if _wear.flush():
+			_dirty = true
 
 	_since_save += delta
 	if _dirty and _since_save > 20.0:
@@ -1412,8 +1432,9 @@ func _tick_elf(e: Elf, delta: float) -> void:
 		e.walk_speed = lerpf(e.walk_speed, target, clampf(delta / 0.5, 0.0, 1.0))
 		var braking := clampf(gap / (e.pace * 0.5 + 0.05), 0.25, 1.0)
 
-		var step: float = delta * e.pace * e.walk_speed * braking
-		e.at += heading * minf(step, gap)
+		var step: float = minf(delta * e.pace * e.walk_speed * braking, gap)
+		e.at += heading * step
+		_tread(e, step)
 		e.facing = _flat(e.facing.lerp(heading, clampf(delta * e.turn_rate, 0.0, 1.0)))
 		_maybe_hand_over(e)
 	else:
@@ -2121,6 +2142,7 @@ func _state() -> Dictionary:
 		"done": done, "stock": stock, "focus": _focus,
 		"cycle": _cycle, "rest": _rest_left,
 		"seeds": _residents, "affinity": _resident_affinity,
+		"wear": _wear.to_text(),
 	}
 
 
@@ -3007,7 +3029,7 @@ func _cyl(radius: float, height: float, sides: int) -> CylinderMesh:
 func _build_terrain() -> void:
 	var node := MeshInstance3D.new()
 	node.mesh = _land.mesh()
-	node.material_override = Land.material()
+	node.material_override = _land.material(_wear)
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(node)
 
@@ -3442,11 +3464,45 @@ func _open_ground() -> Vector3:
 	return Vector3.ZERO
 
 
-## How worn the ground is here, used to keep cover off the paths. The routes
-## themselves are `Land`'s, because the ground colour needs them too and a
-## region that has never been settled has to be able to say it has none.
+## How much ground a metre of walking wears.
+##
+## Tuned against captures taken with it multiplied by forty, which is how you
+## look at two hours of walking without waiting two hours. At this value a route
+## somebody uses steadily is showing after twenty minutes of being watched and
+## is a proper track by the second afternoon.
+##
+## Which means the marks on a region are, quite literally, a picture of how the
+## week went: heavy to the quarry if that was the bottleneck, heavy to the grove
+## if it was not, and nothing at all across the corner nobody ever had a reason
+## to cross.
+##
+## Deliberately not fast. A path that appears in five minutes is a feature; a
+## path that took a week is a record.
+const TREAD := 0.030
+
+## Somebody under a load leans on the ground harder and drags their feet. Worth
+## having because it means the routes that wear deepest are the hauling routes,
+## which are the ones the week was actually about.
+const TREAD_LADEN := 0.9
+
+
+func _tread(e: Elf, step: float) -> void:
+	var amount := step * TREAD
+	if e.carrying != null and e.carry_kind >= 0 and e.carry_kind < CARRY_DRAG.size():
+		amount *= 1.0 + TREAD_LADEN * CARRY_DRAG[e.carry_kind]
+	_wear.tread(e.at, amount)
+
+
+## How worn the ground is here. Read when scattering cover, so that grass and
+## scrub go in wherever the paths were *not* on the day the region was opened -
+## which means a region that has been lived in for a week comes back with its
+## verges pushed back off the tracks, and a fresh one comes back with grass over
+## everything.
+##
+## Only at build time. Cover that vanished from under somebody's feet as they
+## walked would be a lawnmower, not a path.
 func _trodden(p: Vector3) -> float:
-	return _land.trodden(p)
+	return _wear.at(p)
 
 
 func _merged(st: SurfaceTool, mat: Material) -> void:

@@ -14,23 +14,25 @@ extends RefCounted
 ## one, because `height` is called four times per line-of-sight check and once
 ## per terrain vertex, and there are a great many of both.
 ##
-## ## Worn ground is not free
+## ## What is not in here any more
 ##
-## `colour` takes a `worn` flag, and it is the one real difference between a
-## settled region and an unsettled one at this level. The tracks between the
-## site and the places they fetch from are burnt into the ground colour, and a
-## region nobody has walked yet has no tracks in it. That is worth more than it
-## sounds: from the map, the difference between a place somebody lives and a
-## place nobody has been is legible without a marker, a label or a pin.
+## The paths. This file used to draw seven authored routes out from the site and
+## burn them into the ground colour when the region was built - the same paths,
+## at full strength, from the first second, in every region including ones
+## nobody had ever been to. They are recorded rather than drawn now: see `Wear`
+## and `ground.gdshader`.
 
 ## Half-extents of a region. Big enough that the walk to the reedbed passes
 ## behind a ridge and out of sight, small enough to compose in a phone frame.
 const LAND_X := Biome.LAND_X
 const LAND_Z := Biome.LAND_Z
 
-## How wide the worn tracks read. Shared with `ElfWorld`, which uses `trodden`
-## to keep clutter off the paths.
-const TRACK_WIDTH := 0.36
+## And of the mesh, which carries a little past the shoreline so the land has
+## somewhere to fall away to. `Wear` and `ground.gdshader` measure against these
+## rather than against the land, so a track running down to the water is not
+## clipped short of it.
+const REACH_X := LAND_X * 1.34
+const REACH_Z := LAND_Z * 1.38
 
 var index := 0
 
@@ -70,20 +72,7 @@ func on(p: Vector3) -> Vector3:
 	return Vector3(p.x, height(p), p.z)
 
 
-## How worn the ground is here. They walk the same handful of routes all week,
-## so those routes are bare earth with no cover on them. It costs a few distance
-## checks and it is the cheapest thing in the whole app that says somebody lives
-## in this region.
-func trodden(p: Vector3) -> float:
-	var worn := 0.0
-	var site: Vector3 = Biome.LAYOUT["site"]
-	for r in ["hearth", "quarry", "grove", "reedbed", "sandbank", "kiln", "sawmill"]:
-		var d := _to_track(p, site, Biome.LAYOUT[r]) / TRACK_WIDTH
-		worn = maxf(worn, exp(-d * d))
-	return worn
-
-
-func colour(p: Vector3, worn := true) -> Color:
+func colour(p: Vector3) -> Color:
 	var c: Color = _b["ground"]
 	c = c.lerp(_b["ground_lit"], clampf(p.y * 0.7 + 0.42, 0.0, 1.0))
 
@@ -107,11 +96,6 @@ func colour(p: Vector3, worn := true) -> Color:
 	for place in ["pool", "sandbank"]:
 		var d := _gap(p, Biome.LAYOUT[place]) / 1.20
 		c = c.lerp(_b["shore"], clampf(exp(-d * d), 0.0, 0.90))
-
-	# The tracks they wear between the places they work - only where they have
-	# actually been. See the note at the top.
-	if worn:
-		c = c.lerp(_b["earth"], trodden(p) * 0.80)
 
 	# Bare ground as the land falls away to the shore.
 	c = c.lerp(Color(_b["shore"]).darkened(0.35), clampf(-p.y * 1.6, 0.0, 0.85))
@@ -178,7 +162,7 @@ const JITTER := 0.44
 ## **The outline is not the grid's.** Every vertex past the shoreline is folded
 ## back onto it, which turns a rectangle with its corners hanging off into a
 ## closed, wandering coastline - see `EDGE`.
-func mesh(nx := 50, nz := 32, worn := true) -> ArrayMesh:
+func mesh(nx := 50, nz := 32) -> ArrayMesh:
 	var grid: Array[PackedVector3Array] = []
 	for j in nz + 1:
 		var row := PackedVector3Array()
@@ -197,11 +181,11 @@ func mesh(nx := 50, nz := 32, worn := true) -> ArrayMesh:
 			# Alternating diagonals, so the mesh does not crease along one
 			# direction everywhere the ground is steep.
 			if (i + j) % 2 == 0:
-				_facet(st, a, b, c, worn)
-				_facet(st, a, c, d, worn)
+				_facet(st, a, b, c)
+				_facet(st, a, c, d)
 			else:
-				_facet(st, a, b, d, worn)
-				_facet(st, b, c, d, worn)
+				_facet(st, a, b, d)
+				_facet(st, b, c, d)
 	return st.commit()
 
 
@@ -235,7 +219,7 @@ func normal(p: Vector3) -> Vector3:
 ## field normal at its own position. Same plane, three slightly different
 ## normals, so the shading turns gently across the triangle and meets its
 ## neighbours most of the way rather than butting against them.
-func _facet(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, worn: bool) -> void:
+func _facet(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> void:
 	var face := (b - a).cross(c - a).normalized()
 	if face.y < 0.0:
 		face = -face
@@ -253,18 +237,16 @@ func _facet(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, worn: bool) -> 
 		# subtle error: it lifts mid-tones by about seventy per cent, so a
 		# meadow renders as pale sage and a desert as bare white paper, and it
 		# looks like a lighting problem rather than a colour space one.
-		st.set_color(colour(v, worn).srgb_to_linear())
+		st.set_color(colour(v).srgb_to_linear())
 		st.add_vertex(v)
 
 
 func _vertex(i: int, j: int, nx: int, nz: int) -> Vector3:
-	var reach_x := LAND_X * 1.34
-	var reach_z := LAND_Z * 1.38
-	var cell_x := 2.0 * reach_x / float(nx)
-	var cell_z := 2.0 * reach_z / float(nz)
+	var cell_x := 2.0 * REACH_X / float(nx)
+	var cell_z := 2.0 * REACH_Z / float(nz)
 
-	var x := lerpf(-reach_x, reach_x, float(i) / float(nx))
-	var z := lerpf(-reach_z, reach_z, float(j) / float(nz))
+	var x := lerpf(-REACH_X, REACH_X, float(i) / float(nx))
+	var z := lerpf(-REACH_Z, REACH_Z, float(j) / float(nz))
 	x += (_hash(i, j, 0) - 0.5) * 2.0 * JITTER * cell_x
 	z += (_hash(i, j, 1) - 0.5) * 2.0 * JITTER * cell_z
 
@@ -288,32 +270,22 @@ func _hash(i: int, j: int, salt: int) -> float:
 	return float(absi(h) % 65536) / 65536.0
 
 
-## Coloured entirely by the mesh. Nothing here is textured and nothing is
-## mapped: the ground's whole appearance is a colour per vertex, which is the
-## cheapest possible way to draw a place.
+## The ground's material: its own colours out of the mesh, its paths out of a
+## texture.
 ##
-## No specular at all. Roughness was already at one, which is as matte as a
-## rough surface gets, but that is not the same as having no highlight - a
-## fully rough dielectric still returns a broad low sheen, and across a whole
-## hillside under a strong key that sheen is what made the ground look waxed.
-## Earth does not do that. Turning the lobe off outright is both correct and
-## slightly cheaper than computing one and then not wanting it.
-static func material() -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color.WHITE
-	mat.vertex_color_use_as_albedo = true
-	mat.roughness = 1.0
-	mat.metallic = 0.0
-	mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+## Everything except the paths is one colour per vertex, which is the cheapest
+## possible way to draw a place. The paths cannot be, because they change while
+## you are watching and baking them in would mean rebuilding twenty thousand
+## vertices every few seconds to move a shade of brown. So they arrive as a
+## small texture the shader mixes in - see `Wear` and `ground.gdshader`.
+func material(wear: Wear) -> ShaderMaterial:
+	var mat := ShaderMaterial.new()
+	mat.shader = load("res://scripts/ground.gdshader")
+	mat.set_shader_parameter("wear_map", wear.texture())
+	mat.set_shader_parameter("earth", _b["earth"])
+	mat.set_shader_parameter("half_extent", Vector2(REACH_X, REACH_Z))
 	return mat
 
 
 func _gap(a: Vector3, b: Vector3) -> float:
 	return Vector2(a.x - b.x, a.z - b.z).length()
-
-
-func _to_track(p: Vector3, a: Vector3, b: Vector3) -> float:
-	var along := Vector2(b.x - a.x, b.z - a.z)
-	var here := Vector2(p.x - a.x, p.z - a.z)
-	var t := clampf(here.dot(along) / maxf(along.length_squared(), 0.0001), 0.0, 1.0)
-	return (here - along * t).length()

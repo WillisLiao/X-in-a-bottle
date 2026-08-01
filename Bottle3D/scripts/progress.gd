@@ -41,6 +41,10 @@ extends RefCounted
 ## **The hours.** How much building this island has actually had out of you, plus
 ## where it is in the work-and-rest cycle.
 ##
+## **The paths.** Where they have walked, a byte per patch of ground. The one
+## record in here that is a picture rather than a number, and the only one the
+## user ever sees directly - it is the ground itself. See `Wear`.
+##
 ## The hours are the one number the app shows, and it is deliberately a *spent*
 ## number rather than a remaining one. A countdown invites you to wait it out; a
 ## clock that only moves while you are working is a record of what you did.
@@ -88,6 +92,7 @@ static func read(island: int) -> Dictionary:
 		"rest": float(cfg.get_value(k, "rest", 0.0)),
 		"seeds": PackedInt32Array(cfg.get_value(k, "seeds", PackedInt32Array())),
 		"affinity": cfg.get_value(k, "affinity", {}),
+		"wear": cfg.get_value(k, "wear", ""),
 	}
 
 
@@ -101,6 +106,7 @@ static func write(island: int, state: Dictionary) -> void:
 	cfg.set_value(k, "rest", state["rest"])
 	cfg.set_value(k, "seeds", state["seeds"])
 	cfg.set_value(k, "affinity", state["affinity"])
+	cfg.set_value(k, "wear", state["wear"])
 
 
 static func last_island() -> int:
