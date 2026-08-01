@@ -394,8 +394,11 @@ class Elf:
 
 var _island := 0
 var _b := {}
-var _relief: Array = []
 var _pace: Dictionary = {}
+
+## The ground under all of this. Shared with `Country`, which draws the same
+## land for the regions nobody is standing in - see `Land`.
+var _land: Land
 
 var _elves: Array[Elf] = []
 var _piles: Array[Pile] = []
@@ -437,7 +440,7 @@ var _dirty := false
 func _init(island := 0) -> void:
 	_island = island
 	_b = Biome.of(island)
-	_relief = Biome.relief(island)
+	_land = Land.new(island)
 	_pace = _b["pace"]
 
 	title = Biome.name_of(island)
@@ -523,28 +526,14 @@ func _spot(name: String) -> Vector3:
 
 ## The height of the land under a place. The terrain mesh, every station and
 ## every elf's feet read from this one function, so the land and the people on it
-## cannot drift apart.
+## cannot drift apart. It lives in `Land` now, because the four regions nobody is
+## standing in have to be drawn from the same ground the one you are in is.
 func _ground(p: Vector3) -> float:
-	var h := 0.085 * sin(p.x * 0.85 + 0.4) * cos(p.z * 1.1)
-	h += 0.055 * sin(p.z * 1.55 + 1.2)
-
-	for k in _relief:
-		var d: Vector3 = k["at"]
-		var u: float = (p.x - d.x) / k["rx"]
-		var v: float = (p.z - d.z) / k["rz"]
-		h += k["amount"] * exp(-(u * u + v * v))
-
-	# The shore, and then nothing. An irregular edge, because a rectangle of
-	# ground floating in the dark reads as a diorama base.
-	var a := atan2(p.z, p.x)
-	var wobble := 1.0 + 0.10 * sin(a * 3.0 + 0.7) + 0.06 * sin(a * 5.0 + 2.1)
-	var r := Vector2(p.x / (LAND_X * wobble), p.z / (LAND_Z * wobble)).length()
-	var lip := clampf((1.02 - r) / 0.16, 0.0, 1.0)
-	return h * lip - (1.0 - lip) * (0.45 + (r - 1.02) * 2.4)
+	return _land.height(p)
 
 
 func _on(p: Vector3) -> Vector3:
-	return Vector3(p.x, _ground(p), p.z)
+	return _land.on(p)
 
 
 ## Whether one thing can be seen from another. The whole of an elf's ignorance
@@ -3016,90 +3005,11 @@ func _cyl(radius: float, height: float, sides: int) -> CylinderMesh:
 # --- the land ----------------------------------------------------------------
 
 func _build_terrain() -> void:
-	var reach_x := LAND_X * 1.22
-	var reach_z := LAND_Z * 1.24
-	var nx := 54
-	var nz := 34
-
-	var grid: Array[PackedVector3Array] = []
-	for j in nz + 1:
-		var row := PackedVector3Array()
-		var z := lerpf(-reach_z, reach_z, float(j) / float(nz))
-		for i in nx + 1:
-			var x := lerpf(-reach_x, reach_x, float(i) / float(nx))
-			row.append(_on(Vector3(x, 0, z)))
-		grid.append(row)
-
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for j in nz:
-		for i in nx:
-			var a := grid[j][i]
-			var b := grid[j][i + 1]
-			var c := grid[j + 1][i + 1]
-			var d := grid[j + 1][i]
-			_face(st, a, b, c)
-			_face(st, a, c, d)
-
 	var node := MeshInstance3D.new()
-	node.mesh = st.commit()
-
-	# Flat-shaded and coloured per triangle. The facets are the point: a smoothly
-	# shaded field reads as a backdrop, a faceted one reads as ground.
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color.WHITE
-	mat.vertex_color_use_as_albedo = true
-	mat.roughness = 1.0
-	mat.metallic = 0.0
-	node.material_override = mat
+	node.mesh = _land.mesh()
+	node.material_override = Land.material()
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(node)
-
-
-## One flat-shaded triangle of ground. The vertex order is what Godot culls on
-## and it is easy to get backwards - an inverted grid renders as nothing but the
-## far slopes, which reads as a lighting problem rather than a winding one. The
-## shading normal is therefore taken from the geometry and then forced upward,
-## because ground faces up and there is no case here where it does not.
-func _face(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> void:
-	var n := (b - a).cross(c - a).normalized()
-	st.set_normal(n if n.y >= 0.0 else -n)
-	# Converted, because vertex colours are consumed as linear while every colour
-	# written down in this project is sRGB. Skipping this is not a subtle error:
-	# it lifts mid-tones by about seventy per cent, so a meadow renders as pale
-	# sage and a desert as bare white paper, and it looks like a lighting problem
-	# rather than a colour-space one.
-	st.set_color(_ground_colour((a + b + c) / 3.0).srgb_to_linear())
-	st.add_vertex(a)
-	st.add_vertex(b)
-	st.add_vertex(c)
-
-
-func _ground_colour(p: Vector3) -> Color:
-	var c: Color = _b["ground"]
-	c = c.lerp(_b["ground_lit"], clampf(p.y * 0.7 + 0.42, 0.0, 1.0))
-
-	# Patchiness at a scale bigger than a facet. Without it the whole island is
-	# one flat colour and no amount of cover planted on top rescues it.
-	var patch := sin(p.x * 1.5 + 0.3) * cos(p.z * 1.85 - 0.8) * 0.5 + 0.5
-	c = c.lerp(_b["patch"], patch * 0.34)
-
-	for place in ["quarry", "mine"]:
-		var d := _gap(p, _spot(place)) / 1.30
-		c = c.lerp(_b["rocky"], clampf(exp(-d * d), 0.0, 0.95))
-
-	for place in ["pool", "sandbank"]:
-		var d := _gap(p, _spot(place)) / 1.20
-		c = c.lerp(_b["shore"], clampf(exp(-d * d), 0.0, 0.90))
-
-	# The tracks they wear between the places they work.
-	c = c.lerp(_b["earth"], _trodden(p) * 0.80)
-
-	# Bare ground as the land falls away to the shore.
-	c = c.lerp(Color(_b["shore"]).darkened(0.35), clampf(-p.y * 1.6, 0.0, 0.85))
-
-	var v := randf_range(-0.035, 0.035)
-	return Color(clampf(c.r + v, 0, 1), clampf(c.g + v, 0, 1), clampf(c.b + v, 0, 1))
 
 
 func _build_water() -> void:
@@ -3532,24 +3442,11 @@ func _open_ground() -> Vector3:
 	return Vector3.ZERO
 
 
-## How worn the ground is here. They walk the same handful of routes all week, so
-## those routes are bare earth with no cover on them. It costs a few distance
-## checks and it is the cheapest thing in here that says somebody lives on this
-## island.
+## How worn the ground is here, used to keep cover off the paths. The routes
+## themselves are `Land`'s, because the ground colour needs them too and a
+## region that has never been settled has to be able to say it has none.
 func _trodden(p: Vector3) -> float:
-	var worn := 0.0
-	var site := _spot("site")
-	for r in ["hearth", "quarry", "grove", "reedbed", "sandbank", "kiln", "sawmill"]:
-		var d := _to_track(p, site, _spot(r)) / 0.36
-		worn = maxf(worn, exp(-d * d))
-	return worn
-
-
-func _to_track(p: Vector3, a: Vector3, b: Vector3) -> float:
-	var along := Vector2(b.x - a.x, b.z - a.z)
-	var here := Vector2(p.x - a.x, p.z - a.z)
-	var t := clampf(here.dot(along) / maxf(along.length_squared(), 0.0001), 0.0, 1.0)
-	return (here - along * t).length()
+	return _land.trodden(p)
 
 
 func _merged(st: SurfaceTool, mat: Material) -> void:

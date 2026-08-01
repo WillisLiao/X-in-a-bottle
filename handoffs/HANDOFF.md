@@ -13,23 +13,44 @@ Dated detail goes in `devlogs/`, not here.
 decided to drop island-choosing entirely: the five biomes become five regions
 of one world that the hobbits expand across, and the business model is
 paid-up-front with no IAP. That document has the reasoning, the mechanics and
-what it does to the code. Nothing in it is built yet, and it changes what the
-remaining items below are worth doing.
+what it does to the code.
 
-The 2026-08-02 session did the rename everywhere a user sees it, a new app
-icon, the sky and sun/moon work, and the hobbit/troll redesign. All of it is
-verified on captures rather than assumed. See `devlogs/2026-08-02.md`.
+**The first slice of it is built.** The picker is deleted, the five regions
+sit at authored positions in one world, and pinching out past where a region
+used to stop keeps receding until you can see all of them. Tap one to travel.
+See `devlogs/2026-08-02.md` for the whole account, and:
 
-Two items from `NEXT-SESSION-hobbitle-for-real.md` were **not** done, because
-the session was stopped for the design conversation above:
+```
+scripts/region.gd    where the five places are, and why each number
+scripts/land.gd      the ground, lifted out of ElfWorld so any region can draw
+scripts/country.gd   the four regions nobody is standing in - scenery, no tick
+```
 
-- **The turn/move control.** Still two `Label`s reading "Islands" and
-  "Turn"/"Move" in the bottom left of `main.gd`'s `_build_back`. It was asked
-  for as icons in the top right - a turn icon (two curved arrows forming a
-  circle) and a move icon (four arrows in a cross), drawn with `_draw()` on a
-  custom `Control`. Section 3 of that file has the full spec and it still
-  stands. Worth noting the one-world pivot deletes the "Islands" half of that
-  corner, so this should probably wait for it.
+The terrain was also reworked twice on the owner's notes and is now faceted
+with the hard edges taken off - `Land.SOFTEN` is the one dial. The background,
+which was a flat pale wall across two thirds of every frame, now graduates.
+
+**Next, in order:**
+
+- **The lantern.** Arriving at a region settles it instantly, and that is a
+  placeholder marked as one in `main.gd`'s `_enter`. It should be a hobbit
+  walking a light across seventy-five seconds of open ground. This is the item
+  that turns the map from a menu into a world.
+- **Roads that wear in.** `DESIGN-one-world.md` calls it the most satisfying
+  single item on the list and it is currently faked: `Land.trodden` is seven
+  authored routes baked into the ground colour at build time, not a record of
+  where anybody actually walked.
+- **What a second and third site build.** Still the largest genuine unknown in
+  the whole direction. `plan.gd` knows how to make one three-storey house.
+- **Nothing signposts the pinch.** The picker used to be the way to the other
+  places. There is now no hint that the gesture goes that far.
+- **The world is lit by the region you are standing in**, so at map zoom the
+  Ice's cold key sits over the Dunes.
+- **The turn/move control.** One `Label` reading "Turn"/"Move" in the bottom
+  left of `main.gd`'s `_build_back` - the "Islands" half went with the picker.
+  Asked for as icons in the top right, drawn with `_draw()` on a custom
+  `Control`. Section 3 of `NEXT-SESSION-hobbitle-for-real.md` has the spec and
+  it still stands.
 - **The wider polish pass.** Section 5 of the same file.
 
 Remaining known nits on the bodies, none of them blocking: a troll's waist
@@ -48,9 +69,9 @@ say elf. That is deliberate: renaming an identifier four thousand lines deep
 buys nothing a user can see. The people are hobbits and trolls.
 
 The phone is the bottle, so nothing draws a vessel.
-Five islands, each with one three-storey house on it that takes about a week of
-held stillness to finish, and one rule holding the whole thing up.
-(The five-islands part is what `DESIGN-one-world.md` replaces. The rule is not.)
+One world of five regions, each with one three-storey house on it that takes
+about a week of held stillness to finish, and one rule holding the whole thing
+up.
 
 > **They only build while the phone is still.**
 
@@ -67,8 +88,8 @@ takes a week, a mechanic that can undo an evening is one that teaches people not
 to open the app.
 
 **Every hour of building they stop for a quarter of an hour**, and that break
-runs down only while the app is open on that island - not on the menu, not on
-another island, not in a pocket.
+runs down only while the app is open on that region - not on another region,
+not in a pocket.
 There is deliberately nothing to do while it does.
 Take the break with them and they are ready when you get back; don't, and they
 are still sitting there.
@@ -100,14 +121,14 @@ the thing that digs.
 That also means it cannot deadlock.
 `Plan.EFFORT` multiplies every bill and is the one dial on how long a week is.
 
-**`biome.gd` - the five islands.**
+**`biome.gd` - the five regions.**
 Shared layout, because it is tuned.
 What differs is palette, relief, trees, and what the ground will give you: the
 Ice has almost no timber, the Dunes give sand for nothing, the Shore is a long
 way from iron, the Green fights you for stone.
 Same blueprint, five different arguments about what to do next.
 
-**`elf_world.gd` - the island and the people on it.**
+**`elf_world.gd` - the region and the people in it.**
 Gather, craft, haul, deliver, fit, plus rest, look, idle, private errands and
 fishing.
 Everything carried is a real object lifted off a real heap.
@@ -142,7 +163,7 @@ layer.
 `Lull.xcodeproj` is disposable: run `xcodegen generate` after adding files.
 
 ```
-Bottle3D/   Elvle, the Godot app - the live one
+Bottle3D/   Hobbitle, the Godot app - the live one
 Shared/     MetalCanvas, CanvasRenderer, canvas_vertex, colour and dither helpers
 Lull/       the sleep app
 Bottle/     the 2D focus app, superseded
@@ -164,8 +185,8 @@ Faster loop, no device:
   -- --screen=world --island=0 --capture=/tmp/shot.png --after=25
 ```
 
-`--screen` is `title`, `picker` or `world`; `--island` 0-4; also `--yaw` and
-`--zoom`.
+`--screen` is `title`, `world` or `map`; `--island` (or `--region`) 0-4; also
+`--yaw`, `--pitch`, `--zoom` and `--rest`.
 
 After adding any file with a `class_name`, run `--headless --import` once or
 every script referencing it fails to parse.
@@ -181,13 +202,17 @@ silently reverted the renderer and the orientation once each.
 - **No offline progress, ever.** The only thing that moves this app forward is a
   phone lying still with the screen on. An elf who laid a joist while you were
   asleep would be a lie about what you did.
-- **No percentage anywhere.** The picker says "Storey 2" and "Services", never
-  "43%". The moment progress is a number somebody optimises it, and the only way
-  to optimise anything here is to leave the phone alone longer than you meant to.
-- **Time spent, never time remaining.** The picker's clock counts the building
-  this island has actually had out of you. A countdown is a thing to wait out; a
-  clock that only moves while you are working is a record of what you did. Same
-  reason the break is a light crossing the sky rather than 14:58.
+- **No percentage anywhere.** Progress is said as "Storey 2" and "Services",
+  never "43%". The moment progress is a number somebody optimises it, and the
+  only way to optimise anything here is to leave the phone alone longer than you
+  meant to.
+- **Time spent, never time remaining.** The clock counts the building a region
+  has actually had out of you. A countdown is a thing to wait out; a clock that
+  only moves while you are working is a record of what you did. Same reason the
+  break is a light crossing the sky rather than 14:58.
+- **The map is not a screen.** It is the same world seen from further off, and
+  it is reached by continuing a pinch. Anything that has to be dismissed is a
+  thing standing between somebody and the place they came to look at.
 - **Progress only ever goes one way.** Nothing the user does can take a finished
   work off the queue.
 - **No stats UI on the elves, no names, no speech, no thought bubbles.** The

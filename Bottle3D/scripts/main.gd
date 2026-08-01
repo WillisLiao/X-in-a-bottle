@@ -2,9 +2,8 @@ extends Node3D
 
 ## Hobbitle.
 ##
-## The phone is the bottle, so nothing draws a vessel. Five islands, each with
-## one house on it that takes about a week of held stillness to finish, and one
-## rule holding the whole thing up:
+## The phone is the bottle, so nothing draws a vessel. One world of five
+## regions, and one rule holding the whole thing up:
 ##
 ##   **They only build while the phone is still.**
 ##
@@ -35,7 +34,22 @@ extends Node3D
 ## up, not looking at it.
 ##
 ## Which frees the gestures to do what they should always have done - drag to
-## turn the island, pinch to come in close enough to watch one elf's hands.
+## turn the region, pinch to come in close enough to watch one elf's hands.
+##
+## ## Zoom out is the map
+##
+## There used to be a picker: a screen with five islands on it that you chose
+## between. It is gone, and what replaced it is not another screen.
+##
+## Keep pinching out past where the region used to stop and it keeps receding,
+## until you are looking at the whole world and every place in it. Keep pinching
+## in and you are back down among somebody's hands. One continuous gesture, no
+## menu, and nothing to be dismissed - which is the whole of `MAP_FROM`,
+## `_map_blend` and about forty lines below.
+##
+## The five biomes are five regions of one place now rather than five parallel
+## saves, so the thing you pull back to see is a world rather than a menu of
+## worlds. See `Region`, `Country`, and `handoffs/DESIGN-one-world.md`.
 
 const TARGET_FPS := 30
 
@@ -52,7 +66,70 @@ const ORBIT_FLOOR := 0.06
 ## total travel, which is one unhurried drag up the screen.
 const PITCH_MIN := -1.62
 const ZOOM_MIN := 0.42
-const ZOOM_MAX := 1.65
+
+## Where the region stops being the subject and the world starts being it.
+##
+## Below this the camera is looking at a place and behaves exactly as it always
+## did. Above it the aim slides off the region and onto the middle of the world,
+## the haze thins out so forty metres of it does not swallow the far end, and
+## tapping a region travels to it. The two states are never both true and are
+## never switched between - it is one number, and the user is holding it.
+const MAP_FROM := 1.9
+
+## And where it stops. Past this the camera is out at the world and there is
+## nothing further to pull back to.
+##
+## Note how small the number is against the hundred and seventy metres the
+## camera actually ends up at. Distance is not `_zoom` times a constant any
+## more - see `_move_camera`. If it were, a world this wide would need a zoom
+## range of thirty to one, and a pinch only gets you about four to one in a
+## gesture, so opening the map would have taken six of them in a row. The
+## design asks for one continuous gesture, so the last stretch of the pinch
+## carries the camera much further than the first, and the whole width of the
+## world costs the same flick of two fingers whatever is in it.
+const ZOOM_MAX := 3.0
+
+## Nought inside a region, one out at the world. Smoothed by the same curve the
+## camera uses, so nothing about the transition has an edge on it.
+var _map := 0.0
+
+## How much further over the world the camera leans once it is out at the map.
+##
+## Thirty-six degrees is the angle a region is composed at, and it is chosen to
+## read faces - from much higher these stop being people and become hats. But
+## the map has no faces in it and a different problem: the arc runs thirty units
+## deep as well as seventy across, and seen from a face-reading angle that depth
+## collapses into a diagonal stripe across the bottom of the frame with the top
+## half empty. Leaning over as the camera pulls back trades the faces, which are
+## no longer visible anyway, for the depth, which is the whole shape of the
+## world.
+##
+## Not far, though. Past about fifteen degrees of extra lean the horizon leaves
+## the top of the frame and takes the sky and the sun with it, and the map ends
+## up read against a flat wall of haze. A map of a world should have that
+## world's weather over it.
+const MAP_PITCH := 0.22
+
+## The lens the world is seen through, against the thirty-four degrees a region
+## is seen through.
+##
+## Same argument `ElfWorld` already makes about framing one region, one scale
+## up. A thirty-four degree lens on this viewport is sixty-six degrees across,
+## and the arc fills nearly all of it - so the two end regions sit right out at
+## the edge of the frame where rectilinear projection stretches hardest, and the
+## Ice and the Dunes were being drawn about forty per cent larger than the
+## Meadow in the middle despite being further away. Which reads as the world
+## bulging at the ends rather than as a lens doing what lenses do.
+##
+## Twenty-two degrees from a hundred metres out is the same picture with the
+## stretch taken out of it, and it costs nothing but a clip plane.
+const MAP_LENS := 22.0
+
+## Where the pinch is being carried to, when something other than a finger is
+## doing the carrying. Negative means nothing is. Arriving at a region has to be
+## a descent rather than a cut, or travelling reads as a screen change - which
+## is the thing the picker was deleted for being.
+var _zoom_to := -1.0
 
 const VOID := Color("0B0906")
 
@@ -97,15 +174,23 @@ var _sky_written := -1.0
 ## What the lower hemisphere settles into, far below the horizon. The island's
 ## own haze colour, so distance and fog agree.
 var _haze_floor := Color("2A2A44")
+
+## The region's own fog, held so the map can thin it out and put it back without
+## having to ask the biome again every frame.
+var _fog_density := 0.016
 var _key_energy := 1.0
 var _fill_energy := 1.0
 var _ambient_energy := 1.0
 var _menu: Menu
-var _back: Label
 var _mode_label: Label
 
 var _world: ElfWorld
 var _island := 0
+
+## The rest of the world - the four regions nobody is standing in. Scenery only;
+## it has no tick and never will, because the rule that only what is being
+## watched moves is what makes a bigger world affordable at all.
+var _country: Country
 
 var _charge := Charge.new()
 
@@ -128,12 +213,17 @@ var _pitch := 0.0
 var _zoom := 1.0
 var _drift := 0.0
 
-## Whether a one-finger drag turns the island (false) or slides the camera
-## over it (true). Reset whenever an island is entered, so nobody arrives at
-## a fresh island already panned off to one side.
+## Whether a one-finger drag turns the region (false) or slides the camera
+## over it (true). Reset whenever a region is entered, so nobody arrives at
+## a fresh region already panned off to one side.
 var _pan_mode := false
 var _pan := Vector3.ZERO
+
+## How far the camera may be slid off the middle of a region. Multiplied out as
+## the map opens up, because a limit tuned to a thirteen-metre island would pin
+## the camera to the centre of an eighty-metre world.
 const PAN_LIMIT := 3.4
+const PAN_LIMIT_MAP := 26.0
 
 var _touches := {}
 var _pinch_from := 0.0
@@ -176,30 +266,38 @@ func _ready() -> void:
 	_build_back()
 
 	_island = clampi(Progress.last_island(), 0, Biome.COUNT - 1)
+	_country = Country.new()
+	add_child(_country)
+
 	_menu = Menu.new()
 	add_child(_menu)
 	_menu.begin.connect(_on_begin)
-	_menu.chose.connect(_enter)
 	_menu.dismissed.connect(_on_dismissed)
 
 	_read_capture_args()
 
-	match _capture_screen:
-		"picker":
-			_menu.show_picker()
-		"world":
-			_enter(_island)
-		_:
-			_menu.show_title()
+	if _capture_screen == "world" or _capture_screen == "map":
+		_enter(_island)
+		if _capture_screen == "map":
+			_zoom = ZOOM_MAX
+			_zoom_to = -1.0
+	else:
+		_menu.show_title()
 
-	# After _enter, which resets the camera to the island's default. Held apart
+	# After _enter, which resets the camera to the region's default. Held apart
 	# so a capture can ask for an angle and actually get it.
 	if not is_nan(_arg_yaw):
 		_yaw = _arg_yaw
 	if not is_nan(_arg_zoom):
-		_zoom = _arg_zoom
+		_zoom = clampf(_arg_zoom, ZOOM_MIN, ZOOM_MAX)
+		_zoom_to = -1.0
 	if not is_nan(_arg_pitch):
 		_pitch = _arg_pitch
+
+	# The map blend is smoothed toward its target, and a capture taken twenty
+	# seconds in has plenty of time to get there - but one taken at zero would
+	# photograph the world at the region's fog. Start it where it belongs.
+	_map = clampf(inverse_lerp(MAP_FROM, ZOOM_MAX, _zoom), 0.0, 1.0)
 
 
 func _process(delta: float) -> void:
@@ -227,7 +325,7 @@ func _process(delta: float) -> void:
 # --- moving between places ---------------------------------------------------
 
 func _on_begin() -> void:
-	_menu.show_picker()
+	_enter(_island)
 
 
 func _on_dismissed() -> void:
@@ -235,37 +333,59 @@ func _on_dismissed() -> void:
 		_menu.hide_all()
 
 
-func _enter(island: int) -> void:
-	if _world != null and _island == island:
+## Go and live in a region.
+##
+## The camera keeps its angle across a move, and descends into the new place
+## rather than arriving at it. That is the difference between travelling and
+## changing screens, and it is most of what the picker was deleted for.
+func _enter(region: int) -> void:
+	var arriving := _world == null
+	if not arriving and _island == region:
+		_zoom_to = 1.0
 		_menu.hide_all()
 		return
 
 	_leave()
-	_island = clampi(island, 0, Biome.COUNT - 1)
+	_island = clampi(region, 0, Biome.COUNT - 1)
 	Progress.set_last_island(_island)
+
+	# Placeholder for the lantern.
+	#
+	# Settling a region is meant to be somebody walking a light to it over about
+	# a minute, and then a second hearth - see `DESIGN-one-world.md`. None of
+	# that is built. Until it is, arriving settles the place, which is the
+	# smallest honest stand-in: the fact gets recorded, the ground starts
+	# wearing tracks, and the only thing missing is the walk.
+	Progress.settle(_island)
 	Progress.flush()
 
 	_world = ElfWorld.new(_island)
 	add_child(_world)
 	_world.build()
 
-	# The bottle is never empty. Somebody is on the island the moment it opens,
+	# The bottle is never empty. Somebody is in the region the moment it opens,
 	# so the first thing seen is the place itself and not a black screen to be
 	# earned.
 	for _i in Charge.STARTING_OBJECTS:
 		_world.advance(999.0, Charge.STARTING_OBJECTS, false)
 
+	_country.show_from(_island)
+
 	_apply_lighting(_world)
 	_camera.fov = _world.lens
-	_yaw = 0.0
-	_pitch = 0.0
-	_zoom = 1.0
 	_pan = Vector3.ZERO
+	if arriving:
+		_yaw = 0.0
+		_pitch = 0.0
+		_zoom = 1.0
+		_zoom_to = -1.0
+	else:
+		# Came in off the map, so keep the angle and fall the rest of the way.
+		_zoom_to = 1.0
 	if _force_rest >= 0.0:
 		_world.force_rest(_force_rest)
 
 	_menu.hide_all()
-	_back.modulate.a = 0.34
 	_drift = 6.0
 
 
@@ -318,8 +438,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.device == -1:
 			return
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			_zoom_to = -1.0
 			_zoom = clampf(_zoom * 0.92, ZOOM_MIN, ZOOM_MAX)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			_zoom_to = -1.0
 			_zoom = clampf(_zoom * 1.08, ZOOM_MIN, ZOOM_MAX)
 		elif event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
@@ -344,10 +466,17 @@ func _pinch_span() -> float:
 	return (points[0] as Vector2).distance_to(points[1] as Vector2)
 
 
+## The one gesture that used to be a screen.
+##
+## Nothing here knows about a map. It is the same pinch it always was against a
+## much longer range, and everywhere else that cares reads `_map` off the number
+## it leaves behind - which is why there is no transition to get wrong, no state
+## to be in, and nothing that can be halfway open.
 func _pinch(span: float) -> void:
 	if _pinch_from < 1.0 or span < 1.0:
 		return
 	_dragged = true
+	_zoom_to = -1.0
 	_zoom = clampf(_pinch_zoom * (_pinch_from / span), ZOOM_MIN, ZOOM_MAX)
 
 
@@ -390,8 +519,9 @@ func _pan_camera(by: Vector2) -> void:
 
 	_pan -= right * by.x * rate
 	_pan += forward * by.y * rate
-	if _pan.length() > PAN_LIMIT:
-		_pan = _pan.normalized() * PAN_LIMIT
+	var limit := lerpf(PAN_LIMIT, PAN_LIMIT_MAP, _map)
+	if _pan.length() > limit:
+		_pan = _pan.normalized() * limit
 	_drift = 14.0
 
 
@@ -410,15 +540,45 @@ func _finish_press(at: Vector2) -> void:
 		_menu.tapped(at)
 		return
 
-	# Bottom left corner, where the way back lives, and the toggle just under
-	# it for which way a one-finger drag turns.
-	if at.x < 620.0 and at.y > 1075.0:
-		_pan_mode = not _pan_mode
+	# Out on the map, a tap is somewhere to go. Tried before the corner control,
+	# because a region under the thumb is the more specific thing.
+	if _map > 0.35 and _tap_region(at):
 		return
-	if at.x < 620.0 and at.y > 980.0:
-		if _world:
-			_world.persist()
-		_menu.show_picker()
+
+	# Bottom left corner: which way a one-finger drag turns.
+	if at.x < 620.0 and at.y > 1000.0:
+		_pan_mode = not _pan_mode
+
+
+## The region under a tap, from where it actually is on screen rather than from
+## a hit rectangle kept in step by hand. Everything on the map is a real thing
+## in the world at its real distance, so asking the camera where it landed is
+## both the simplest way to do this and the only one that cannot drift.
+func _tap_region(at: Vector2) -> bool:
+	if _camera == null:
+		return false
+
+	var best := -1
+	var nearest := 190.0
+	for i in Biome.COUNT:
+		var here := _country.where(i) + Vector3(0, 0.5, 0)
+		if _camera.is_position_behind(here):
+			continue
+		var d := _camera.unproject_position(here).distance_to(at)
+		if d < nearest:
+			nearest = d
+			best = i
+
+	if best < 0:
+		return false
+	if best == _island:
+		# Already living there. Go back down to it.
+		_zoom_to = 1.0
+		return true
+
+	# No save here: `_enter` leaves the region it is in, and leaving persists.
+	_enter(best)
+	return true
 
 
 func _build_sky() -> void:
@@ -509,27 +669,25 @@ func _rest_light(delta: float) -> void:
 		clampf(delta * 1.6, 0.0, 1.0))
 
 
+## The one control left in the corner.
+##
+## There were two, stacked: "Islands", which went back to the picker, and
+## "Turn"/"Move" under it. The picker is gone and so is the word for it - the
+## way out is now pinching the world open, which is a gesture rather than a
+## button, and leaving a dead label there pointing at nothing would have been
+## worse than the gesture being quiet.
+##
+## Both of these are still owed as drawn icons in the top right rather than as
+## words in the bottom left. See `NEXT-SESSION-hobbitle-for-real.md`.
 func _build_back() -> void:
 	var layer := CanvasLayer.new()
 	layer.layer = 110
-
-	_back = Label.new()
-	_back.text = "Islands"
-	_back.position = Vector2(170.0, 1030.0)
-	_back.add_theme_font_size_override("font_size", 40)
-	_back.add_theme_color_override("font_color", Color("EFE3CB"))
-	_back.add_theme_constant_override("shadow_offset_y", 2)
-	_back.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.6))
-	_back.modulate.a = 0.0
-	_back.mouse_filter = Control.MOUSE_FILTER_IGNORE
-
-	layer.add_child(_back)
 
 	# Which mode dragging is in right now, not which one the tap switches to -
 	# that is the way round people actually read a toggle.
 	_mode_label = Label.new()
 	_mode_label.text = "Turn"
-	_mode_label.position = Vector2(170.0, 1078.0)
+	_mode_label.position = Vector2(170.0, 1054.0)
 	_mode_label.add_theme_font_size_override("font_size", 40)
 	_mode_label.add_theme_color_override("font_color", Color("EFE3CB"))
 	_mode_label.add_theme_constant_override("shadow_offset_y", 2)
@@ -541,20 +699,20 @@ func _build_back() -> void:
 	add_child(layer)
 
 
-## The way out stays on screen rather than being hidden behind a gesture, but it
-## settles to almost nothing so it is not something you are looking at for
-## twenty-five minutes. It never goes to zero: a control you cannot see is a
-## control that is not there.
+## It stays on screen rather than being hidden behind a gesture, but it settles
+## to almost nothing so it is not something you are looking at for twenty-five
+## minutes. It never goes to zero: a control you cannot see is a control that is
+## not there.
 func _fade_back(delta: float) -> void:
-	if _back == null:
+	if _mode_label == null:
 		return
 	var want := 0.0
 	if _world != null and not _menu.showing():
 		want = 0.34 if _drift > 0.0 else 0.13
 	_drift = maxf(0.0, _drift - delta)
-	_back.modulate.a = lerpf(_back.modulate.a, want, clampf(delta * 2.0, 0.0, 1.0))
 	_mode_label.text = "Move" if _pan_mode else "Turn"
-	_mode_label.modulate.a = _back.modulate.a
+	_mode_label.modulate.a = lerpf(_mode_label.modulate.a, want,
+		clampf(delta * 2.0, 0.0, 1.0))
 
 
 # --- motion ------------------------------------------------------------------
@@ -591,14 +749,53 @@ func _read_motion(delta: float) -> void:
 		+ ((accel - _accel_baseline).length() / scale) * 0.18
 
 
+## How far back the camera has to stand for the whole arc of regions to fit
+## across the frame, in metres.
+##
+## Derived rather than typed, from the width of the world, the lens the map is
+## seen through and the shape of the viewport, so that moving a region in
+## `Region.ORIGINS` cannot quietly leave one of them off the edge of the frame.
+func _map_distance() -> float:
+	var vp := get_viewport().get_visible_rect().size
+	var aspect := maxf(vp.x, 1.0) / maxf(vp.y, 1.0)
+	# `fov` is the vertical angle, and the arc runs across the frame. Measured
+	# against the map's own lens rather than the region's, because by the time
+	# the camera is out this far it is looking through the other one.
+	var half := atan(tan(deg_to_rad(MAP_LENS) * 0.5) * aspect)
+
+	# A tenth of headroom, so the two end regions sit in the world rather than
+	# jammed against the bezel.
+	return Region.reach() / maxf(tan(half), 0.05) * 1.10
+
+
 func _move_camera(delta: float) -> void:
 	if _world == null:
 		return
 
+	if _zoom_to >= 0.0:
+		_zoom = lerpf(_zoom, _zoom_to, clampf(delta * 3.2, 0.0, 1.0))
+		if absf(_zoom - _zoom_to) < 0.01:
+			_zoom = _zoom_to
+			_zoom_to = -1.0
+
+	_map_blend(delta)
+
 	var nominal: float = _world.distance
-	var focal: Vector3 = _world.focus + _pan
+	# Out on the map the camera stops looking at the region and starts looking
+	# at the middle of everything, so pulling back walks the world into frame
+	# rather than leaving the place you were in stuck under the thumb.
+	var focal: Vector3 = _world.focus.lerp(
+		Region.centre(_island) + Vector3(0, 0.4, 0), _map) + _pan
 	var base_pitch: float = atan2(_world.rise, nominal)
-	var away := sqrt(nominal * nominal + _world.rise * _world.rise) * _zoom
+
+	# Inside a region, distance is the pinch times the region's own framing, as
+	# it always was. Out past `MAP_FROM` it stops being proportional and heads
+	# for wherever the whole world happens to fit - which is a hundred and
+	# seventy metres for five regions and would be further for eight, without
+	# the gesture changing at all. The two agree at the join, because `_map` is
+	# nought there and the lerp collapses onto the first term.
+	var unit := sqrt(nominal * nominal + _world.rise * _world.rise)
+	var away := lerpf(unit * _zoom, _map_distance(), _map)
 
 	var yaw := _yaw
 
@@ -612,7 +809,7 @@ func _move_camera(delta: float) -> void:
 	# So the orbit stops just above level, and everything past that tilts the
 	# aim upward from where the camera already is. Keep dragging and the island
 	# slides off the bottom of the frame and you are looking at the weather.
-	var want := base_pitch + _pitch
+	var want := base_pitch + _pitch + MAP_PITCH * _map
 	var pitch := clampf(want, ORBIT_FLOOR, 1.18)
 	var aim_up := maxf(0.0, ORBIT_FLOOR - want)
 
@@ -643,6 +840,31 @@ func _move_camera(delta: float) -> void:
 		_camera.rotate_object_local(Vector3.RIGHT, aim_up)
 
 
+## What being out at the world rather than in a region changes, other than the
+## distance.
+##
+## Only one thing, and it is the haze. The fog was tuned against thirteen metres
+## of island and there are eighty metres of world; left alone it swallows both
+## ends of the arc and the map becomes one region and some weather. Thinned as
+## the camera pulls back, it does the job it was there for - saying how far away
+## the far end is - instead of hiding it.
+##
+## Everything else about the map is the same scene from further off. There is no
+## second camera, no orthographic switch, no icons and no labels: the reason to
+## build the map out of the world was so that there would be nothing to keep in
+## step with it.
+func _map_blend(delta: float) -> void:
+	var want := clampf(inverse_lerp(MAP_FROM, ZOOM_MAX, _zoom), 0.0, 1.0)
+	# Smoothed, so the haze does not step when a pinch does.
+	_map = lerpf(_map, want * want * (3.0 - 2.0 * want),
+		clampf(delta * 6.0, 0.0, 1.0))
+
+	if _env != null:
+		_env.fog_density = lerpf(_fog_density, _fog_density * 0.12, _map)
+	if _camera != null and _world != null:
+		_camera.fov = lerpf(_world.lens, MAP_LENS, _map)
+
+
 func _build_environment() -> void:
 	var world := WorldEnvironment.new()
 	var env := Environment.new()
@@ -659,10 +881,29 @@ func _build_environment() -> void:
 	sky_mat.sky_curve = 0.14
 	sky_mat.ground_bottom_color = Color("463E38")
 	sky_mat.ground_horizon_color = Color("8C8FA0")
-	# A slow settle rather than a hard band. The lower hemisphere is forty-odd
-	# degrees of visible frame in this app rather than a strip at the bottom,
-	# so its gradient has as much work to do as the sky's.
-	sky_mat.ground_curve = 0.32
+	# The lower hemisphere is not a strip along the bottom of the frame in this
+	# app, it is nearly all of the background: the camera looks down from
+	# thirty-six degrees up through a thirty-four degree lens, so everything
+	# behind the land sits between nineteen and fifty-three degrees below the
+	# horizon, and every pixel of it is the ground half of the sky.
+	#
+	# At 0.32 that whole band came out as one flat pale wall. It holds the
+	# horizon colour nearly the entire way down, which means `ground_bottom_color`
+	# was being carefully chosen for a part of the sphere nobody has ever seen,
+	# and the background - two thirds of every frame - read as paper.
+	#
+	# The number goes the opposite way from how it reads: **lower is a faster
+	# fall to the bottom colour.** That was settled by rendering the two ends in
+	# flat red and blue and looking, which took two captures, and it is written
+	# down here so nobody has to do it again. At 0.02 the band is entirely the
+	# bottom colour and at 1.7 entirely the horizon colour. This puts the
+	# transition inside the band, so the background graduates from the warm glow
+	# near the horizon down into the region's own haze, which is what air with
+	# distance in it looks like.
+	#
+	# Worth knowing before touching it: ambient is 78 per cent sky, so these two
+	# colours light the island as well as sitting behind it.
+	sky_mat.ground_curve = 0.13
 	# No sun from the sky material. Every directional light in the scene gets
 	# one and none of them is controllable enough to be the sun this app wants -
 	# see `_build_lights`.
@@ -895,7 +1136,8 @@ func _apply_lighting(world: World) -> void:
 
 	var b := Biome.of(_island)
 	_env.fog_light_color = b["fog"]
-	_env.fog_density = b["fog_density"]
+	_fog_density = b["fog_density"]
+	_env.fog_density = _fog_density
 
 	# The sky used to be derived from this same palette - a ten percent lerp
 	# from the ambient colour toward the key, then darkened again. That was the
@@ -950,7 +1192,10 @@ func _build_camera() -> void:
 	_camera = Camera3D.new()
 	_camera.fov = 46.0
 	_camera.position = Vector3(0, 4, 8)
-	_camera.far = 60.0
+	# Far enough to hold the whole arc of regions with the camera pulled back to
+	# the map, and then some. It was sixty, which was ample for one island and
+	# would have clipped the far half of the world in two.
+	_camera.far = 400.0
 	# No depth of field. It is a per-pixel blur pass for a scene that reads
 	# perfectly well without one, and heat is the constraint here.
 	add_child(_camera)
@@ -979,14 +1224,16 @@ func _read_capture_args() -> void:
 			_capture_path = arg.trim_prefix("--capture=")
 		elif arg.begins_with("--after="):
 			_capture_after = float(arg.trim_prefix("--after="))
-		elif arg.begins_with("--island="):
-			_island = clampi(int(arg.trim_prefix("--island=")), 0, Biome.COUNT - 1)
+		elif arg.begins_with("--island=") or arg.begins_with("--region="):
+			# `--island` is what every script and note in the repo says. The
+			# places are regions now; the flag answers to both.
+			_island = clampi(int(arg.get_slice("=", 1)), 0, Biome.COUNT - 1)
 		elif arg.begins_with("--screen="):
 			_capture_screen = arg.trim_prefix("--screen=")
 		elif arg.begins_with("--yaw="):
 			_arg_yaw = deg_to_rad(float(arg.trim_prefix("--yaw=")))
 		elif arg.begins_with("--zoom="):
-			_arg_zoom = clampf(float(arg.trim_prefix("--zoom=")), ZOOM_MIN, ZOOM_MAX)
+			_arg_zoom = maxf(float(arg.trim_prefix("--zoom=")), ZOOM_MIN)
 		elif arg.begins_with("--pitch="):
 			# In the same units the drag produces, so a capture can be taken
 			# from an angle a thumb could actually have reached. Without this

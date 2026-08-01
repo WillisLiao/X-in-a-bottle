@@ -5,8 +5,14 @@ extends RefCounted
 ##
 ## A house takes a week. Nobody focuses for a week without stopping, so the
 ## build has to outlive the session or the whole premise collapses into a
-## fifteen-minute toy. Five islands, five independent builds, and closing the app
-## costs nothing.
+## fifteen-minute toy. Closing the app costs nothing.
+##
+## The records are still one per region, and that is not a leftover from the
+## five islands - a region has its own site, its own queue and its own hours,
+## and it always will. What changed on 2026-08-02 is that the regions are places
+## in one world rather than five parallel saves, so there is now a world-level
+## record on top of them: which regions have been settled. See `Region` and
+## `handoffs/DESIGN-one-world.md`.
 ##
 ## What is deliberately *not* saved is any notion of time passing while you were
 ## away. There is no offline progress and there will not be. The only thing that
@@ -98,11 +104,52 @@ static func write(island: int, state: Dictionary) -> void:
 
 
 static func last_island() -> int:
-	return int(_open().get_value("app", "island", 0))
+	return int(_open().get_value("app", "island", Region.HOME))
 
 
 static func set_last_island(island: int) -> void:
 	_open().set_value("app", "island", island)
+
+
+# --- the world ---------------------------------------------------------------
+
+## Which regions somebody lives in.
+##
+## The only genuinely new state the one-world pivot adds. Everything else it
+## needs was already being kept per island; this is the one fact that belongs to
+## the world rather than to a place in it.
+##
+## Stored as the list rather than as a count, because the order of settlement is
+## the shape of a particular world - west first is a different game from east
+## first - and a count would throw that away for no saving worth having.
+static func settled_regions() -> PackedInt32Array:
+	var cfg := _open()
+	if cfg.has_section_key("world", "settled"):
+		return PackedInt32Array(cfg.get_value("world", "settled"))
+
+	# No world record yet, which means either a fresh install or a save from
+	# before the pivot. A save from before it has up to five separate builds in
+	# it, and every one of them is somewhere a person spent hours: those are
+	# settled regions now, and taking them away because the data model changed
+	# under them would be the single worst thing this file could do.
+	var found := PackedInt32Array([Region.HOME])
+	for i in Biome.COUNT:
+		if i != Region.HOME and started(i):
+			found.append(i)
+	cfg.set_value("world", "settled", found)
+	return found
+
+
+static func settled(region: int) -> bool:
+	return settled_regions().has(region)
+
+
+static func settle(region: int) -> void:
+	if settled(region):
+		return
+	var found := settled_regions()
+	found.append(region)
+	_open().set_value("world", "settled", found)
 
 
 ## Whether the start screen has ever been got past. Used only to decide whether
@@ -115,7 +162,14 @@ static func mark_seen() -> void:
 	_open().set_value("app", "seen", true)
 
 
-# --- what the picker shows ---------------------------------------------------
+# --- how far along a region is -----------------------------------------------
+#
+# Nothing reads these at the moment. They were the picker's language and the
+# picker is gone; they are kept rather than deleted because they are not code so
+# much as three product decisions written down as functions - no percentage, the
+# language of a building site, and time spent rather than time remaining - and
+# the map is going to want to say what is happening in a settled region before
+# very long. If it turns out not to, delete them then.
 
 ## How far along an island is, zero to one. Shown as a ring, never as a
 ## percentage: a number invites optimisation and the point of this app is that

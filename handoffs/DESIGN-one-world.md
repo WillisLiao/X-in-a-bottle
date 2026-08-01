@@ -2,7 +2,15 @@
 
 Decided 2026-08-02, by the owner, in conversation.
 This supersedes the five-parallel-islands structure.
-It is a design direction, not a spec: nothing in it has been built yet.
+It is a design direction rather than a spec.
+
+**Built as of the second session of 2026-08-02:** the first item below, *zoom
+out is the map*, along with the geography it needed - `region.gd`, `land.gd`,
+`country.gd`, and the deletion of the picker.
+Everything else here is still a direction.
+One thing was decided in the building and is recorded at length in `region.gd`:
+there is **no sea** between the regions, and whether the world eventually wants
+water under it is deliberately left open rather than answered by accident.
 
 ---
 
