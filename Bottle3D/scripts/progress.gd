@@ -93,6 +93,7 @@ static func read(island: int) -> Dictionary:
 		"seeds": PackedInt32Array(cfg.get_value(k, "seeds", PackedInt32Array())),
 		"affinity": cfg.get_value(k, "affinity", {}),
 		"wear": cfg.get_value(k, "wear", ""),
+		"journey": int(cfg.get_value(k, "journey", -1)),
 	}
 
 
@@ -107,6 +108,7 @@ static func write(island: int, state: Dictionary) -> void:
 	cfg.set_value(k, "seeds", state["seeds"])
 	cfg.set_value(k, "affinity", state["affinity"])
 	cfg.set_value(k, "wear", state["wear"])
+	cfg.set_value(k, "journey", state["journey"])
 
 
 static func last_island() -> int:

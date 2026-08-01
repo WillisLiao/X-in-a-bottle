@@ -1,6 +1,11 @@
 class_name ElfWorld
 extends World
 
+## A lantern reached the far hearth and somebody lives there now. The world
+## itself cannot draw the region it just settled - that is `Country`'s - so it
+## says so and lets `main` rebuild the rest of the world around it.
+signal settled(region: int)
+
 ## Hobbitle. Hobbits in a bottle.
 ##
 ## An island, the people living on it, and one house they are trying to build
@@ -60,7 +65,12 @@ extends World
 const LAND_X := Biome.LAND_X
 const LAND_Z := Biome.LAND_Z
 
-enum Task { NONE, GATHER, CRAFT, HAUL, DELIVER, FIT, LOOK, REST, IDLE, OWN, PLAY }
+## `CARRY_FIRE` is appended rather than slotted in anywhere sensible, because
+## these values are the keys of every elf's saved `affinity` dictionary and
+## renumbering them would silently hand a week of formed specialisms to the
+## wrong jobs.
+enum Task { NONE, GATHER, CRAFT, HAUL, DELIVER, FIT, LOOK, REST, IDLE, OWN,
+	PLAY, CARRY_FIRE }
 
 ## Two bodies, two jobs. Small and quick does the fine work; big and slow does
 ## what the small ones physically cannot. Roughly nine to three at a full crew.
@@ -400,6 +410,37 @@ var _pace: Dictionary = {}
 ## land for the regions nobody is standing in - see `Land`.
 var _land: Land
 
+## The one or two necks of land running out of this region. Ground, as far as
+## anything here is concerned - see `Causeway`. Held so `_ground` can answer for
+## points out past the shoreline, which is what lets somebody walk off the edge
+## of the world they live in.
+var _necks: Array[Causeway] = []
+
+## The ground of the regions next door, and where it sits relative to this one.
+##
+## Needed because a lantern does not stop at the far end of the neck - it is
+## carried up the beach to somebody else's hearth, and for that stretch the
+## carrier is standing on a region this world does not otherwise know exists.
+## Without it they walked off the end of the causeway and sank nine metres into
+## the haze, still walking, which was very nearly funny.
+var _abroad: Array[Land] = []
+var _abroad_at: Array[Vector3] = []
+
+## The lantern.
+##
+## `_journey` is where it is being taken, or -1. `_carrier` is who is taking it,
+## or -1 while the world is waiting for somebody to put down what they are
+## holding. `_delivered` is true once the far hearth is burning and the walk
+## has turned into a walk home.
+##
+## This is the only thing in the app that one person does alone, and it costs
+## the site a pair of hands for two and a half minutes each way. That is the
+## price of a region, it is paid in attention rather than in currency, and there
+## is no number anywhere that says so.
+var _journey := -1
+var _carrier := -1
+var _delivered := false
+
 ## Where they have walked, which is the one record this app keeps of what the
 ## user actually did with their attention. See `Wear`.
 var _wear := Wear.new()
@@ -447,6 +488,11 @@ func _init(island := 0) -> void:
 	_b = Biome.of(island)
 	_land = Land.new(island)
 	_pace = _b["pace"]
+
+	for other in Region.NEIGHBOURS.get(island, []):
+		_necks.append(Causeway.new(island, int(other), island))
+		_abroad.append(Land.new(int(other)))
+		_abroad_at.append(Region.offset(int(other), island))
 
 	title = Biome.name_of(island)
 	capacity = 12
@@ -539,11 +585,26 @@ func _spot(name: String) -> Vector3:
 ## cannot drift apart. It lives in `Land` now, because the four regions nobody is
 ## standing in have to be drawn from the same ground the one you are in is.
 func _ground(p: Vector3) -> float:
-	return _land.height(p)
+	var h := _land.height(p)
+	# Almost every question asked of this function is about somewhere in the
+	# middle of the region, and the necks are all out past the shoreline, so the
+	# common case gets out before touching them. This matters: `_ground` is
+	# called four times per line-of-sight check, and there are a lot of those.
+	if absf(p.x) < LAND_X * 0.90 and absf(p.z) < LAND_Z * 0.90:
+		return h
+	for neck in _necks:
+		h = maxf(h, neck.height(p))
+	for i in _abroad.size():
+		h = maxf(h, _abroad[i].height(p - _abroad_at[i]))
+	return h
 
 
+## Careful: this has to go through `_ground` rather than straight to `Land`.
+## Every foot, shadow and anchor is placed with it, and `Land` knows nothing
+## about the necks - so delegating to `Land.on` puts a hobbit crossing to the
+## next region twenty feet under the causeway they are walking on.
 func _on(p: Vector3) -> Vector3:
-	return _land.on(p)
+	return Vector3(p.x, _ground(p), p.z)
 
 
 ## Whether one thing can be seen from another. The whole of an elf's ignorance
@@ -648,6 +709,9 @@ func _tick(delta: float, _population: int, disturbed: bool) -> void:
 	for i in range(_events.size() - 1, -1, -1):
 		if _time - _events[i]["when"] > 2.2:
 			_events.remove_at(i)
+
+	if _journey >= 0 and _carrier < 0:
+		_appoint_carrier()
 
 	for e in _elves:
 		_tick_elf(e, delta)
@@ -886,6 +950,13 @@ func _decide(e: Elf) -> void:
 	e.from_pile = null
 	e.to_pile = null
 	e.want_kind = -1
+
+	# Somebody is halfway to the next region with a light in their hand. Asked
+	# before anything else, including the break: a lantern is not a thing you
+	# put down in the middle of a neck of land because the hour turned.
+	if _journey >= 0 and e.id == _carrier:
+		_decide_fire(e)
+		return
 
 	# The hour is up. What they do with the quarter hour is their own business,
 	# which is the entire point of a break.
@@ -1151,6 +1222,159 @@ func _decide(e: Elf) -> void:
 ## spent on. So it goes through the same traits: the tired sleep, the playful get
 ## a game going, the solitary walk off to the place that is theirs, and somebody
 ## is always at the water.
+# --- carrying fire -------------------------------------------------------------
+#
+# Expansion, and the only thing in this world that one person does alone.
+#
+# A region opens when somebody walks a lantern to it. Not a button, not a
+# purchase, not a threshold crossed on a counter - one hobbit, thirty metres of
+# open ground, and about eighty seconds of somebody's whole attention. The site
+# is one pair of hands short for the whole of it, and then short again for the
+# walk home, and nowhere does the app say so in a number.
+#
+# It is also the rule at its sharpest. The carrier stops dead when the phone
+# moves and stands there holding the light until it is put down again. Every
+# other job on the island is somewhere in a cycle that a disturbance merely
+# delays; this one is a single unbroken errand you have to sit through, and it
+# is the one moment where the whole premise is unmistakable.
+
+## The distance from the far hearth at which the fire catches. Generous, because
+## the last half metre of a ninety second walk is not the interesting part.
+const FIRE_REACH := 0.9
+
+
+## Start one, if there is anybody free to go. Returns whether the world took the
+## request - a false here means every hand is full and it is worth asking again.
+func send_fire(to_region: int) -> bool:
+	if _journey >= 0:
+		return false
+	_journey = to_region
+	_delivered = false
+	_carrier = -1
+	_appoint_carrier()
+	_dirty = true
+	return true
+
+
+func journey() -> int:
+	return _journey
+
+
+## Who goes. Whoever is nearest the hearth with nothing in their hands, because
+## somebody carrying a beam has to put it somewhere first and taking it off them
+## would be undoing work.
+##
+## If everybody is loaded the journey simply waits, and is tried again every
+## tick. On a crew of twelve that is never more than a few seconds.
+func _appoint_carrier() -> void:
+	var best: Elf = null
+	var nearest := 1e9
+	for e in _elves:
+		if e.carrying != null or e.startle_left > 0.0:
+			continue
+		var d := _gap(e.at, _spot("hearth"))
+		if d < nearest:
+			nearest = d
+			best = e
+	if best == null:
+		return
+	_carrier = best.id
+	_finish(best)
+
+
+## Where the light is going next: out to the far hearth, or back home once it
+## has been left there.
+func _decide_fire(e: Elf) -> void:
+	e.task = Task.CARRY_FIRE
+	e.has_waypoint = false
+	e.face_at = Vector3.ZERO
+
+	if _delivered:
+		_drop_tool(e)
+	elif e.tool_kind != "lantern":
+		_take_tool(e, "lantern")
+	e.target = _neck_route(e, not _delivered)
+
+
+## The next place to walk to, going out or coming back.
+##
+## Never straight at the far hearth. A straight line from one hearth to the
+## other leaves the causeway at both ends and walks a hobbit out over open air,
+## which is exactly what the walk home did the first time it was tried - the
+## carrier set off from the new fire on a perfect diagonal and sank three metres
+## into the haze on the way.
+##
+## So the route is walked in tenths along the spine. That follows the bow
+## instead of cutting the corner off it, and it means the neck can be reshaped
+## without anything here needing to know.
+func _neck_route(e: Elf, outward: bool) -> Vector3:
+	var neck := _neck_to(_journey)
+	if neck == null:
+		return _spot("hearth")
+
+	var here := neck.along(e.at)
+	var mid := neck.spine(here)
+	var off := Vector2(e.at.x - mid.x, e.at.z - mid.z).length()
+
+	# Standing off the neck somewhere. Tested by distance from the spine rather
+	# than by comparing heights: the first stretch of a neck is buried in the
+	# region it leaves, so down there the land is legitimately higher than the
+	# causeway and a height test says "not on it" forever. That deadlocked the
+	# first carrier a metre from the shore, walking on the spot.
+	#
+	# Checked before anything else, because an elf on the far side of a region
+	# projects onto a point halfway along the neck, and walking straight at that
+	# means stepping off the shore into nothing.
+	if off > neck.half_width(here) * 1.6:
+		if outward:
+			return neck.spine(0.14)
+		# Coming home. Either still up on the far region, in which case get back
+		# on the neck at that end, or already back on this one.
+		return neck.spine(0.86) if here > 0.5 else _spot("hearth")
+
+	if outward:
+		if here < 0.97:
+			return neck.spine(minf(1.0, here + 0.10))
+		return Region.offset(_journey, _island) + _spot("hearth")
+
+	if here > 0.03:
+		return neck.spine(maxf(0.0, here - 0.10))
+	return _spot("hearth")
+
+
+func _neck_to(region: int) -> Causeway:
+	for neck in _necks:
+		if neck.b == region:
+			return neck
+	return null
+
+
+## Arrived. The fire catches, the region is somewhere people live, and the
+## carrier turns round.
+func _lay_fire(e: Elf) -> void:
+	_delivered = true
+	_drop_tool(e)
+	Progress.settle(_journey)
+	Progress.flush()
+	settled.emit(_journey)
+	_dirty = true
+	# Standing looking at what they have just started, for a moment, before the
+	# long walk back. It is the only thing anybody in this world does that is
+	# not either work or rest.
+	e.pause = 3.0
+	e.face_at = Region.offset(_journey, _island) + _spot("hearth")
+	e.look_at = e.face_at
+	e.look_left = 3.0
+
+
+func _home_from_fire(e: Elf) -> void:
+	_journey = -1
+	_carrier = -1
+	_delivered = false
+	_dirty = true
+	_finish(e)
+
+
 func _decide_rest(e: Elf) -> void:
 	e.station = null
 	e.work = null
@@ -1427,6 +1651,15 @@ func _tick_elf(e: Elf, delta: float) -> void:
 		elif e.task == Task.LOOK or e.task == Task.OWN:
 			target *= 0.85
 
+		# The rule, at the one moment it is unmistakable. Everybody else is
+		# somewhere in a cycle a disturbance merely delays; the carrier is
+		# eighty seconds into a single errand across open ground, and they stop
+		# where they stand and wait, holding the light, until the phone is put
+		# back down. They also do not walk through the break - a quarter of an
+		# hour off is a quarter of an hour off wherever you happen to be.
+		if e.task == Task.CARRY_FIRE and (_rattled > 0.35 or resting()):
+			target = 0.0
+
 		# Accelerate from rest and decelerate into arrival, both over about
 		# half a second.
 		e.walk_speed = lerpf(e.walk_speed, target, clampf(delta / 0.5, 0.0, 1.0))
@@ -1685,7 +1918,8 @@ func _act(e: Elf, delta: float) -> void:
 
 	# Downed tools. Work in progress is held rather than lost, so putting the
 	# phone down for a second does not cost the last four minutes of a chop.
-	if _rattled > 0.35 and e.task != Task.REST and e.task != Task.IDLE:
+	if _rattled > 0.35 and e.task != Task.REST and e.task != Task.IDLE \
+			and e.task != Task.CARRY_FIRE:
 		return
 
 	match e.task:
@@ -1703,6 +1937,19 @@ func _act(e: Elf, delta: float) -> void:
 			e.pause -= delta
 			if e.pause <= 0.0:
 				_finish(e)
+
+		Task.CARRY_FIRE:
+			# Arrived somewhere: at the next step along the neck, at the far
+			# hearth, or home again.
+			if e.pause > 0.0:
+				e.pause -= delta
+			elif not _delivered and _gap(e.at,
+					Region.offset(_journey, _island) + _spot("hearth")) < FIRE_REACH:
+				_lay_fire(e)
+			elif _delivered and _gap(e.at, _spot("hearth")) < FIRE_REACH:
+				_home_from_fire(e)
+			else:
+				_decide_fire(e)
 
 		Task.LOOK:
 			# Standing and taking it in. _observe has already corrected whatever
@@ -2091,6 +2338,15 @@ func _restore() -> void:
 	_residents = state["seeds"]
 	_resident_affinity = state["affinity"]
 
+	# A lantern that was in the middle of being carried when the app was closed.
+	# The walk starts again from the hearth rather than resuming where it was,
+	# because nobody's position is saved and inventing one would be worse than
+	# repeating a minute. Nothing is lost that was finished; the region simply
+	# is not settled yet, which is exactly what was true when you put it down.
+	_journey = int(state["journey"])
+	_delivered = false
+	_carrier = -1
+
 	# Everything finished on a previous day goes up instantly and in silence.
 	# Opening an island on the fourth morning should show you the fourth morning,
 	# not a time-lapse of the first three.
@@ -2142,7 +2398,7 @@ func _state() -> Dictionary:
 		"done": done, "stock": stock, "focus": _focus,
 		"cycle": _cycle, "rest": _rest_left,
 		"seeds": _residents, "affinity": _resident_affinity,
-		"wear": _wear.to_text(),
+		"wear": _wear.to_text(), "journey": _journey,
 	}
 
 
@@ -2188,6 +2444,10 @@ func fraction() -> float:
 ## is a body moving on its own, which reads badly however the numbers are tuned.
 ## The fix is the prop, not the curve.
 func _take_tool(e: Elf, kind: String) -> void:
+	if kind == "lantern":
+		_take_lantern(e)
+		return
+
 	var tool := Node3D.new()
 	var iron: Material = _mats["iron"]
 	var handle: Material = _mats["timber"]
@@ -2292,6 +2552,60 @@ func _bit(mesh: Mesh, size: Vector3, at: Vector3, rot: Vector3,
 	node.material_override = mat
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return node
+
+
+## The lantern, which is not really a tool - it is the only thing anybody in
+## this world carries that is not either a material or an implement.
+##
+## Deliberately the smallest object in the app and by a distance the brightest.
+## Across thirty metres of unlit ground at map zoom, one moving point of warm
+## light is the entire read: you do not see a hobbit at that distance, you see
+## the light going somewhere, and that is a better picture of what is happening
+## than the hobbit would be.
+##
+## It hangs below the grip rather than sitting in it, because a lantern swings
+## from a hand and the existing arm swing then does all the work of making it
+## look carried.
+func _take_lantern(e: Elf) -> void:
+	var lantern := Node3D.new()
+
+	var bail := MeshInstance3D.new()
+	var wire := TorusMesh.new()
+	wire.inner_radius = 0.020
+	wire.outer_radius = 0.026
+	wire.rings = 8
+	wire.ring_segments = 5
+	bail.mesh = wire
+	bail.position = Vector3(0, -0.055, 0)
+	bail.rotation = Vector3(PI * 0.5, 0, 0)
+	bail.material_override = _mats["iron"]
+	bail.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	lantern.add_child(bail)
+
+	# The flame, well past white so it clips through the glow threshold in
+	# `main._build_environment` and blooms rather than sitting there as a pale
+	# sticker. Same trick as the sun.
+	var glass := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(0.048, 0.062, 0.048)
+	glass.mesh = box
+	glass.position = Vector3(0, -0.105, 0)
+	glass.material_override = World.glow_material(Color(2.4, 1.5, 0.62), 0.95)
+	glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	lantern.add_child(glass)
+
+	var lamp := OmniLight3D.new()
+	lamp.light_color = Color("FFB05A")
+	lamp.light_energy = 2.6
+	lamp.omni_range = 3.4
+	lamp.shadow_enabled = false
+	lamp.position = Vector3(0, -0.105, 0)
+	lantern.add_child(lamp)
+
+	e.grip.add_child(lantern)
+	e.tool = lantern
+	e.tool_kind = "lantern"
+	e.motion = "carry"
 
 
 func _drop_tool(e: Elf) -> void:

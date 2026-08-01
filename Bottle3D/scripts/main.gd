@@ -246,6 +246,7 @@ var _capture_path: String = ""
 var _capture_after: float = 0.0
 var _capture_screen := "world"
 var _force_rest := -1.0
+var _arg_fire := -1
 var _arg_yaw := NAN
 var _arg_zoom := NAN
 var _arg_pitch := NAN
@@ -293,6 +294,9 @@ func _ready() -> void:
 		_zoom_to = -1.0
 	if not is_nan(_arg_pitch):
 		_pitch = _arg_pitch
+
+	if _arg_fire >= 0 and _world != null:
+		_world.send_fire(_arg_fire)
 
 	# The map blend is smoothed toward its target, and a capture taken twenty
 	# seconds in has plenty of time to get there - but one taken at zero would
@@ -349,17 +353,10 @@ func _enter(region: int) -> void:
 	_island = clampi(region, 0, Biome.COUNT - 1)
 	Progress.set_last_island(_island)
 
-	# Placeholder for the lantern.
-	#
-	# Settling a region is meant to be somebody walking a light to it over about
-	# a minute, and then a second hearth - see `DESIGN-one-world.md`. None of
-	# that is built. Until it is, arriving settles the place, which is the
-	# smallest honest stand-in: the fact gets recorded, the ground starts
-	# wearing tracks, and the only thing missing is the walk.
-	Progress.settle(_island)
 	Progress.flush()
 
 	_world = ElfWorld.new(_island)
+	_world.settled.connect(_on_settled)
 	add_child(_world)
 	_world.build()
 
@@ -387,6 +384,15 @@ func _enter(region: int) -> void:
 
 	_menu.hide_all()
 	_drift = 6.0
+
+
+## A lantern got where it was going. The world that sent it cannot draw the
+## region it just settled - that is `Country`'s side of the fence - so the whole
+## of the rest of the world is rebuilt around it, once, and a fire appears on a
+## place that had none.
+func _on_settled(_region: int) -> void:
+	if _country:
+		_country.show_from(_island, true)
 
 
 func _leave() -> void:
@@ -576,8 +582,29 @@ func _tap_region(at: Vector2) -> bool:
 		_zoom_to = 1.0
 		return true
 
-	# No save here: `_enter` leaves the region it is in, and leaving persists.
-	_enter(best)
+	# Somewhere people already live. No save here: `_enter` leaves the region it
+	# is in, and leaving persists.
+	if Progress.settled(best):
+		_enter(best)
+		return true
+
+	# Somewhere nobody lives yet, joined to here by a neck of land. Tapping it
+	# does not take you there - it sends somebody, and then you watch them go.
+	#
+	# This is the one place the app asks for a stretch of held attention with
+	# nothing else happening in it, and it is deliberate. A region costs about
+	# eighty seconds of watching one person walk. There is no way to buy it, no
+	# way to skip it and no way to do it while the phone is in your pocket.
+	if _world != null and Region.NEIGHBOURS.get(_island, []).has(best):
+		if _world.journey() < 0:
+			_world.send_fire(best)
+		# Drawn back far enough to hold both regions in frame, not so far that
+		# the person doing the walking is a speck.
+		_zoom_to = lerpf(MAP_FROM, ZOOM_MAX, 0.45)
+		return true
+
+	# Not joined to here. Nothing happens, and nothing explains why - the necks
+	# of land are on screen and the chain is its own explanation.
 	return true
 
 
@@ -1241,6 +1268,10 @@ func _read_capture_args() -> void:
 			# which is most of why nobody noticed it was never on screen.
 			_arg_pitch = clampf(deg_to_rad(float(arg.trim_prefix("--pitch="))),
 				PITCH_MIN, 0.62)
+		elif arg.begins_with("--fire="):
+			# Sends the lantern to a region at launch, so eighty seconds of
+			# somebody walking can be looked at without tapping anything.
+			_arg_fire = clampi(int(arg.trim_prefix("--fire=")), 0, Biome.COUNT - 1)
 		elif arg.begins_with("--rest="):
 			# Drops straight into a break, a given fraction of the way through
 			# it, so fifteen minutes of it can be looked at without waiting an

@@ -62,60 +62,129 @@ const BOW := 2.6
 ## How far each end is buried in the region it leaves.
 const BED := 1.4
 
+## How much the neck crowns across its width, as a fraction of its half-width.
+## Ground that is dead flat across reads as a deck.
+const CROWN := 0.16
+
 ## Along and across. Along is generous because the thing is thirty units long
 ## and its silhouette against the haze is most of what is seen of it.
 const SEGMENTS := 44
 const RIBS := 7
 
 
+## ## It is ground, not scenery, and that is the whole architecture
+##
+## This started as a mesh-building function and became an object the moment the
+## lantern needed somewhere to be carried across.
+##
+## The alternative was a separate walker: a figure that is not an `Elf`, living
+## outside `ElfWorld`, with its own animation. That would have meant either
+## duplicating two hundred lines of gait, gaze, mood and stride, or a sliding
+## mannequin - and the one thing the whole app is built to protect is that these
+## read as somebody rather than as a token.
+##
+## So instead the neck answers `height` like any other piece of land, and
+## `ElfWorld._ground` consults it. An elf can then simply walk onto it. The
+## carrier is an ordinary resident with an unusual errand, and every bit of the
+## body work applies to them unchanged - they hesitate, they look about, they
+## slow going uphill, and they stop dead when the phone moves.
+
+var a := 0
+var b := 0
+var start := Vector3.ZERO
+var finish := Vector3.ZERO
+
+var _run := Vector3.ZERO
+var _along := Vector3.ZERO
+var _side := Vector3.ZERO
+var _span := 1.0
+var _bow := 0.0
+
+
 ## The neck between two regions, in the coordinates everything else is using -
 ## which is to say offset for whichever region is currently being lived in.
-static func between(a: int, b: int, active: int) -> MeshInstance3D:
-	var land_a := Land.new(a)
-	var land_b := Land.new(b)
+func _init(from_region: int, to_region: int, active: int) -> void:
+	a = from_region
+	b = to_region
+
 	var from := Region.offset(a, active)
 	var to := Region.offset(b, active)
-
 	var toward := (to - from).normalized()
+
 	# Each end pulled back into the land it leaves, so the neck beds into the
 	# shore instead of butting up against it and leaving a seam.
-	var start := from + _shore(land_a, toward) - toward * BED
-	var end := to + _shore(land_b, -toward) + toward * BED
+	start = from + _shore(Land.new(a), toward) - toward * BED
+	finish = to + _shore(Land.new(b), -toward) + toward * BED
 
-	var run := end - start
-	var along := run.normalized()
-	var side := Vector3(-along.z, 0.0, along.x)
+	_run = finish - start
+	_span = maxf(_run.length(), 0.001)
+	_along = _run / _span
+	_side = Vector3(-_along.z, 0.0, _along.x)
 	# Bowed one way or the other depending on the pair, so a chain of them
 	# wanders rather than zigzagging in step.
-	var bow := BOW * (1.0 if (a + b) % 2 == 0 else -1.0)
+	_bow = BOW * (1.0 if (a + b) % 2 == 0 else -1.0)
 
+
+## The middle of the neck, a fraction of the way along it. What the carrier
+## actually walks, and what the mesh is built around.
+func spine(t: float) -> Vector3:
+	var arch := sin(t * PI)
+	var p := start + _run * t + _side * (_bow * arch)
+	# Sagged in the middle, and never dead level along its length. A neck with
+	# one smooth curve in it reads as something that was extruded.
+	p.y = lerpf(start.y, finish.y, t) - SAG * arch \
+		+ arch * (0.16 * sin(t * 7.3 + float(a) * 2.0) + 0.10 * sin(t * 13.1))
+	return p
+
+
+func half_width(t: float) -> float:
+	return lerpf(WIDE, NARROW, sin(t * PI))
+
+
+## How far along a point is. Projected onto the straight line rather than onto
+## the bowed spine, which is close enough because the bow is perpendicular to
+## the run and so barely moves the projection.
+func along(p: Vector3) -> float:
+	return clampf((p - start).dot(_along) / _span, 0.0, 1.0)
+
+
+## The height of the neck under a point, falling away at the sides exactly as
+## the shoreline does. Answers a long way below everything for points nowhere
+## near it, so `ElfWorld._ground` can simply take whichever is higher.
+func height(p: Vector3) -> float:
+	var t := along(p)
+	var mid := spine(t)
+	var half := half_width(t)
+	var off := Vector2(p.x - mid.x, p.z - mid.z).length() / half
+	if off > 4.0:
+		return -100.0
+	if off <= 1.0:
+		return mid.y + CROWN * half * (1.0 - off * off)
+	return mid.y - (off - 1.0) * half * 3.4
+
+
+func mesh() -> MeshInstance3D:
 	var shore_a: Color = Biome.of(a)["shore"]
 	var shore_b: Color = Biome.of(b)["shore"]
 	var earth_a: Color = Biome.of(a)["earth"]
 	var earth_b: Color = Biome.of(b)["earth"]
 
+	# Built off exactly the same `spine` and `height` an elf's feet read, rather
+	# than off a second copy of the shape. A neck that is drawn one way and
+	# walked another is a bug waiting for somebody to notice a hobbit hovering.
 	var grid: Array[PackedVector3Array] = []
 	for i in SEGMENTS + 1:
 		var t := float(i) / float(SEGMENTS)
-		var arch := sin(t * PI)
-
-		var spine := start + run * t + side * (bow * arch)
-		# Sagged in the middle, and never dead level along its length. A neck
-		# with a single smooth curve in it reads as something that was extruded.
-		spine.y = lerpf(start.y, end.y, t) - SAG * arch \
-			+ arch * (0.16 * sin(t * 7.3 + float(a) * 2.0) + 0.10 * sin(t * 13.1))
-		var half := lerpf(WIDE, NARROW, arch)
+		var mid := spine(t)
+		var half := half_width(t)
 
 		var rib := PackedVector3Array()
 		for j in RIBS:
 			# Carried a quarter past the edge on each side, which is where the
 			# flank falls away - the same trick the island shoreline uses.
 			var u := lerpf(-1.25, 1.25, float(j) / float(RIBS - 1))
-			var inside := clampf(absf(u), 0.0, 1.0)
-			var p := spine + side * (u * half)
-			# Crowned across, then dropped off the edge.
-			p.y = spine.y + 0.16 * half * (1.0 - inside * inside) \
-				- maxf(0.0, absf(u) - 1.0) * 3.4
+			var p := mid + _side * (u * half)
+			p.y = height(p)
 			rib.append(p)
 		grid.append(rib)
 
@@ -160,7 +229,7 @@ static func between(a: int, b: int, active: int) -> MeshInstance3D:
 ## Marched rather than solved, because the coastline is a wobble function of the
 ## bearing and the height field has relief on top of it, and forty cheap samples
 ## once per region pair is not worth an inverse for.
-static func _shore(land: Land, toward: Vector3) -> Vector3:
+func _shore(land: Land, toward: Vector3) -> Vector3:
 	var out := Vector3.ZERO
 	for i in 48:
 		var p := toward * (float(i) / 47.0 * (Land.REACH_X + 1.0))

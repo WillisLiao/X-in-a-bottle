@@ -54,8 +54,8 @@ var _built := {}
 ## Redraws for a new active region. Everything is positioned relative to
 ## whichever region is being lived in - see `Region.offset` - so travelling
 ## moves the scenery rather than the camera.
-func show_from(active: int) -> void:
-	if _active == active and not _built.is_empty():
+func show_from(active: int, force := false) -> void:
+	if _active == active and not _built.is_empty() and not force:
 		return
 	_active = active
 
@@ -75,7 +75,7 @@ func show_from(active: int) -> void:
 	# land belongs between the regions rather than to either of them, so it is
 	# built here whichever end you are standing at.
 	for pair in Region.links():
-		add_child(Causeway.between(pair.x, pair.y, active))
+		add_child(Causeway.new(pair.x, pair.y, active).mesh())
 
 
 ## Where a region's centre is right now, in the coordinates everything else in
@@ -104,7 +104,43 @@ func _far_region(index: int) -> Node3D:
 	root.add_child(ground)
 
 	_scatter_canopy(root, land, wear, index)
+	if Progress.settled(index):
+		_light_hearth(root, land)
 	return root
+
+
+## A fire on a region somebody lives in.
+##
+## The single most useful mark on the map and the only one that is not the
+## ground itself. At map distance a settled region is a coloured shape with
+## tracks worn across it and one warm point on it; an empty one is a coloured
+## shape. No pin, no label, no ring, no count of anything - and it is the same
+## fire the lantern was carried there to light, which is the whole reason the
+## region is settled at all.
+func _light_hearth(root: Node3D, land: Land) -> void:
+	var at := land.on(Biome.LAYOUT["hearth"])
+
+	var ember := MeshInstance3D.new()
+	var ball := SphereMesh.new()
+	ball.radius = 0.24
+	ball.height = 0.48
+	ball.radial_segments = 7
+	ball.rings = 4
+	ember.mesh = ball
+	ember.position = at + Vector3(0, 0.16, 0)
+	# Past white, so it clips the glow threshold and blooms. From a hundred and
+	# seventy metres out the bloom is the whole of what is visible.
+	ember.material_override = World.glow_material(Color(2.6, 1.5, 0.60), 0.95)
+	ember.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(ember)
+
+	var lamp := OmniLight3D.new()
+	lamp.light_color = Color("FF9A4A")
+	lamp.light_energy = 2.8
+	lamp.omni_range = 4.0
+	lamp.shadow_enabled = false
+	lamp.position = at + Vector3(0, 0.30, 0)
+	root.add_child(lamp)
 
 
 ## The woods, as lumps.

@@ -30,16 +30,18 @@ The terrain was also reworked twice on the owner's notes and is now faceted
 with the hard edges taken off - `Land.SOFTEN` is the one dial. The background,
 which was a flat pale wall across two thirds of every frame, now graduates.
 
+Since then: the ground records where people walk (`Wear`, `ground.gdshader`),
+the regions are joined by necks of land (`Causeway`), and expansion is a hobbit
+carrying a lantern to the next region (`Task.CARRY_FIRE` in `elf_world.gd`).
+
+```
+scripts/wear.gd      where they have walked. One byte a patch, only ever up
+scripts/causeway.gd  the necks between regions - and they answer `height`,
+                     which is what lets an elf walk out of its own region
+```
+
 **Next, in order:**
 
-- **The lantern.** Arriving at a region settles it instantly, and that is a
-  placeholder marked as one in `main.gd`'s `_enter`. It should be a hobbit
-  walking a light across seventy-five seconds of open ground. This is the item
-  that turns the map from a menu into a world.
-- **Roads that wear in.** `DESIGN-one-world.md` calls it the most satisfying
-  single item on the list and it is currently faked: `Land.trodden` is seven
-  authored routes baked into the ground colour at build time, not a record of
-  where anybody actually walked.
 - **What a second and third site build.** Still the largest genuine unknown in
   the whole direction. `plan.gd` knows how to make one three-storey house.
 - **Nothing signposts the pinch.** The picker used to be the way to the other
@@ -52,6 +54,12 @@ which was a flat pale wall across two thirds of every frame, now graduates.
   `Control`. Section 3 of `NEXT-SESSION-hobbitle-for-real.md` has the spec and
   it still stands.
 - **The wider polish pass.** Section 5 of the same file.
+- **Only neighbours can be settled**, and there is nothing on screen saying so -
+  tapping the Dunes from the Meadow does nothing at all. The chain of necks is
+  meant to be its own explanation. Worth watching somebody try it.
+- **The carrier can be sent while the world is mid-break**, in which case they
+  stand on the causeway for the rest of the quarter hour. Correct, and quite a
+  strong image, but nobody is told why.
 
 Remaining known nits on the bodies, none of them blocking: a troll's waist
 wrap is still barely visible under the gut, and its upper arms merge into the
@@ -186,7 +194,8 @@ Faster loop, no device:
 ```
 
 `--screen` is `title`, `world` or `map`; `--island` (or `--region`) 0-4; also
-`--yaw`, `--pitch`, `--zoom` and `--rest`.
+`--yaw`, `--pitch`, `--zoom`, `--rest` and `--fire=<region>`, which sends the
+lantern at launch so the walk can be watched without tapping anything.
 
 After adding any file with a `class_name`, run `--headless --import` once or
 every script referencing it fails to parse.
