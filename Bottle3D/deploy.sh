@@ -12,7 +12,7 @@ GODOT="/Applications/Godot.app/Contents/MacOS/Godot"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="$HERE/build/ios"
 TEAM="45MSS5RXML"
-BUNDLE="com.lull.elvle"
+BUNDLE="com.lull.hobbitle"
 
 DEVICE="${1:-}"
 if [[ -z "$DEVICE" ]]; then
@@ -34,11 +34,11 @@ fi
 echo "==> Exporting Xcode project"
 rm -rf "$OUT"
 mkdir -p "$OUT"
-"$GODOT" --headless --path "$HERE" --export-debug "iOS" "$OUT/Elvle.xcodeproj" 2>&1 \
+"$GODOT" --headless --path "$HERE" --export-debug "iOS" "$OUT/Hobbitle.xcodeproj" 2>&1 \
   | grep -viE "^\[|godot engine" || true
 
 echo "==> Building"
-xcodebuild -project "$OUT/Elvle.xcodeproj" -scheme Elvle \
+xcodebuild -project "$OUT/Hobbitle.xcodeproj" -scheme Hobbitle \
   -sdk iphoneos -destination "platform=iOS,id=$DEVICE" \
   -configuration Debug -allowProvisioningUpdates \
   DEVELOPMENT_TEAM="$TEAM" PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE" \
@@ -49,7 +49,7 @@ xcodebuild -project "$OUT/Elvle.xcodeproj" -scheme Elvle \
 # installable and is not - devicectl rejects it with a bare "not a type it
 # recognizes" error. The one actually meant to be installed sits under
 # Build/Products/Debug-iphoneos/.
-APP=$(find ~/Library/Developer/Xcode/DerivedData -name "Elvle.app" \
+APP=$(find ~/Library/Developer/Xcode/DerivedData -name "Hobbitle.app" \
   -path "*/Build/Products/Debug-iphoneos/*" -not -path "*Index.noindex*" \
   -newermt "-5 minutes" 2>/dev/null | head -1)
 

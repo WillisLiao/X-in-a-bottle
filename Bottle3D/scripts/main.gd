@@ -1,6 +1,6 @@
 extends Node3D
 
-## Elvle.
+## Hobbitle.
 ##
 ## The phone is the bottle, so nothing draws a vessel. Five islands, each with
 ## one house on it that takes about a week of held stillness to finish, and one
@@ -43,6 +43,14 @@ const TARGET_FPS := 30
 ## lorry, somebody walking past.
 const ORBIT_RATE := 0.0022
 const PITCH_RATE := 0.0016
+
+## How far down the drag can push the camera's angle before it stops orbiting
+## and starts looking up instead. See `_move_camera`.
+const ORBIT_FLOOR := 0.06
+
+## And how far past that it can keep going. A shade under ninety degrees of
+## total travel, which is one unhurried drag up the screen.
+const PITCH_MIN := -1.62
 const ZOOM_MIN := 0.42
 const ZOOM_MAX := 1.65
 
@@ -54,6 +62,41 @@ var _fill: DirectionalLight3D
 var _moon: DirectionalLight3D
 var _env: Environment
 var _sky_mat: ProceduralSkyMaterial
+
+## The two things in the sky you can actually point at. Drawn, not inferred -
+## see `_build_bodies`.
+var _sun_body: MeshInstance3D
+var _moon_body: MeshInstance3D
+
+## Zero in the working hour, one in the middle of a break. Everything about the
+## sky - its colour, which body is up, how warm the low sun is - is driven off
+## this one smoothed number rather than off `resting()` directly, so a break
+## arrives as a sunset rather than as a cut.
+var _night := 0.0
+
+## The island's designed day sky, held so the night blend has something to
+## interpolate away from every frame.
+var _sky_day_top := Color("3E76C4")
+var _sky_day_horizon := Color("E3D2AE")
+var _sky_night_top := Color("10162E")
+var _sky_night_horizon := Color("1E2740")
+
+## Where the sun and moon are, held between frames rather than recomputed from
+## scratch, so each can be frozen while it is invisible - see `_rest_light`.
+var _sun_elev := 32.0
+var _sun_azim := 0.0
+var _moon_elev := 30.0
+var _moon_azim := 0.0
+
+## The last `_night` the sky material was written at. Writing a procedural sky's
+## colours re-renders its radiance map, which is not something to do sixty times
+## a second on a phone that has to stay cool for twenty-five minutes - and for
+## all but a few seconds an hour this value does not move at all.
+var _sky_written := -1.0
+
+## What the lower hemisphere settles into, far below the horizon. The island's
+## own haze colour, so distance and fog agree.
+var _haze_floor := Color("2A2A44")
 var _key_energy := 1.0
 var _fill_energy := 1.0
 var _ambient_energy := 1.0
@@ -115,6 +158,7 @@ var _capture_screen := "world"
 var _force_rest := -1.0
 var _arg_yaw := NAN
 var _arg_zoom := NAN
+var _arg_pitch := NAN
 var _capturing := false
 var _elapsed: float = 0.0
 
@@ -126,6 +170,7 @@ func _ready() -> void:
 	_build_environment()
 	_build_camera()
 	_build_lights()
+	_build_bodies()
 	_build_finish()
 	_build_sky()
 	_build_back()
@@ -153,6 +198,8 @@ func _ready() -> void:
 		_yaw = _arg_yaw
 	if not is_nan(_arg_zoom):
 		_zoom = _arg_zoom
+	if not is_nan(_arg_pitch):
+		_pitch = _arg_pitch
 
 
 func _process(delta: float) -> void:
@@ -304,15 +351,26 @@ func _pinch(span: float) -> void:
 	_zoom = clampf(_pinch_zoom * (_pinch_from / span), ZOOM_MIN, ZOOM_MAX)
 
 
-## Turning the island, and leaning over it. The pitch is clamped well short of
-## overhead: from directly above these stop being people and become hats.
+## Turning the island, and leaning over it.
+##
+## The top of the range is clamped well short of overhead: from directly above
+## these stop being people and become hats.
+##
+## The bottom used to stop at -0.28, which sounds like a detail and was not.
+## The island is framed from thirty-six degrees up through a thirty-four degree
+## lens, so the horizon sits nineteen degrees above the top of the frame, and
+## -0.28 was not enough to pull it down into view - which meant that at no
+## angle the user could reach was any part of the actual sky on screen, and
+## the sun and moon were unreachable rather than missing. Leaning back far
+## enough to see the weather is now allowed, and is the only way to find
+## either of them.
 func _orbit(by: Vector2) -> void:
 	if _menu.showing():
 		return
 	if by.length() > 2.0:
 		_dragged = true
 	_yaw = wrapf(_yaw - by.x * ORBIT_RATE, -PI, PI)
-	_pitch = clampf(_pitch + by.y * PITCH_RATE, -0.28, 0.62)
+	_pitch = clampf(_pitch + by.y * PITCH_RATE, PITCH_MIN, 0.62)
 	_drift = 14.0
 
 
@@ -398,27 +456,53 @@ func _rest_light(delta: float) -> void:
 
 	var want := 0.42 if _world.resting() else 1.0
 	_dim = lerpf(_dim, want, clampf(delta * 0.55, 0.0, 1.0))
+	_night = clampf(inverse_lerp(1.0, 0.42, _dim), 0.0, 1.0)
 
 	_key.light_energy = _key_energy * _dim
 	_fill.light_energy = _fill_energy * lerpf(1.45, 1.0, _dim)
 	_env.ambient_light_energy = _ambient_energy * lerpf(0.72, 1.0, _dim)
 
-	var fraction := _world.rest_fraction()
+	# The sky itself goes over to night, which it never used to - the same blue
+	# stayed up through every break, and the lights coming down on an unchanged
+	# sky read as a cloud passing rather than as an evening.
+	if absf(_night - _sky_written) > 0.02:
+		_sky_written = _night
+		_write_sky(_sky_day_top.lerp(_sky_night_top, _night),
+			_sky_day_horizon.lerp(_sky_night_horizon, _night))
+
+	# The two bodies cross over rather than swapping. The sun is gone by the
+	# time the night is three-fifths in, the moon is not there until it is
+	# two-fifths, and in the overlap both are faint - which is what dusk is.
+	var sun_up := clampf((1.0 - _night) * 2.4, 0.0, 1.0)
+	var moon_up := clampf((_night - 0.42) * 2.4, 0.0, 1.0)
 
 	# One slow arc across the whole working hour: low as they wake, high with
 	# a gentle drift through the middle, low again as it announces the break
-	# before anybody downs tools.
-	var work_t := _world.work_fraction()
-	var sun_elevation := sin(work_t * PI)
-	var sun_azimuth := lerpf(-58.0, 58.0, work_t)
-	_key.rotation_degrees = Vector3(-18.0 - sun_elevation * 46.0, sun_azimuth, 0)
+	# before anybody downs tools. Held where it was once it has faded out, so
+	# that the reset of the hour - which throws the sun from the west back to
+	# the east in a single frame - happens while nobody can see it.
+	if sun_up > 0.0:
+		var work_t := _world.work_fraction()
+		_sun_elev = lerpf(14.0 + 40.0 * sin(work_t * PI), 2.5, _night)
+		_sun_azim = lerpf(-58.0, 58.0, work_t)
+	_key.rotation_degrees = Vector3(-_sun_elev, _sun_azim, 0)
 
-	_moon.visible = fraction >= 0.0
-	if fraction >= 0.0:
-		var moon_elevation := sin(fraction * PI)
-		var moon_azimuth := lerpf(58.0, -58.0, fraction)
-		_moon.rotation_degrees = Vector3(-16.0 - moon_elevation * 44.0, moon_azimuth, 0)
-		_moon.light_energy = lerpf(0.0, 0.55, moon_elevation)
+	# Low sun, warm sun. The disc goes over to orange as it comes down, which
+	# is the cheapest possible sunset and reads from across a room.
+	var low := 1.0 - clampf(_sun_elev / 34.0, 0.0, 1.0)
+	_place_body(_sun_body, _sun_elev, _sun_azim,
+		Color(1.35, 1.30, 1.15).lerp(Color(1.50, 0.82, 0.44), low), sun_up)
+
+	var fraction := _world.rest_fraction()
+	if moon_up > 0.0 and fraction >= 0.0:
+		_moon_elev = 8.0 + 38.0 * sin(fraction * PI)
+		_moon_azim = lerpf(58.0, -58.0, fraction)
+	_moon.visible = moon_up > 0.004
+	if _moon.visible:
+		_moon.rotation_degrees = Vector3(-_moon_elev, _moon_azim, 0)
+		_moon.light_energy = 0.55 * moon_up * sin(deg_to_rad(_moon_elev))
+	_place_body(_moon_body, _moon_elev, _moon_azim,
+		Color(1.10, 1.14, 1.25), moon_up)
 
 	var hint: float = _world.rest_hint() if fraction >= 0.0 else 0.0
 	_rest_label.modulate.a = lerpf(_rest_label.modulate.a, hint * 0.55,
@@ -517,7 +601,20 @@ func _move_camera(delta: float) -> void:
 	var away := sqrt(nominal * nominal + _world.rise * _world.rise) * _zoom
 
 	var yaw := _yaw
-	var pitch := clampf(base_pitch + _pitch, 0.10, 1.18)
+
+	# Dragging down used to walk the camera round and under the island, which
+	# is the one direction there is nothing to see in - and, because the camera
+	# always aims at the island, it never turned the view toward the sky no
+	# matter how far it went. That is why the sun and the moon were unfindable:
+	# not missing, but behind the top edge of the frame at every angle a thumb
+	# could reach.
+	#
+	# So the orbit stops just above level, and everything past that tilts the
+	# aim upward from where the camera already is. Keep dragging and the island
+	# slides off the bottom of the frame and you are looking at the weather.
+	var want := base_pitch + _pitch
+	var pitch := clampf(want, ORBIT_FLOOR, 1.18)
+	var aim_up := maxf(0.0, ORBIT_FLOOR - want)
 
 	if _has_sensors:
 		# Tilt still adds a little parallax on top of wherever the user has put
@@ -542,6 +639,8 @@ func _move_camera(delta: float) -> void:
 	_camera.position = focal + Vector3(
 		sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch)) * away
 	_camera.look_at(focal, Vector3.UP)
+	if aim_up > 0.0:
+		_camera.rotate_object_local(Vector3.RIGHT, aim_up)
 
 
 func _build_environment() -> void:
@@ -560,9 +659,13 @@ func _build_environment() -> void:
 	sky_mat.sky_curve = 0.14
 	sky_mat.ground_bottom_color = Color("463E38")
 	sky_mat.ground_horizon_color = Color("8C8FA0")
-	sky_mat.ground_curve = 0.10
-	sky_mat.sun_angle_max = 22.0
-	sky_mat.sun_curve = 0.15
+	# A slow settle rather than a hard band. The lower hemisphere is forty-odd
+	# degrees of visible frame in this app rather than a strip at the bottom,
+	# so its gradient has as much work to do as the sky's.
+	sky_mat.ground_curve = 0.32
+	# No sun from the sky material. Every directional light in the scene gets
+	# one and none of them is controllable enough to be the sun this app wants -
+	# see `_build_lights`.
 	var sky := Sky.new()
 	sky.sky_material = sky_mat
 	env.sky = sky
@@ -571,14 +674,28 @@ func _build_environment() -> void:
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	env.ambient_light_color = Color("463E5E")
 	env.ambient_light_energy = 0.80
+	# Mostly the sky, which is why brightening the sky brightens the island as
+	# well as the background. Not entirely, though: without this the per-island
+	# ambient colour that `_apply_lighting` sets is dead code, because ambient
+	# taken purely from the sky ignores it, and five islands that each chose an
+	# ambient tint would all have been getting the same one.
+	env.ambient_light_sky_contribution = 0.78
 
 	# Bloom is what turns a lit window into something worth walking toward.
 	# Threshold sits below the white point so the hot cores clip into glow.
 	env.glow_enabled = true
 	env.glow_intensity = 1.20
-	env.glow_bloom = 0.40
 	env.glow_hdr_threshold = 0.80
 	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_ADDITIVE
+
+	# `glow_bloom` is not the glow. It is a floor added underneath the
+	# threshold, so a fraction of *every* pixel gets blurred and added back
+	# over the frame whether it is a hearth or a patch of grass. At 0.40 that
+	# is a forty percent full-screen haze, which was invisible when this was
+	# glowing objects against a black void and turns a daylight scene into
+	# milk - which is what "the sky is not bright enough" actually looked
+	# like. The sky was never dark. It was washed colourless.
+	env.glow_bloom = 0.05
 
 	# Aerial perspective from cheap distance fog, not the volumetric kind. The
 	# mobile renderer has none, and it was the most expensive thing in the scene
@@ -587,7 +704,10 @@ func _build_environment() -> void:
 	env.fog_light_color = Color("2A2A44")
 	env.fog_light_energy = 0.6
 	env.fog_density = 0.016
-	env.fog_sky_affect = 0.35
+	# Aerial perspective belongs on the island, not on the sky behind it. At
+	# 0.35 a third of every sky pixel was the fog's dark blue-grey, which is a
+	# fast way to grey out a colour that was chosen carefully.
+	env.fog_sky_affect = 0.10
 
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
 	env.tonemap_white = 4.0
@@ -597,18 +717,36 @@ func _build_environment() -> void:
 	add_child(world)
 
 
-## The sun and the moon. Both are directional lights, which is what lets a
-## procedural sky draw a disc for each without any extra wiring - Godot reads
-## the direction and colour straight off the light. The sun carries the day;
-## the moon is dark except across a break, when it is the only thing moving.
+## The three lights, and the reason none of them draws itself.
+##
+## `ProceduralSkyMaterial` does put a sun in the sky for each of the first four
+## `DirectionalLight3D`s in the scene, so the previous session's assumption was
+## not wrong exactly - but it was never checked, and what it actually produces
+## is a wide soft halo rather than a disc, because the size of that halo comes
+## from the light's `light_angular_distance`, which defaults to zero. Worse,
+## every directional light gets one: the fill was quietly painting a second sun
+## into the sky from behind, at 152 degrees, which is most of why nobody could
+## find the real one.
+##
+## The property last session reached for was `light_angular_size`, which does
+## not exist; the real name is `light_angular_distance`. Setting it correctly
+## does produce a disc. It is still the wrong mechanism for this app, because
+## the disc's brightness is the light's brightness - so the moon, which is dim
+## on purpose, would be invisible on purpose too, and a sun that has to dim at
+## dusk would shrink out of the sky instead of going orange.
+##
+## So all three are `SKY_MODE_LIGHT_ONLY` and the sun and moon are drawn as
+## real objects in `_build_bodies`, where their size, colour and glow are ours.
 func _build_lights() -> void:
 	_key = DirectionalLight3D.new()
 	_key.shadow_enabled = false
+	_key.sky_mode = DirectionalLight3D.SKY_MODE_LIGHT_ONLY
 	add_child(_key)
 
 	_fill = DirectionalLight3D.new()
 	_fill.rotation_degrees = Vector3(-14, 152, 0)
 	_fill.shadow_enabled = false
+	_fill.sky_mode = DirectionalLight3D.SKY_MODE_LIGHT_ONLY
 	add_child(_fill)
 
 	_moon = DirectionalLight3D.new()
@@ -616,7 +754,126 @@ func _build_lights() -> void:
 	_moon.light_energy = 0.0
 	_moon.visible = false
 	_moon.shadow_enabled = false
+	_moon.sky_mode = DirectionalLight3D.SKY_MODE_LIGHT_ONLY
 	add_child(_moon)
+
+
+## How far out the sun and moon are hung. Inside the camera's far plane with
+## room to spare, and far enough past the island that no amount of orbiting or
+## panning gets near them.
+const BODY_DIST := 44.0
+
+## Apparent diameter, in degrees. The real sun is half of one degree, which on
+## a phone held at arm's length is four pixels and not worth drawing. These are
+## the size the sun is remembered as rather than the size it is.
+const SUN_ANGLE := 5.4
+const MOON_ANGLE := 4.6
+
+
+## The sun and the moon, as two billboards hung a long way off.
+##
+## Unshaded, so nothing lights them and they are exactly the colour they are
+## told to be; fog disabled, so forty metres of aerial perspective does not
+## grey out the one thing in the frame that is meant to be the brightest; and
+## an albedo pushed past white, so both clip through the glow threshold in
+## `_build_environment` and bloom rather than sitting flat.
+func _build_bodies() -> void:
+	_sun_body = _sky_body(_disc(Color("FFF6DC"), Color("FFC55E"), 0), SUN_ANGLE)
+	_moon_body = _sky_body(_disc(Color("F2F5FF"), Color("A8BEE4"), 3), MOON_ANGLE)
+	_moon_body.visible = false
+
+
+func _sky_body(tex: ImageTexture, angle_deg: float) -> MeshInstance3D:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.albedo_texture = tex
+	mat.disable_fog = true
+	mat.disable_receive_shadows = true
+	# Values above white. A Color is not clamped on its way to the shader, and
+	# the glow threshold is 0.80, so this is what makes a sun bloom instead of
+	# being a pale sticker.
+	mat.albedo_color = Color(1.35, 1.30, 1.15)
+
+	var quad := QuadMesh.new()
+	var span := 2.0 * BODY_DIST * tan(deg_to_rad(angle_deg) * 0.5)
+	# The texture is mostly halo, so the mesh has to be several times the
+	# diameter of the disc it contains.
+	quad.size = Vector2(span * DISC_SPAN, span * DISC_SPAN)
+
+	var node := MeshInstance3D.new()
+	node.mesh = quad
+	node.material_override = mat
+	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(node)
+	return node
+
+
+const DISC_TEX := 96
+## How much wider the whole billboard is than the solid disc at its centre.
+const DISC_SPAN := 2.6
+
+
+## A body and the air around it, drawn once into a texture.
+##
+## The disc itself is a flat core with a slightly warmer rim, which is what
+## stops it reading as a sticker; outside it the alpha falls away as a cube,
+## which is a close enough approximation of atmospheric scatter and, more to
+## the point, is what makes the thing look like it is giving off light rather
+## than being a circle.
+##
+## `blotches` puts a few darker patches on the face. Three of them turn a pale
+## disc into the moon, which is a startling amount of recognition for nine
+## lines of code.
+func _disc(core: Color, rim: Color, blotches: int) -> ImageTexture:
+	var img := Image.create(DISC_TEX, DISC_TEX, false, Image.FORMAT_RGBA8)
+	var half := float(DISC_TEX) * 0.5
+	var edge := 1.0 / DISC_SPAN            ## Where the solid disc ends.
+	var feather := 1.6 / half
+
+	var seeds: Array[Vector3] = []
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 0x5EA
+	for _i in blotches:
+		seeds.append(Vector3(rng.randf_range(-0.5, 0.5),
+			rng.randf_range(-0.5, 0.5), rng.randf_range(0.16, 0.30)))
+
+	for y in DISC_TEX:
+		for x in DISC_TEX:
+			var p := Vector2((float(x) + 0.5) / half - 1.0,
+				(float(y) + 0.5) / half - 1.0)
+			var r := p.length()
+
+			var solid := clampf((edge - r) / feather + 0.5, 0.0, 1.0)
+			var halo := pow(clampf(1.0 - (r - edge) / maxf(1.0 - edge, 1e-5),
+				0.0, 1.0), 3.0)
+
+			var c := core.lerp(rim, clampf(r / edge, 0.0, 1.0) * 0.85)
+			for s in seeds:
+				c = c.lerp(c.darkened(0.30), clampf(
+					1.0 - Vector2(p.x - s.x, p.y - s.y).length() / s.z, 0.0, 1.0))
+
+			c.a = maxf(solid, halo * 0.42)
+			img.set_pixel(x, y, c)
+
+	return ImageTexture.create_from_image(img)
+
+
+## Hangs a body along a light's direction, at the far end of it. The light
+## shines *from* the body, so the body sits opposite the way the light points.
+func _place_body(node: MeshInstance3D, elevation: float, azimuth: float,
+		tint: Color, up: float) -> void:
+	if node == null or _camera == null:
+		return
+	node.visible = up > 0.004
+	if not node.visible:
+		return
+	var basis := Basis.from_euler(Vector3(deg_to_rad(-elevation),
+		deg_to_rad(azimuth), 0.0))
+	node.position = _camera.position + basis.z * BODY_DIST
+	var mat := node.material_override as StandardMaterial3D
+	mat.albedo_color = Color(tint.r, tint.g, tint.b, up)
 
 
 ## The whole palette was tuned for glowing objects against a black void, back
@@ -640,15 +897,53 @@ func _apply_lighting(world: World) -> void:
 	_env.fog_light_color = b["fog"]
 	_env.fog_density = b["fog_density"]
 
-	# Sky colours derived from the same per-island palette everything else
-	# reads from, rather than a second set of tuned constants to keep in step
-	# with it.
-	var amb: Color = b["ambient"]
-	var key: Color = b["key"]
-	_sky_mat.sky_top_color = amb.lerp(key, 0.10).darkened(0.05)
-	_sky_mat.sky_horizon_color = Color(b["fog"]).lerp(key, 0.45)
-	_sky_mat.ground_horizon_color = Color(b["shore"]).lerp(key, 0.25)
-	_sky_mat.ground_bottom_color = Color(b["earth"]).darkened(0.35)
+	# The sky used to be derived from this same palette - a ten percent lerp
+	# from the ambient colour toward the key, then darkened again. That was the
+	# mistake behind "the sky is not bright enough": the ambient colour is a
+	# dark violet-grey chosen to sit under a scene, and no small nudge toward a
+	# cream key light turns it into a daytime sky. Deriving one number from
+	# another is only worth doing when the two actually want to agree, and a
+	# sky and a fill light do not.
+	#
+	# So each island now designs its own, and they differ in the shape of the
+	# gradient as well as its colour - the arctic's is flat and pale from top
+	# to bottom, the desert's holds deep blue until a hard band of glare at the
+	# horizon. See `Biome`.
+	_sky_day_top = b["sky_top"]
+	_sky_day_horizon = b["sky_horizon"]
+	_sky_mat.sky_curve = b["sky_curve"]
+
+	# Night is the island's own, tinted into its haze so the five nights are as
+	# different as the five days, if less so - which is true of real nights.
+	_sky_night_top = b["sky_night"]
+	_sky_night_horizon = Color(b["sky_night"]).lerp(b["fog"], 0.55).lightened(0.05)
+
+	_haze_floor = b["fog"]
+	_sky_written = -1.0
+	_write_sky(_sky_day_top, _sky_day_horizon)
+
+
+## The island floats, so the half of the background below the horizon is not
+## ground - it is distance.
+##
+## This is the part that was actually wrong, and it took a capture to see it.
+## The camera looks thirty-six degrees down through a thirty-four degree lens,
+## which puts the horizon nineteen degrees above the top of the frame: at the
+## default angle, and at every angle the user could reach, *none* of what is
+## visible behind the island is the sky half of the sky material. All of it is
+## the ground half, and the ground half was `earth` darkened by a third - mud.
+## Every hour spent tuning `sky_top_color` was spent on a colour nobody had
+## ever seen.
+##
+## So the lower hemisphere carries the horizon colour straight down, settling
+## into the island's own haze. The gradient is continuous through the horizon
+## line, which is what makes the island read as sitting in luminous air rather
+## than as a plate pasted on a backdrop.
+func _write_sky(top: Color, horizon: Color) -> void:
+	_sky_mat.sky_top_color = top
+	_sky_mat.sky_horizon_color = horizon
+	_sky_mat.ground_horizon_color = horizon
+	_sky_mat.ground_bottom_color = horizon.lerp(_haze_floor, 0.62)
 
 
 func _build_camera() -> void:
@@ -692,6 +987,13 @@ func _read_capture_args() -> void:
 			_arg_yaw = deg_to_rad(float(arg.trim_prefix("--yaw=")))
 		elif arg.begins_with("--zoom="):
 			_arg_zoom = clampf(float(arg.trim_prefix("--zoom=")), ZOOM_MIN, ZOOM_MAX)
+		elif arg.begins_with("--pitch="):
+			# In the same units the drag produces, so a capture can be taken
+			# from an angle a thumb could actually have reached. Without this
+			# there was no way to check the sky from the command line at all,
+			# which is most of why nobody noticed it was never on screen.
+			_arg_pitch = clampf(deg_to_rad(float(arg.trim_prefix("--pitch="))),
+				PITCH_MIN, 0.62)
 		elif arg.begins_with("--rest="):
 			# Drops straight into a break, a given fraction of the way through
 			# it, so fifteen minutes of it can be looked at without waiting an
@@ -707,6 +1009,17 @@ func _maybe_capture() -> void:
 	# frame while the first call is still suspended. Without the guard every
 	# subsequent frame tries to save to a path the first one has already cleared.
 	_capturing = true
+
+	# Printed with every capture, because the last session's sun was assumed to
+	# be working from a screenshot that could not have contained it either way.
+	# Now a capture says where both bodies are and whether they are drawn, so
+	# "I cannot see the sun" and "there is no sun" stay distinguishable.
+	print("[capture] sun %.0f deg up, %.0f across, drawn=%s"
+		% [_sun_elev, _sun_azim, _sun_body.visible],
+		" | moon %.0f deg up, %.0f across, drawn=%s"
+		% [_moon_elev, _moon_azim, _moon_body.visible],
+		" | night=%.2f" % _night)
+
 	await RenderingServer.frame_post_draw
 	var image := get_viewport().get_texture().get_image()
 	image.save_png(_capture_path)

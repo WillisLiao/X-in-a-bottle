@@ -1,10 +1,10 @@
-; Elvle. Elves in a bottle.
+; Hobbitle. Hobbits in a bottle.
 
 config_version=5
 
 [application]
 
-config/name="Elvle"
+config/name="Hobbitle"
 run/main_scene="res://Main.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
 config/quit_on_go_back=false

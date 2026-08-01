@@ -131,6 +131,11 @@ static func _meadow() -> Dictionary:
 		"ambient": Color("463E5E"), "ambient_energy": 0.80,
 		"fog": Color("2A2A44"), "fog_density": 0.016,
 
+		# A temperate afternoon, with the warmth already coming into the bottom
+		# of it. The gradient sits about a third of the way up.
+		"sky_top": Color("3E76C4"), "sky_horizon": Color("E3D2AE"),
+		"sky_curve": 0.18, "sky_night": Color("10162E"),
+
 		"siding": Color("A88A5E"), "tile": Color("8C4F3E"),
 		"tree": "broadleaf",
 		"cover": 1.0,
@@ -165,6 +170,12 @@ static func _arctic() -> Dictionary:
 		"fill": Color("7F93C8"), "fill_energy": 0.34,
 		"ambient": Color("35405E"), "ambient_energy": 0.86,
 		"fog": Color("36415C"), "fog_density": 0.030,
+
+		# Pale the whole way up and barely graded at all. An arctic sky has no
+		# depth in it - that flatness is the thing that reads as cold, more than
+		# the colour does, so the curve is nearly twice the meadow's.
+		"sky_top": Color("6E93C4"), "sky_horizon": Color("DCE8F4"),
+		"sky_curve": 0.34, "sky_night": Color("0E1730"),
 
 		"siding": Color("6E5B45"), "tile": Color("4A5560"),
 		"tree": "conifer",
@@ -205,6 +216,12 @@ static func _desert() -> Dictionary:
 		"ambient": Color("5A4438"), "ambient_energy": 0.74,
 		"fog": Color("4A3A32"), "fog_density": 0.012,
 
+		# The opposite shape to the arctic's: deep blue nearly all the way down
+		# and then a hard bleached band of glare at the horizon. Dry air holds
+		# its colour until the dust starts, and the low curve is what draws that.
+		"sky_top": Color("2F6FC6"), "sky_horizon": Color("EFD7A6"),
+		"sky_curve": 0.08, "sky_night": Color("140F26"),
+
 		"siding": Color("C9A87E"), "tile": Color("B06A44"),
 		"tree": "palm",
 		"cover": 0.35,
@@ -244,6 +261,11 @@ static func _coast() -> Dictionary:
 		"ambient": Color("3E5468"), "ambient_energy": 0.86,
 		"fog": Color("31485C"), "fog_density": 0.020,
 
+		# The brightest of the five, and the only one that goes green-blue.
+		# Sea haze takes the horizon almost to white.
+		"sky_top": Color("4C90DE"), "sky_horizon": Color("D8ECEE"),
+		"sky_curve": 0.24, "sky_night": Color("0B1A2A"),
+
 		"siding": Color("BEB090"), "tile": Color("6E8C94"),
 		"tree": "palm",
 		"cover": 0.7,
@@ -281,6 +303,12 @@ static func _jungle() -> Dictionary:
 		"fill": Color("6EA07E"), "fill_energy": 0.34,
 		"ambient": Color("2A4038"), "ambient_energy": 0.92,
 		"fog": Color("22382E"), "fog_density": 0.034,
+
+		# Humid and milky, with the green of the canopy bounced back up into it.
+		# The flattest gradient of the five and the least blue - a jungle sky is
+		# mostly water, and you are looking at it through a day's evaporation.
+		"sky_top": Color("5E8FB0"), "sky_horizon": Color("CBD8B8"),
+		"sky_curve": 0.42, "sky_night": Color("0C1A18"),
 
 		"siding": Color("7E6A46"), "tile": Color("4E6A44"),
 		"tree": "giant",

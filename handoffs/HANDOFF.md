@@ -6,50 +6,55 @@ Dated detail goes in `devlogs/`, not here.
 
 ## Where the work is
 
-**`Bottle3D/` is the live project, and it still says Elvle everywhere despite
-the owner having approved the rename to Hobbitle.**
-Godot 4.7, five islands, landscape, `com.lull.elvle`. Do not treat "Elvle" in
-the code or in this doc as current intent - it is leftover that the next
-session is explicitly tasked with removing.
+**`Bottle3D/` is the live project. It is called Hobbitle and the bundle ID is
+`com.lull.hobbitle`.** Godot 4.7, landscape.
 
-Pick up from **`handoffs/NEXT-SESSION-hobbitle-for-real.md`**.
+**Read `handoffs/DESIGN-one-world.md` first.** On 2026-08-02 the owner
+decided to drop island-choosing entirely: the five biomes become five regions
+of one world that the hobbits expand across, and the business model is
+paid-up-front with no IAP. That document has the reasoning, the mechanics and
+what it does to the code. Nothing in it is built yet, and it changes what the
+remaining items below are worth doing.
 
-The session before this one did the interiority pass (NPC legibility - the
-double-take, hesitation, walk-speed, stop-to-look, addressing, motor
-signature work) and the two bug fixes from `NEXT-SESSION-hobbitle.md`, which
-is done and tested. It then attempted the rename, the hobbit/troll species,
-the sky, a drag-mode toggle, and a polish pass, and shipped a build to the
-device - but the visible, user-facing half of that work fell short in ways
-the owner called out directly and specifically:
+The 2026-08-02 session did the rename everywhere a user sees it, a new app
+icon, the sky and sun/moon work, and the hobbit/troll redesign. All of it is
+verified on captures rather than assumed. See `devlogs/2026-08-02.md`.
 
-- The app was never actually renamed anywhere a user sees it.
-- The hobbit/troll **mechanics** are real (different carry capacity, speed,
-  job restrictions) but the hobbit/troll **design** is the old elf rig with
-  parameters tweaked, not a genuine redesign - it still reads as elves.
-- The sky is still too dark, and the sun/moon are not visibly rendering.
-- The drag-mode toggle is text in the wrong corner; it was asked for as
-  icons in the top right.
+Two items from `NEXT-SESSION-hobbitle-for-real.md` were **not** done, because
+the session was stopped for the design conversation above:
 
-`handoffs/NEXT-SESSION-hobbitle-for-real.md` has the full, specific breakdown
-of each of these, including exactly which lines of code are responsible and
-concrete design direction for the redesign. Read it before touching
-anything - it is written to be executed directly, not re-diagnosed.
+- **The turn/move control.** Still two `Label`s reading "Islands" and
+  "Turn"/"Move" in the bottom left of `main.gd`'s `_build_back`. It was asked
+  for as icons in the top right - a turn icon (two curved arrows forming a
+  circle) and a move icon (four arrows in a cross), drawn with `_draw()` on a
+  custom `Control`. Section 3 of that file has the full spec and it still
+  stands. Worth noting the one-world pivot deletes the "Islands" half of that
+  corner, so this should probably wait for it.
+- **The wider polish pass.** Section 5 of the same file.
+
+Remaining known nits on the bodies, none of them blocking: a troll's waist
+wrap is still barely visible under the gut, and its upper arms merge into the
+trunk from some angles.
 
 The native `Lull/` and `Bottle/` are the earlier 2D apps.
 Lull is still a live idea; the 2D `Bottle` is superseded and should be retired.
 
-## What Elvle is
+## What Hobbitle is
 
-**Elvle**, short for Elves in a Bottle, because the long name truncates on the
-iOS home screen.
+**Hobbitle**, short for Hobbits in a Bottle, because the long name truncates
+on the iOS home screen. It was called Elvle until 2026-08-02, and the class
+name `ElfWorld`, the array `_elves` and a lot of the prose in the source still
+say elf. That is deliberate: renaming an identifier four thousand lines deep
+buys nothing a user can see. The people are hobbits and trolls.
 
 The phone is the bottle, so nothing draws a vessel.
 Five islands, each with one three-storey house on it that takes about a week of
-held stillness to finish, and one rule holding the whole thing up:
+held stillness to finish, and one rule holding the whole thing up.
+(The five-islands part is what `DESIGN-one-world.md` replaces. The rule is not.)
 
 > **They only build while the phone is still.**
 
-Move it and the elves down tools and some of them leave.
+Move it and they down tools and some of them leave.
 Put it down and they come back, over the next fifteen minutes, and get on with
 it.
 There is nothing else to do.

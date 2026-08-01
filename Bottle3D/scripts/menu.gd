@@ -201,7 +201,7 @@ func show_title() -> void:
 	var root := _panel()
 	_title_root = root
 
-	var mark := _label("Elvle", 190, Color(INK, 0.95))
+	var mark := _label("Hobbitle", 190, Color(INK, 0.95))
 	mark.anchor_left = 0.0
 	mark.anchor_right = 1.0
 	mark.offset_top = 404.0
@@ -215,7 +215,7 @@ func show_title() -> void:
 	rule.size = Vector2(2.0, 2.0)
 	root.add_child(rule)
 
-	var under := _label("Elves in a bottle", 46, Color(INK, 0.48))
+	var under := _label("Hobbits in a bottle", 46, Color(INK, 0.48))
 	under.anchor_left = 0.0
 	under.anchor_right = 1.0
 	under.offset_top = 688.0

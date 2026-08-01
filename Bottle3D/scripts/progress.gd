@@ -39,7 +39,14 @@ extends RefCounted
 ## number rather than a remaining one. A countdown invites you to wait it out; a
 ## clock that only moves while you are working is a record of what you did.
 
-const PATH := "user://elvle.cfg"
+const PATH := "user://hobbitle.cfg"
+
+## What the save was called before the rename. Read once, if the new one is not
+## there yet, and written back under the new name at the next flush. On iOS this
+## does nothing - a new bundle identifier means a new container and an empty
+## one - but on desktop it means a week of building does not evaporate over a
+## change of filename.
+const OLD_PATH := "user://elvle.cfg"
 
 static var _cfg: ConfigFile = null
 
@@ -49,7 +56,8 @@ static func _open() -> ConfigFile:
 		return _cfg
 	_cfg = ConfigFile.new()
 	# A missing file is the normal first-run case, not an error.
-	_cfg.load(PATH)
+	if _cfg.load(PATH) != OK:
+		_cfg.load(OLD_PATH)
 	return _cfg
 
 

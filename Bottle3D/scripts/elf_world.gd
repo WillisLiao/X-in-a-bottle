@@ -1,10 +1,18 @@
 class_name ElfWorld
 extends World
 
-## Elvle. Elves in a bottle.
+## Hobbitle. Hobbits in a bottle.
 ##
 ## An island, the people living on it, and one house they are trying to build
 ## that will take them a week.
+##
+## The people are hobbits and trolls - see `Species` - and have been since the
+## rename. The class is still `ElfWorld`, the array is still `_elves`, and the
+## prose below still says "elf" in a lot of places, because renaming an
+## identifier used four thousand lines deep is a large mechanical edit with
+## nothing on the other side of it: nobody using this app ever reads a variable
+## name. Do not spend a session on it. What a user sees is the app name, the
+## title screen and the bodies on the island, and those are all hobbits now.
 ##
 ## Nothing here is animation. Every stone, log, ingot and pane of glass is a real
 ## object that is dug or made somewhere, sits in a heap until somebody lifts it,
@@ -3573,6 +3581,29 @@ func _make_pile(accepts: Array[int], at: Vector3, stand: Vector3) -> Pile:
 ##
 ## The head is its own node rather than welded to the body, because everything
 ## worth doing with attention needs it to turn on its own.
+## The two bodies are built by two different functions on purpose.
+##
+## The version before this one had a single builder with `if troll` scattered
+## through it, and every difference between the species was a number fed to the
+## same shapes: the same capsule torso, the same ball head, the same cone ears
+## made shorter, the same cone hat swapped for cone horns. That is a parameter
+## sweep and not a design, and it showed - a hobbit and an elf squinted at were
+## the same outline at different sizes, which is exactly what was complained
+## about.
+##
+## The test being aimed at here is the silhouette test: take all the colour and
+## all the detail away, leave the outline, and a hobbit and a troll have to be
+## two different shapes. So:
+##
+##   A hobbit is a pear. Narrow at the shoulders, wide and low at the belly,
+##   short-legged, with a mass of curly hair that is most of the head's
+##   outline, round ears that stay near the skull, and feet too big for it.
+##
+##   A troll is a cliff. Angular, asymmetric, built from faceted lumps rather
+##   than one smooth capsule, one shoulder higher than the other, a head wider
+##   than it is tall, and hands like shovels.
+##
+## Neither of them is the old rig with different arguments.
 func _build_body(e: Elf, rng: RandomNumberGenerator) -> Node3D:
 	var troll := e.species == Species.TROLL
 	var root := Node3D.new()
@@ -3580,7 +3611,7 @@ func _build_body(e: Elf, rng: RandomNumberGenerator) -> Node3D:
 	var body := Node3D.new()
 	# Big and heavy, or small and quick - the silhouette has to say which one
 	# is which from across the island, before anybody sees a colour.
-	var height := rng.randf_range(1.38, 1.62) if troll else rng.randf_range(0.72, 0.92)
+	var height := rng.randf_range(1.38, 1.62) if troll else rng.randf_range(0.66, 0.84)
 	body.scale = Vector3(rng.randf_range(0.92, 1.10), height,
 		rng.randf_range(0.92, 1.10))
 	root.add_child(body)
@@ -3594,7 +3625,9 @@ func _build_body(e: Elf, rng: RandomNumberGenerator) -> Node3D:
 	e.grip.position = Vector3(0, 0.215, 0.115)
 	root.add_child(e.grip)
 
-	var girth := rng.randf_range(0.130, 0.168) if troll else rng.randf_range(0.086, 0.112)
+	# Hobbits are wider for their height than the elves were. Most of what makes
+	# something read as stout rather than small is the ratio, not the size.
+	var girth := rng.randf_range(0.130, 0.168) if troll else rng.randf_range(0.098, 0.126)
 	var head_r := rng.randf_range(0.088, 0.108) if troll else rng.randf_range(0.070, 0.090)
 
 	var skins := [Color("F0BE92"), Color("E0A87A"), Color("C98A63"), Color("FAD3AE")]
@@ -3606,6 +3639,8 @@ func _build_body(e: Elf, rng: RandomNumberGenerator) -> Node3D:
 		Color("7A4470"), Color("C4923A")]
 	var beards := [Color("EFEFE6"), Color("C9C4B4"), Color("C9843F")]
 	var mosses := [Color("5A7A44"), Color("6E8C4E"), Color("4E6E3A")]
+	var hairs := [Color("4A3524"), Color("6E4A2A"), Color("8A5A32"),
+		Color("3A2A1E"), Color("A8763A"), Color("54402E"), Color("2E241C")]
 
 	var skin_c: Color = (troll_skins if troll else skins)[
 		rng.randi() % (troll_skins.size() if troll else skins.size())]
@@ -3620,30 +3655,35 @@ func _build_body(e: Elf, rng: RandomNumberGenerator) -> Node3D:
 		skin_c.darkened(0.15) if troll else skin_c.darkened(0.05), 0.85)
 	var eye := World.solid_material(EYE, 0.35)
 	var cheek := World.solid_material(skin_c.lerp(CHEEK, 0.55 if troll else 0.75), 0.8)
-
-	body.add_child(_capsule(Vector3(0, 0.185, 0), girth, 0.135, tunic))
-	body.add_child(_capsule(Vector3(0, 0.115, 0), girth + 0.002, 0.020, trim))
-
-	# A round belly is most of what makes a hobbit read as a hobbit rather than
-	# a short elf.
-	if not troll:
-		body.add_child(_sphere(Vector3(0, 0.145, girth * 0.55), girth * 0.72, tunic))
+	var hair := World.solid_material(hairs[rng.randi() % hairs.size()], 0.95)
+	var leather := World.solid_material(Color("4A3628").lerp(
+		Color("6E5238"), rng.randf()), 0.9)
 
 	if troll:
-		for side in [-1.0, 1.0]:
-			body.add_child(_sphere(Vector3(side * girth * 0.7, 0.24, girth * 0.3),
-				rng.randf_range(0.022, 0.034), moss))
+		_troll_torso(body, rng, girth, tunic, moss, skin)
+	else:
+		_hobbit_torso(body, rng, girth, tunic, trim, leather)
 
 	# Everything above the neck hangs off one node, built around its own origin,
 	# so turning the head turns the face, ears, hat and beard together.
 	var head := Node3D.new()
-	head.position = Vector3(0, 0.360 + (head_r - 0.082) * 0.6, 0)
+	# A troll's sits higher, and on nothing - the mass below it comes up to
+	# meet it, so there is no neck, only a head resting on a shoulder.
+	head.position = Vector3(0, (0.394 if troll else 0.352)
+		+ (head_r - 0.082) * 0.6, 0)
 	body.add_child(head)
 	e.head = head
 
 	# The one surface every camera in this app eventually settles on. Worth
 	# the extra dozen triangles that the scattered background rocks are not.
-	head.add_child(_sphere(Vector3.ZERO, head_r, skin, 14, 8))
+	#
+	# A troll's is wider than it is tall and cut with fewer facets, so it reads
+	# as hewn next to a hobbit's, which stays round and smooth.
+	var skull := _sphere(Vector3.ZERO, head_r, skin, 7 if troll else 14,
+		4 if troll else 8)
+	if troll:
+		skull.scale = Vector3(1.34, 0.76, 1.02)
+	head.add_child(skull)
 
 	# Faces differ most in the spacing and size of the eyes, which is what makes
 	# one of these look like a different person rather than a recolour.
@@ -3679,64 +3719,247 @@ func _build_body(e: Elf, rng: RandomNumberGenerator) -> Node3D:
 		head.add_child(_sphere(Vector3(rng.randf_range(-0.02, 0.02), 0.010,
 			head_r * 0.62), rng.randf_range(0.014, 0.022), moss))
 
-	# A hobbit's ear is round and stays close to the head; a troll's is a
-	# blunt stub. Neither is the long point an elf had.
-	var ear_len := rng.randf_range(0.020, 0.034) if troll else rng.randf_range(0.026, 0.042)
+	# Ears.
+	#
+	# The old ones were cones for both species, shortened for the hobbits, and
+	# that was the single worst thing on the figure: a cone is a point however
+	# short you cut it, and a point on the side of a head reads as an elf at any
+	# length. So neither of these is a cone any more. A hobbit's is a small
+	# rounded disc pressed flat to the skull; a troll's is a blunt faceted lump
+	# hanging off the side of it.
 	for side in [-1.0, 1.0]:
-		var ear := _cone(Vector3(side * (head_r * 0.88), 0.018, -0.012),
-			0.024, ear_len, skin)
-		ear.rotation = Vector3(0.25, 0.0, side * -1.0)
+		var ear: MeshInstance3D
+		if troll:
+			ear = _sphere(Vector3(side * (head_r * 1.24), -0.004, -0.008),
+				rng.randf_range(0.026, 0.036), skin, 6, 3)
+			ear.scale = Vector3(0.6, 1.0, 0.75)
+		else:
+			ear = _sphere(Vector3(side * (head_r * 0.94), 0.008, -0.006),
+				rng.randf_range(0.020, 0.027), skin, 8, 5)
+			ear.scale = Vector3(0.38, 1.0, 0.82)
 		head.add_child(ear)
 
 	if troll:
-		# Horn stubs instead of a hat. A troll never wears one.
+		# Horn stubs instead of a hat. A troll never wears one, and no two of
+		# them match - one is always the worse for something.
 		for side in [-1.0, 1.0]:
-			var stub := _cone(Vector3(side * head_r * 0.5, head_r * 0.72, -head_r * 0.2),
-				0.018, rng.randf_range(0.028, 0.048), horn)
-			stub.rotation = Vector3(0.3, 0.0, side * -0.35)
+			var stub := _cone(Vector3(side * head_r * 0.62, head_r * 0.58,
+				-head_r * 0.16), 0.019, rng.randf_range(0.022, 0.052), horn)
+			stub.rotation = Vector3(0.3, 0.0, side * -0.4 + rng.randf_range(-0.2, 0.2))
 			head.add_child(stub)
 	else:
-		# Hats vary in height and lean, which changes the silhouette more than
-		# any amount of recolouring does.
-		var hat_h := rng.randf_range(0.16, 0.28)
-		var lean := rng.randf_range(-0.42, -0.10)
-		var brim_y := head_r * 0.94
-		var cap := _cone(Vector3(0, brim_y + hat_h * 0.5, -0.030), head_r * 1.05,
-			hat_h, hat)
-		cap.rotation.x = lean
-		head.add_child(cap)
-		head.add_child(_capsule(Vector3(0, brim_y, 0), head_r * 1.12, 0.012, trim))
-
-		if rng.randf() < 0.7:
-			var tip := brim_y + hat_h
-			head.add_child(_sphere(Vector3(0, tip * cos(lean) + 0.005,
-				-0.030 + tip * sin(lean) * 0.35), rng.randf_range(0.022, 0.034), trim))
+		_hobbit_hair(head, rng, head_r, hair, hat, trim)
 
 	# Arms long enough to hold something in both hands. They used to reach 0.108,
 	# a fifth of the body, and two hands can only meet where both arms reach - at
 	# that length a disc six centimetres across pinned to the chest, with no room
 	# for a swing and the top of any arc inside the head.
+	#
+	# A troll's shoulders sit at different heights, which is most of what makes
+	# it read as a lump of a thing rather than a large hobbit - a body that is
+	# symmetrical about its spine looks manufactured, and nothing else on the
+	# island is.
+	var lopside := rng.randf_range(0.012, 0.030) * (1.0 if rng.randf() < 0.5 else -1.0)
 	for side in [-1.0, 1.0]:
 		var shoulder := Node3D.new()
-		shoulder.position = Vector3(side * (girth + 0.004), 0.255, 0)
-		shoulder.add_child(_capsule(Vector3(0, -0.082, 0), 0.028, 0.108, tunic))
-		shoulder.add_child(_sphere(Vector3(0, -ARM, 0), 0.027, skin))
+		if troll:
+			shoulder.position = Vector3(side * (girth + 0.020),
+				0.262 + side * lopside, 0)
+			# Thick to the wrist and then a hand out of proportion to it. Trolls
+			# carry three of anything; the hands are the reason you believe it.
+			shoulder.add_child(_capsule(Vector3(0, -0.086, 0), 0.040, 0.120, skin))
+			var fist := _sphere(Vector3(0, -ARM * 1.04, 0.004), 0.048, skin, 6, 4)
+			fist.scale = Vector3(1.0, 0.86, 1.12)
+			shoulder.add_child(fist)
+		else:
+			shoulder.position = Vector3(side * (girth + 0.002), 0.250, 0)
+			shoulder.add_child(_capsule(Vector3(0, -0.078, 0), 0.026, 0.098, tunic))
+			shoulder.add_child(_sphere(Vector3(0, -ARM, 0), 0.026, skin))
 		body.add_child(shoulder)
 		e.arms.append(shoulder)
 		e.shoulders.append(shoulder.position)
 
 		var hip := Node3D.new()
-		hip.position = Vector3(side * 0.042, 0.100, 0)
-		hip.add_child(_capsule(Vector3(0, -0.040, 0), 0.032, 0.045, trim))
-		# Bare and big for a hobbit - the feet are most of what a viewer sees
-		# below the knee on something this short. A troll's are just heavy.
-		var foot_r := 0.026 if troll else 0.046
-		hip.add_child(_sphere(Vector3(0, -0.082, 0.012 if troll else 0.022),
-			foot_r, boot))
+		if troll:
+			hip.position = Vector3(side * 0.068, 0.104, 0)
+			hip.add_child(_capsule(Vector3(0, -0.038, 0), 0.050, 0.030, tunic))
+			var slab := _sphere(Vector3(0, -0.082, 0.014), 0.050, skin, 6, 3)
+			slab.scale = Vector3(0.86, 0.52, 1.20)
+			hip.add_child(slab)
+		else:
+			hip.position = Vector3(side * 0.046, 0.092, 0)
+			# Short legs. A hobbit is not a small person, it is a differently
+			# proportioned one, and the leg-to-body ratio is where that lives -
+			# it is what every drawing of one gets right before anything else.
+			hip.add_child(_capsule(Vector3(0, -0.030, 0), 0.030, 0.022, leather))
+			_hobbit_foot(hip, rng, skin)
 		body.add_child(hip)
 		e.legs.append(hip)
 
 	return root
+
+
+## A pear, not a capsule.
+##
+## Narrow across the shoulders and wide and low at the waist, which is the whole
+## difference between a stout person and a short one. Built as two stacked
+## masses rather than a single tube so the outline actually changes width on the
+## way down - a capsule with a belly sphere stuck on the front of it, which is
+## what this was before, is still a capsule from the side.
+##
+## The waistcoat is a real garment over the shirt rather than a second colour on
+## the same shape: it stops at a hem, it has a hide edge, and it has buttons
+## down the middle of it. Three small spheres is all "buttons" needs to be.
+func _hobbit_torso(body: Node3D, rng: RandomNumberGenerator, girth: float,
+		shirt: Material, trim: Material, leather: Material) -> void:
+	# Shoulders and chest: the narrow end.
+	body.add_child(_sphere(Vector3(0, 0.242, 0), girth * 0.86, shirt, 10, 6))
+
+	# The waistcoat, which is most of the body. Wider than the chest and hung
+	# lower, so the silhouette swells on the way down and then stops.
+	var belly := _sphere(Vector3(0, 0.166, 0.004), girth * 1.04, trim, 11, 7)
+	belly.scale = Vector3(1.0, 0.94, 1.0)
+	body.add_child(belly)
+
+	# The hem, and the belt under it.
+	#
+	# Cylinders rather than capsules, which matters more than it sounds like.
+	# `_capsule` adds `radius * 2` to whatever height it is given, so a short
+	# wide one is not a band at all - it is a sphere. Every belt in this file
+	# was a sphere, which was invisible while the torso was a tube of the same
+	# width and became a problem the moment the legs got short enough to be
+	# worth seeing.
+	body.add_child(_instance(_cyl(girth * 0.98, 0.020, 10),
+		Vector3(0, 0.116, 0), trim))
+	body.add_child(_instance(_cyl(girth * 0.93, 0.024, 10),
+		Vector3(0, 0.098, 0), leather))
+
+	# Buttons, up the front, in the trim's own metal rather than a third colour.
+	var brass := World.solid_material(TRIM.lightened(0.15), 0.35)
+	for i in 3:
+		body.add_child(_sphere(
+			Vector3(0, 0.142 + float(i) * 0.028, girth * 1.02 - float(i) * 0.004),
+			rng.randf_range(0.0075, 0.0105), brass, 6, 4))
+
+
+## A cliff face.
+##
+## The troll before this was a hobbit-shaped capsule at a larger scale with a
+## hunch and two patches of moss, and no amount of grey makes that read as
+## stone. This one is assembled out of four faceted lumps that do not line up
+## with each other, at low enough segment counts that every one of them has
+## visible flats - the same language the terrain is built in, which is the only
+## honest way to say "rock" in a project that has refused textures everywhere
+## else.
+func _troll_torso(body: Node3D, rng: RandomNumberGenerator, girth: float,
+		wrap: Material, moss: Material, skin: Material) -> void:
+	# The main mass, leaning. Six segments, so it is a hewn block rather than
+	# a ball, and turned off-axis so no two silhouettes of it are the same.
+	#
+	# Sized so that the head clears the top of it and the arms clear the sides.
+	# The first pass at this was half again as big and the result was a boulder
+	# with a pick in it - no head, no shoulders, nothing to read a creature
+	# from. A troll has to be lumpen and still be somebody.
+	var trunk := _sphere(Vector3(0, 0.186, 0), girth * 0.82, skin, 6, 4)
+	trunk.scale = Vector3(1.10, 1.20, 0.90)
+	trunk.rotation = Vector3(rng.randf_range(-0.10, 0.10),
+		rng.randf_range(0.0, TAU), rng.randf_range(-0.14, 0.14))
+	body.add_child(trunk)
+
+	# One shoulder up over the neck. This is the shape that says the thing is
+	# built wrong and gets away with it.
+	var hump_side := 1.0 if rng.randf() < 0.5 else -1.0
+	var hump := _sphere(Vector3(hump_side * girth * 0.86, 0.268, -0.012),
+		rng.randf_range(0.042, 0.056), skin, 6, 3)
+	hump.rotation = Vector3(0, rng.randf_range(0.0, TAU), hump_side * 0.3)
+	body.add_child(hump)
+
+	# A gut, low and forward, and a slab of hip under it.
+	var gut := _sphere(Vector3(0, 0.138, girth * 0.26), girth * 0.76, skin, 6, 4)
+	gut.scale = Vector3(1.06, 0.82, 0.94)
+	body.add_child(gut)
+
+	# The one piece of clothing a troll owns: a wrap round the middle, sitting
+	# crooked. Only the waist, because a troll that dressed properly would be a
+	# short broad hobbit again.
+	var kilt := _instance(_cyl(girth * 0.84, 0.078, 7), Vector3(0, 0.126, 0), wrap)
+	kilt.rotation = Vector3(rng.randf_range(-0.09, 0.09), 0,
+		rng.randf_range(-0.09, 0.09))
+	body.add_child(kilt)
+
+	# Moss, on whatever faces up. Trolls stand still for a long time.
+	for _i in rng.randi_range(2, 4):
+		var around := rng.randf() * TAU
+		body.add_child(_sphere(
+			Vector3(sin(around) * girth * 0.62, rng.randf_range(0.19, 0.27),
+				cos(around) * girth * 0.56),
+			rng.randf_range(0.016, 0.028), moss, 6, 3))
+
+
+## The big bare foot, which the brief asked for twice and got a slightly larger
+## boot-coloured ball both times.
+##
+## Long, flat, bare, and with toes on it. The toes are three spheres and will be
+## two pixels each from across the island, which is fine - they are not there to
+## be counted, they are there so that the front of the foot is lumpy rather than
+## round, and lumpy at the front is what a foot is.
+func _hobbit_foot(hip: Node3D, rng: RandomNumberGenerator, skin: Material) -> void:
+	var sole := _sphere(Vector3(0, -0.078, 0.020), 0.044, skin, 9, 5)
+	sole.scale = Vector3(0.92, 0.50, 1.42)
+	hip.add_child(sole)
+
+	var spread := rng.randf_range(0.013, 0.017)
+	for i in 3:
+		hip.add_child(_sphere(
+			Vector3((float(i) - 1.0) * spread, -0.080, 0.020 + 0.050),
+			rng.randf_range(0.0085, 0.0115), skin, 6, 4))
+
+
+## Hair, which nothing rendered at all before this.
+##
+## A cluster of overlapping balls sitting on the skull, the same trick the beard
+## already used at the chin. It is cheap and it is the single biggest change to
+## the outline on the whole figure: a bald sphere with a cone on it was an elf
+## in a hat, and a lumpy mass of curls is a hobbit whatever else it is wearing.
+##
+## Which is also why the hat is now rare. A tall pointed hat was doing the work
+## of saying "small fantasy person", and it was saying the wrong one.
+func _hobbit_hair(head: Node3D, rng: RandomNumberGenerator, head_r: float,
+		hair: Material, hat: Material, trim: Material) -> void:
+	var curls := rng.randi_range(7, 10)
+	var seat := head_r * 0.80
+	for i in curls:
+		# Round the crown and down the back, leaving the face clear. Biased
+		# behind the ears so the front hairline sits where a hairline sits.
+		var around := TAU * (float(i) / float(curls)) + rng.randf_range(-0.3, 0.3)
+		var lift := rng.randf_range(0.30, 0.95)
+		var back := -cos(around) * 0.30
+		head.add_child(_sphere(
+			Vector3(sin(around) * seat * (1.0 - lift * 0.45),
+				head_r * (0.34 + lift * 0.62),
+				cos(around) * seat * (1.0 - lift * 0.45) + back * head_r),
+			rng.randf_range(0.026, 0.042), hair, 7, 4))
+
+	# A fringe, low at the front, so the hair has an edge rather than stopping
+	# wherever the last ball happened to land.
+	for side in [-1.0, 1.0]:
+		head.add_child(_sphere(
+			Vector3(side * head_r * 0.46, head_r * 0.52, head_r * 0.62),
+			rng.randf_range(0.024, 0.032), hair, 7, 4))
+
+	# Some of them do wear something, and when they do it is a soft thing that
+	# sits down on the hair rather than a cone standing up off a bald head.
+	if rng.randf() < 0.22:
+		var crown := _sphere(Vector3(0, head_r * 0.92, -0.006),
+			head_r * 0.96, hat, 9, 5)
+		crown.scale = Vector3(1.0, 0.58, 1.0)
+		head.add_child(crown)
+		var brim := _sphere(Vector3(0, head_r * 0.74, 0.004),
+			head_r * 1.34, hat, 10, 4)
+		brim.scale = Vector3(1.0, 0.12, 1.0)
+		head.add_child(brim)
+		head.add_child(_capsule(Vector3(0, head_r * 0.86, 0),
+			head_r * 0.99, 0.006, trim))
 
 
 func _capsule(at: Vector3, radius: float, height: float,
