@@ -9,17 +9,27 @@ Dated detail goes in `devlogs/`, not here.
 **`Bottle3D/` is the live project. It is called Hobbitle and the bundle ID is
 `com.lull.hobbitle`.** Godot 4.7, landscape.
 
-**If you have not worked in this repo before, read
-`handoffs/WORKING-NOTES.md` next.** It is the tacit knowledge: how to run and
-capture, five failure modes that give no clue what they are, the invariants that
-look like bugs and must not be "fixed", and the house style. All of it was
-learned by losing time to it.
+### If you are new to this repo, read in this order
 
-**Read `handoffs/DESIGN-one-world.md` first.** On 2026-08-02 the owner
-decided to drop island-choosing entirely: the five biomes become five regions
-of one world that the hobbits expand across, and the business model is
-paid-up-front with no IAP. That document has the reasoning, the mechanics and
-what it does to the code.
+1. **The rest of this file**, for what the product is and what is decided.
+2. **`handoffs/WORKING-NOTES.md`**, for the tacit knowledge: how to run and
+   capture, five failure modes that give no clue what they are, the invariants
+   that look like bugs and must not be "fixed", and the house style. All of it
+   was learned by losing time to it.
+3. **`handoffs/DESIGN-one-world.md`**, for the shape the world is in and why.
+4. **Whichever `NEXT-SESSION-*` file** covers what you are about to do.
+5. `devlogs/2026-08-02.md` if you want the reasoning behind a specific number.
+   It is long. Most constants in the code have their argument there.
+
+### Where the world came from
+
+On 2026-08-02 the owner decided to drop island-choosing entirely: the five
+biomes became five regions of one world that the hobbits expand across.
+`DESIGN-one-world.md` has the reasoning, the mechanics and what it does to the
+code. Its business model section - paid up front, no IAP of any kind at launch -
+was **superseded later the same day** by the decision to sell two of the five
+regions; see `NEXT-SESSION-feeding-and-locks.md`, and amend that document rather
+than leaving it contradicting the code.
 
 **The first slice of it is built.** The picker is deleted, the five regions
 sit at authored positions in one world, and pinching out past where a region

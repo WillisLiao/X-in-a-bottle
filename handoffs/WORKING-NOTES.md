@@ -196,7 +196,7 @@ Bottle3D/scripts/
 
 ---
 
-## The three current handoffs
+## The handoffs
 
 `NEXT-SESSION-feeding-and-locks.md` - remove the stillness rule, add the
 two-hour feed with the coastline as its progress indicator, drop the camera
@@ -212,6 +212,11 @@ world whose finished regions keep their own permanent residents.
 `DESIGN-one-world.md` - the pivot that produced the current shape. Mostly built.
 Its business model section is contradicted by the paid regions above and needs
 amending rather than leaving.
+
+`NEXT-SESSION-hobbitle-for-real.md` is older, from 2026-08-01, and is mostly
+done. Two things in it are still live and still correct: section 3, the
+turn/move control as drawn icons in the top right, and section 5, a wider polish
+pass. Ignore the rest of it, which the one-world pivot overtook.
 
 Dated detail for all of it is in `devlogs/2026-08-02.md`, which is long and
 worth skimming before starting anything - most of the numbers in the code have
