@@ -23,6 +23,25 @@ static func tube(points: PackedVector3Array,
 
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	append_tube(st, points, radius_start, radius_end, sides, taper_ends)
+	st.generate_normals()
+	return st.commit()
+
+
+## Appends a swept tube to an already-open triangle surface.
+## `CommunityRoads` needs one surface for a whole neighborhood. Appending the
+## completed meshes with `SurfaceTool.append_from` looked like the right cheap
+## shortcut, but produced detached segments on the Mobile renderer. Keeping the
+## vertices in this source surface preserves the batching without asking Godot
+## to remap a sequence of generated mesh surfaces.
+static func append_tube(st: SurfaceTool,
+		points: PackedVector3Array,
+		radius_start: float,
+		radius_end: float,
+		sides: int = 6,
+		taper_ends: bool = true) -> void:
+	if points.size() < 2:
+		return
 
 	var normal := Vector3.UP
 	var rings: Array[PackedVector3Array] = []
@@ -64,9 +83,6 @@ static func tube(points: PackedVector3Array,
 			st.add_vertex(rings[i][s])
 			st.add_vertex(rings[i + 1][n])
 			st.add_vertex(rings[i + 1][s])
-
-	st.generate_normals()
-	return st.commit()
 
 
 ## Midpoint displacement in three dimensions. Used for bolts, and for the wander

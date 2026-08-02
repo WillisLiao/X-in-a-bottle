@@ -30,6 +30,8 @@ Arguments, all after the bare `--`:
 | `--zoom=` | 0.42 close, 1.0 default, 3.0 full map |
 | `--rest=` | drop straight into a break, 0 to 1 through it |
 | `--fire=` | send the lantern to a region at launch |
+| `--route=` | add `meadow-shore` or `meadow-green` as a local coarse route |
+| `--route-reset` | clear saved local routes before applying `--route` |
 | `--capture=` `--after=` | write a PNG after N seconds, then quit |
 
 **Look at captures. Do not assume.** A previous session shipped a sun nobody
@@ -156,8 +158,8 @@ co-author.
 **Everything is drawn, nothing is themed.** There are no textures anywhere in
 the project - every surface is vertex colours on faceted geometry. The UI is
 `_draw()` on custom `Control`s; a default-styled Godot `Button` would be the one
-element that came from somewhere else. There is currently exactly one overlay in
-the entire app, a `Label` reading "Turn" or "Move".
+element that came from somewhere else. The existing `Label` reading "Turn" or
+"Move" is legacy UI; new overlays, including `RumorMarks`, are custom drawn.
 
 **No numbers on screen.** No percentages, no counts, no stats on the elves, no
 names, no speech. Progress is said in the language of a building site - "Storey
@@ -186,10 +188,12 @@ Bottle3D/scripts/
   country.gd     the four regions you are not standing in. Scenery, no tick
   causeway.gd    the necks between regions - and they answer `height`
   wear.gd        where they have walked. One byte a patch, only ever up
+  route_book.gd  coarse local route ledger. Never raw GPS coordinates
+  community_roads.gd  map-level trade-road meshes and rumor-site interaction
+  rumor_marks.gd custom-drawn map halos for unclaimed rumors
   progress.gd    what survives being put down
-  feast.gd       the two-hour feed rim and the food item meshes
-  coast.gdshader the coastline feed fill, head and breathing outline
-  lock_marks.gd  the paid-region padlocks, drawn by a custom Control
+  feast.gd       legacy two-hour feed prototype and food item meshes
+  coast.gdshader legacy coastline feed fill, head and breathing outline
   ground.gdshader  ground colour plus the worn paths
 ```
 
@@ -200,18 +204,20 @@ Bottle3D/scripts/
 
 ## The handoffs
 
-`NEXT-SESSION-feeding-and-locks.md` - completed 2026-08-02.
-It removed the stillness rule and camera pan bounds, added the two-hour coastline feed, and gated the Dunes and Ice with local locks.
-StoreKit remains deliberately outside the Godot project.
+`DESIGN-living-world.md` - current product direction.
+The local vertical slice is built: a debug coarse route persists as a map road and reveals a claimable rumor.
+It has no raw GPS storage, location permissions, accounts, backend, or StoreKit work.
 
-`NEXT-SESSION-what-the-other-sites-build.md` - next.
-Start with the save-format work.
-`Progress` must become per-site rather than per-region, and every house needs a saved seed and generator version before a grammar exists.
-Otherwise valid saves silently rebuild the wrong houses.
+`NEXT-SESSION-feeding-and-locks.md` - completed historical work from 2026-08-02.
+It removed the stillness rule and camera pan bounds and added the two-hour coastline feed.
+Its paid-lock portion was removed by the living-world pivot.
 
-`DESIGN-one-world.md` - the pivot that produced the current shape. Mostly built.
-Its business model section is contradicted by the paid regions above and needs
-amending rather than leaving.
+`NEXT-SESSION-what-the-other-sites-build.md` - historical grammar research.
+Its save-format warning remains valid if the five-region prototype grows multiple generated houses.
+The next living-world implementation should instead design an explicit-consent iOS location bridge and a server-authoritative shared-cell protocol.
+
+`DESIGN-one-world.md` - the earlier pivot that produced the current physical map.
+Its paid-region business-model section was superseded and should be read as history.
 
 `NEXT-SESSION-hobbitle-for-real.md` is older, from 2026-08-01, and is mostly
 done. Two things in it are still live and still correct: section 3, the

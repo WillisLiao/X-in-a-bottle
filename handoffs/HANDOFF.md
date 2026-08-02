@@ -16,20 +16,19 @@ Dated detail goes in `devlogs/`, not here.
    capture, five failure modes that give no clue what they are, the invariants
    that look like bugs and must not be "fixed", and the house style. All of it
    was learned by losing time to it.
-3. **`handoffs/DESIGN-one-world.md`**, for the shape the world is in and why.
-4. **Whichever `NEXT-SESSION-*` file** covers what you are about to do.
-5. `devlogs/2026-08-02.md` if you want the reasoning behind a specific number.
+3. **`handoffs/DESIGN-living-world.md`**, for the active product direction and its technical boundaries.
+4. **`handoffs/DESIGN-one-world.md`**, for the physical five-region map that the living world currently reuses.
+5. **Whichever historical `NEXT-SESSION-*` file** covers a subsystem you are about to reuse.
+6. `devlogs/2026-08-02.md` if you want the reasoning behind a specific number.
    It is long. Most constants in the code have their argument there.
 
 ### Where the world came from
 
 On 2026-08-02 the owner decided to drop island-choosing entirely: the five
 biomes became five regions of one world that the hobbits expand across.
-`DESIGN-one-world.md` has the reasoning, the mechanics and what it does to the
-code. Its business model section - paid up front, no IAP of any kind at launch -
-was **superseded later the same day** by the decision to sell two of the five
-regions; see `NEXT-SESSION-feeding-and-locks.md`, and amend that document rather
-than leaving it contradicting the code.
+`DESIGN-one-world.md` has the reasoning, the mechanics and what it does to the code.
+Its paid-region business-model experiment was superseded and then removed by the living-world pivot.
+Treat it as history rather than a directive.
 
 **The first slice of it is built.** The picker is deleted, the five regions
 sit at authored positions in one world, and pinching out past where a region
@@ -61,12 +60,15 @@ On 2026-08-02 the owner pivoted Hobbitle from a calm app-open construction toy i
 The core proposition is now that real walking routes become shared fantasy trade roads, local folklore, and player-authored boroughs.
 This is not a focus app and it must never need a player to leave the renderer running to progress.
 
-The first implementation slice is deliberately offline and local.
-It proves that a coarse route sample can become a persistent visible road and a place-bound rumor before accounts, location permissions, map data, or a backend are introduced.
-The route ledger must store coarse fantasy cells rather than raw GPS trails.
+The first implementation slice is deliberately offline and local, and it is built.
+`RouteBook` records coarse fantasy-world cell crossings and `CommunityRoads` renders them as persistent visible trade roads in the map.
+`RumorMarks` reveals an unclaimed place-bound rumor at the route's midpoint.
+The route ledger stores coarse fantasy cells rather than raw GPS trails.
+`--route-reset --route=meadow-shore` reproduces the slice for a capture without retaining a previous debug route.
 
 `NEXT-SESSION-what-the-other-sites-build.md` remains useful historical design work on house grammars and permanent residents.
-The earlier feed, paid-lock, and app-open progression work is prototype machinery rather than the released game's loop.
+The earlier feed and app-open construction progression are prototype machinery rather than the released game's loop.
+The paid locks were removed with the living-world slice.
 
 **In order:**
 
@@ -107,7 +109,8 @@ Their discoveries build a personal village and contribute to shared boroughs tha
 The world should be exciting to revisit because people and places changed, not because an app was left running.
 
 The five-region construction world presently in `Bottle3D/` is a visual prototype and a source of reusable construction machinery.
-Its feed, paid locks, and app-open progression are not the released product direction.
+Its feed and app-open progression are not the released product direction.
+Its paid locks have been removed.
 
 **Nothing that has been built ever comes apart.**
 Against a build that takes a week, a mechanic that can undo an evening teaches
@@ -203,9 +206,10 @@ Faster loop, no device:
   -- --screen=world --island=0 --capture=/tmp/shot.png --after=25
 ```
 
-`--screen` is `title`, `world` or `map`; `--island` (or `--region`) 0-4; also
-`--yaw`, `--pitch`, `--zoom`, `--rest` and `--fire=<region>`, which sends the
-lantern at launch so the walk can be watched without tapping anything.
+`--screen` is `title`, `world` or `map`; `--island` (or `--region`) is 0-4.
+`--yaw`, `--pitch`, `--zoom`, `--rest`, and `--fire=<region>` set the camera or send the lantern at launch.
+`--route=meadow-shore` or `--route=meadow-green` adds a local coarse route for a capture.
+`--route-reset` clears previously saved local routes before the capture route is applied.
 
 After adding any file with a `class_name`, run `--headless --import` once or
 every script referencing it fails to parse.
@@ -216,20 +220,12 @@ silently reverted the renderer and the orientation once each.
 
 ## Decisions worth not relitigating
 
-- **The Dunes and Ice are one-time paid unlocks, never subscriptions.**
-  A purchase only removes a gate.
-  A lantern still settles the region, and work still costs app-open attention.
-- **No StoreKit flow lives in the Godot project yet.**
-  The local `Progress` purchase flag, the gate, and the map lock are a seam for
-  a later native purchase session.
-- **The two-hour meal is intentionally a dramatic speed-up.**
-  It rains food, visibly interrupts work, and triples the crew's pace and build
-  rate for ten minutes.
-  The coastline supplies its non-numeric progress signal.
-- **No offline progress, ever.** The only thing that moves this app forward is a
-  phone with the app open.
-  A hobbit who laid a joist while you were asleep would be a lie about what you
-  did.
+- **There are no paid region gates.** The local purchase flags, map padlocks, and StoreKit seam were removed with the living-world pivot.
+- **A location sample is private and coarse.** `Progress` stores only fantasy-world cells and crossings, never raw latitude, longitude, or a user trail.
+- **The future shared world is server-authoritative.** A client may render local route previews, but it must not decide shared road or borough progress once accounts exist.
+- **The first live location source needs explicit consent.** Native iOS location work, anti-spoofing, accounts, and a backend are separate work after the local slice.
+- **The feed is legacy prototype behavior.** It is not the progression loop or a reason to keep the renderer open in the released game.
+- **No offline construction rule is legacy prototype behavior.** Real-world visits and asynchronous shared outcomes replace app-open attention as the meaningful player contribution.
 - **No percentage anywhere.** Progress is said as "Storey 2" and "Services",
   never "43%". The moment progress is a number somebody optimises it, and the
   only way to optimise anything here is to leave the phone alone longer than you

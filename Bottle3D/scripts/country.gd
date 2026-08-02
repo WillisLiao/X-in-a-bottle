@@ -49,6 +49,8 @@ const CANOPY_CLUMPS := 52
 
 var _active := -1
 var _built := {}
+var _map := 0.0
+var _community: CommunityRoads
 
 
 ## Redraws for a new active region. Everything is positioned relative to
@@ -77,12 +79,39 @@ func show_from(active: int, force := false) -> void:
 	for pair in Region.links():
 		add_child(Causeway.new(pair.x, pair.y, active).mesh())
 
+	# This stands above the distant terrain rather than trying to masquerade as
+	# a close-up path. The first location slice is a map-level proof that walked
+	# routes have become shared world geometry.
+	_community = CommunityRoads.new(RouteBook.load(), active)
+	_community.set_map(_map)
+	add_child(_community)
+
 
 ## Where a region's centre is right now, in the coordinates everything else in
 ## the scene is using. The active region answers with the origin, because that
 ## is where it is.
 func where(index: int) -> Vector3:
 	return Region.offset(index, _active)
+
+
+func set_map(amount: float) -> void:
+	_map = clampf(amount, 0.0, 1.0)
+	if _community:
+		_community.set_map(_map)
+
+
+func claim_rumor(at: Vector2, camera: Camera3D) -> bool:
+	if _community == null or not _community.claim_at(at, camera):
+		return false
+	# A claimed spark becomes a small permanent roadside stone immediately.
+	# Rebuilding the low-cost far world is simpler and less error-prone than
+	# keeping a second visual state next to RouteBook's authoritative one.
+	show_from(_active, true)
+	return true
+
+
+func rumor_positions() -> Array:
+	return _community.rumor_positions() if _community else []
 
 
 func _far_region(index: int) -> Node3D:
@@ -106,11 +135,6 @@ func _far_region(index: int) -> Node3D:
 	_scatter_canopy(root, land, wear, index)
 	if Progress.settled(index):
 		_light_hearth(root, land)
-	if Region.requires_purchase(index) and not Progress.purchased(index):
-		# The actual padlock is screen space, so it remains readable at every
-		# map distance. This marker is kept on the real region that owns it,
-		# rather than in a second list of map annotations.
-		root.set_meta("map_lock", true)
 	return root
 
 

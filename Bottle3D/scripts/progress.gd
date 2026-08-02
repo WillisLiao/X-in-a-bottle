@@ -168,36 +168,34 @@ static func settle(region: int) -> void:
 	_open().set_value("world", "settled", found)
 
 
-## Which paid gates have been removed.
-## This is world state rather than a region record because a purchase belongs to
-## the person holding the bottle, not to the site behind the gate.
-static func purchased_regions() -> PackedInt32Array:
-	var cfg := _open()
-	return PackedInt32Array(cfg.get_value("world", "purchased", PackedInt32Array()))
+## Coarse fantasy-world crossings, not a record of the phone's locations.
+## `RouteBook` owns their binary shape so a future server can provide the same
+## data without teaching this persistence layer about location sampling.
+static func community_roads() -> PackedInt32Array:
+	return PackedInt32Array(_open().get_value("world", "community_roads",
+		PackedInt32Array()))
 
 
-static func purchased(region: int) -> bool:
-	return purchased_regions().has(region)
+static func set_community_roads(words: PackedInt32Array) -> void:
+	_open().set_value("world", "community_roads", words)
 
 
-static func set_purchased(region: int, value: bool) -> void:
-	if not Region.requires_purchase(region):
-		return
-	var found := purchased_regions()
-	if value and not found.has(region):
-		found.append(region)
-	elif not value:
-		var at := found.find(region)
-		if at >= 0:
-			found.remove_at(at)
-	_open().set_value("world", "purchased", found)
+static func community_sites() -> PackedInt32Array:
+	return PackedInt32Array(_open().get_value("world", "community_sites",
+		PackedInt32Array()))
 
 
-## Local debug seam for the StoreKit session that does not exist yet.
-## `--purchase=<region>` calls this so both the locked and unlocked map can be
-## captured without manufacturing a native purchase flow in this project.
-static func toggle_purchased(region: int) -> void:
-	set_purchased(region, not purchased(region))
+static func set_community_sites(words: PackedInt32Array) -> void:
+	_open().set_value("world", "community_sites", words)
+
+
+static func claimed_rumors() -> PackedStringArray:
+	return PackedStringArray(_open().get_value("world", "claimed_rumors",
+		PackedStringArray()))
+
+
+static func set_claimed_rumors(ids: PackedStringArray) -> void:
+	_open().set_value("world", "claimed_rumors", ids)
 
 
 ## Whether the start screen has ever been got past. Used only to decide whether

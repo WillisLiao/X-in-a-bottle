@@ -44,22 +44,25 @@ The settlement is a collectible self-portrait rather than a generic base.
 **Asynchronous cooperation.** A bridge, tower, market, or festival can collect thousands of small contributions over days.
 It is not a timed raid that excludes people who cannot appear at a particular hour.
 
-## First vertical slice
+## First vertical slice - built 2026-08-02
 
 This slice proves one claim locally before accounts, map data, or a server exist.
-An injected route sample becomes a persistent, visible trade road in the existing world map and reveals a place-bound rumor.
+An injected route sample becomes a persistent visible trade road in the existing world map and reveals a claimable place-bound rumor.
+`--route-reset --route=meadow-shore` produces the clean capture state.
 
 The first implementation stores coarse fantasy-world cells rather than raw latitude and longitude.
 That keeps the local prototype private and compact.
 It also creates the right seam for a future trusted location service, which can submit validated cell crossings without changing the road renderer.
 
-The current five-region world, builders, food event, and paid locks are legacy prototype material.
+The current five-region world, builders, and food event are legacy prototype material.
 They may be reused as visual and construction machinery, but they are not the released game's progression loop.
+Paid locks have been removed.
 
 ## Technical shape
 
-`RouteBook` owns route compression, crossing accumulation, seeded rumors, persistence, and the interface that a future server will replace.
+`RouteBook` owns route compression, crossing accumulation, place-bound rumor identity, persistence, and the interface that a future server will replace.
 `CommunityRoads` turns the book's immutable road segments into low-cost world geometry.
+`RumorMarks` is the custom-drawn map overlay that makes an unclaimed site readable without labels or numbers.
 The input source is deliberately outside both modules.
 The first source is a capture-only debug route.
 The real source will later be a native iOS location bridge with explicit consent and a server-authoritative anti-spoofing path.
