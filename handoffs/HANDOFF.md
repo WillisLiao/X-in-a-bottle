@@ -70,6 +70,10 @@ The route ledger stores coarse fantasy cells rather than raw GPS trails.
 The earlier feed and app-open construction progression are prototype machinery rather than the released game's loop.
 The paid locks were removed with the living-world slice.
 
+**Next work: `handoffs/NEXT-SESSION-map-first-field-loop.md`.**
+The owner correctly noted that the app still looks like the retired passive builder because its title enters the close construction view.
+The next pass makes the living field map the first view, freezes legacy construction while that field is open, and makes a close village a deliberate camera descent.
+
 **In order:**
 
 - **What a second and third site build.** Still the largest genuine unknown in

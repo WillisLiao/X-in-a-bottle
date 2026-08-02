@@ -208,6 +208,9 @@ Bottle3D/scripts/
 The local vertical slice is built: a debug coarse route persists as a map road and reveals a claimable rumor.
 It has no raw GPS storage, location permissions, accounts, backend, or StoreKit work.
 
+`NEXT-SESSION-map-first-field-loop.md` - next.
+It turns the existing continuous map into the game's actual front door and demotes the passive construction view to a village visit.
+
 `NEXT-SESSION-feeding-and-locks.md` - completed historical work from 2026-08-02.
 It removed the stillness rule and camera pan bounds and added the two-hour coastline feed.
 Its paid-lock portion was removed by the living-world pivot.
