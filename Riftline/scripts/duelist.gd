@@ -15,7 +15,8 @@ const HEALTH := 100.0
 const WALK_SPEED := 7.2
 const FIRE_COOLDOWN := 0.26
 const FIRE_RANGE := 48.0
-const FIRE_DAMAGE := 34.0
+# Four rifle hits leave eight health, so a clean five-hit exchange decides a duel.
+const FIRE_DAMAGE := 23.0
 const GRAVITY := 26.0
 const JUMP_SPEED := 9.3
 
