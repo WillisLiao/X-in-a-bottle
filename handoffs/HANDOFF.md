@@ -56,12 +56,13 @@ scripts/causeway.gd  the necks between regions - and they answer `height`,
                      which is what lets an elf walk out of its own region
 ```
 
-**Next: `handoffs/NEXT-SESSION-feeding-and-locks.md`.** On 2026-08-02 the owner
-decided four changes, the largest of which removes the stillness rule - the
-premise this whole app was built on. Three of the four reverse decisions
-recorded below under "worth not relitigating", so **the first task of that
-session is to correct this file**, before any code moves. Nothing in it is
-built.
+**Current work: `handoffs/NEXT-SESSION-feeding-and-locks.md`.**
+On 2026-08-02 the owner removed the stillness rule, chose a two-hour food feed
+with a world-native coastline indicator, and decided that the Dunes and Ice
+are paid regions.
+The feed and locks are product decisions, not optional experiments.
+The actual StoreKit purchase flow remains deliberately separate from the local
+lock and gate.
 
 `handoffs/NEXT-SESSION-what-the-other-sites-build.md` is still the larger design
 question and is not superseded by any of it. It now carries the owner's answers
@@ -108,22 +109,26 @@ buys nothing a user can see. The people are hobbits and trolls.
 
 The phone is the bottle, so nothing draws a vessel.
 One world of five regions, each with one three-storey house on it that takes
-about a week of held stillness to finish, and one rule holding the whole thing
-up.
+about a week of app-open time to finish.
+The hobbits build whether the phone is still, in a pocket, or being carried.
+There is no accelerometer-based penalty, population curve, or lost work.
 
-> **They only build while the phone is still.**
+Every two hours of app-open time in the watched region, its coastline finishes
+lighting up and begins to breathe.
+Tap anywhere on that region while it is not resting to call down a meal.
+They cook fish, eat the meal, then work at three times speed for ten minutes.
+The coastline is the feed's only progress indicator.
+It is a world event rather than a HUD or a timer.
 
-Move it and they down tools and some of them leave.
-Put it down and they come back, over the next fifteen minutes, and get on with
-it.
-There is nothing else to do.
+The Shore and Green open when a hobbit carries a lantern to them.
+The Dunes and Ice are paid regions.
+Payment removes their lock, but a lantern must still settle them.
+The purchase implementation is intentionally outside the Godot layer until a
+separate StoreKit session.
 
 **Nothing that has been built ever comes apart.**
-A disturbance costs you hours forwards, by taking the crew away and making them
-walk back, and never backwards.
-That rule changed on 2026-08-01 and it is not going back: against a build that
-takes a week, a mechanic that can undo an evening is one that teaches people not
-to open the app.
+Against a build that takes a week, a mechanic that can undo an evening teaches
+people not to open the app.
 
 **Every hour of building they stop for a quarter of an hour**, and that break
 runs down only while the app is open on that region - not on another region,
@@ -135,12 +140,9 @@ Movement during a break costs nothing, because charging somebody for picking
 their phone up during a rest would make the rest a second shift.
 
 **Touching the screen is free.**
-It used to cost, and that punished turning the island round to see what was
-happening on the far side - it charged the user for paying attention, in an app
-whose subject is attention.
-The cost is movement alone, on the accelerometer.
-So drag orbits, pinch zooms, and a phone flat on a desk with a finger on it is
-perfectly still.
+Drag orbits, pinch zooms, and taps do not cost progress.
+The small tilt parallax remains because it makes the phone feel like a bottle,
+not because it controls work.
 
 ## The three pieces
 
@@ -236,11 +238,20 @@ silently reverted the renderer and the orientation once each.
 
 ## Decisions worth not relitigating
 
-- **One-time purchase, never a subscription.** A focus product that bills
-  monthly is self-refuting.
+- **The Dunes and Ice are one-time paid unlocks, never subscriptions.**
+  A purchase only removes a gate.
+  A lantern still settles the region, and work still costs app-open attention.
+- **No StoreKit flow lives in the Godot project yet.**
+  The local `Progress` purchase flag, the gate, and the map lock are a seam for
+  a later native purchase session.
+- **The two-hour meal is intentionally a dramatic speed-up.**
+  It rains food, visibly interrupts work, and triples the crew's pace and build
+  rate for ten minutes.
+  The coastline supplies its non-numeric progress signal.
 - **No offline progress, ever.** The only thing that moves this app forward is a
-  phone lying still with the screen on. An elf who laid a joist while you were
-  asleep would be a lie about what you did.
+  phone with the app open.
+  A hobbit who laid a joist while you were asleep would be a lie about what you
+  did.
 - **No percentage anywhere.** Progress is said as "Storey 2" and "Services",
   never "43%". The moment progress is a number somebody optimises it, and the
   only way to optimise anything here is to leave the phone alone longer than you
