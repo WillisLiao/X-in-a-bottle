@@ -56,20 +56,21 @@ scripts/causeway.gd  the necks between regions - and they answer `height`,
                      which is what lets an elf walk out of its own region
 ```
 
-**Current work: `handoffs/NEXT-SESSION-feeding-and-locks.md`.**
-On 2026-08-02 the owner removed the stillness rule, chose a two-hour food feed
-with a world-native coastline indicator, and decided that the Dunes and Ice
-are paid regions.
-The feed and locks are product decisions, not optional experiments.
-The actual StoreKit purchase flow remains deliberately separate from the local
-lock and gate.
+**Completed 2026-08-02: `handoffs/NEXT-SESSION-feeding-and-locks.md`.**
+The camera no longer has pan bounds.
+The stillness rule is gone while tilt parallax and the work-and-rest cycle remain.
+Every region now has a two-hour app-open feed shown by its coastline, which calls down food and grants a temporary three-times work haste.
+The Dunes and Ice now have local `Progress` gates and white map padlocks.
+The actual StoreKit purchase flow remains deliberately separate from the local lock and gate.
 
-`handoffs/NEXT-SESSION-what-the-other-sites-build.md` is still the larger design
-question and is not superseded by any of it. It now carries the owner's answers
-to most of it: regions grow **villages** of houses, drawn at random from a
-per-region style, no two alike, built from a grammar rather than a hundred
-authored queues - and **one travelling band of builders** moves through the
-world, leaving each finished region with permanent residents of its own.
+**Next: `handoffs/NEXT-SESSION-what-the-other-sites-build.md`.**
+Execute `handoffs/NEXT-SESSION-what-the-other-sites-build.md`.
+Start with the save-format work: `Progress` must become per-site rather than per-region, and a per-house seed plus generator version must be saved before any grammar exists.
+Getting that wrong silently rebuilds the wrong buildings from valid saves.
+
+That handoff carries the owner's answers to most of the larger design question.
+Regions grow **villages** of houses, drawn at random from a per-region style, no two alike, built from a grammar rather than a hundred authored queues.
+One travelling band of builders moves through the world, leaving each finished region with permanent residents of its own.
 
 **In order:**
 
@@ -113,8 +114,7 @@ about a week of app-open time to finish.
 The hobbits build whether the phone is still, in a pocket, or being carried.
 There is no accelerometer-based penalty, population curve, or lost work.
 
-Every two hours of app-open time in the watched region, its coastline finishes
-lighting up and begins to breathe.
+Every two hours of app-open time in the watched region, its coastline finishes lighting up and begins to breathe.
 Tap anywhere on that region while it is not resting to call down a meal.
 They cook fish, eat the meal, then work at three times speed for ten minutes.
 The coastline is the feed's only progress indicator.
@@ -130,14 +130,10 @@ separate StoreKit session.
 Against a build that takes a week, a mechanic that can undo an evening teaches
 people not to open the app.
 
-**Every hour of building they stop for a quarter of an hour**, and that break
-runs down only while the app is open on that region - not on another region,
-not in a pocket.
+**Every hour of building they stop for a quarter of an hour**, and that break runs down only while the app is open on that region.
 There is deliberately nothing to do while it does.
-Take the break with them and they are ready when you get back; don't, and they
-are still sitting there.
-Movement during a break costs nothing, because charging somebody for picking
-their phone up during a rest would make the rest a second shift.
+Take the break with them and they are ready when you get back; do not, and they are still sitting there.
+Tilt and ordinary phone movement do not affect a break.
 
 **Touching the screen is free.**
 Drag orbits, pinch zooms, and taps do not cost progress.
@@ -169,8 +165,7 @@ way from iron, the Green fights you for stone.
 Same blueprint, five different arguments about what to do next.
 
 **`elf_world.gd` - the region and the people in it.**
-Gather, craft, haul, deliver, fit, plus rest, look, idle, private errands and
-fishing.
+Gather, craft, haul, deliver, fit, eat and cook, plus rest, look, idle, private errands and fishing.
 Everything carried is a real object lifted off a real heap.
 
 ## On the elves

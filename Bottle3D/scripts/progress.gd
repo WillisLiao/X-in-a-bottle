@@ -19,7 +19,7 @@ extends RefCounted
 ## moves this app forward is an app-open region, and a hobbit who laid a joist
 ## while you were asleep would be a lie about what you did.
 ##
-## Four things are kept per island.
+## Six things are kept per region.
 ##
 ## **The queue.** Which works are finished. The house is rebuilt from this on
 ## load, instantly and silently, so opening an island on the fourth day shows you
@@ -40,6 +40,10 @@ extends RefCounted
 ##
 ## **The hours.** How much app-open time this region has had, plus where it is
 ## in the work-and-rest cycle.
+##
+## **The feed.** Its two-hour coastline charge and any remaining meal haste.
+## The food itself is a transient scene, so restarting does not leave a meal
+## hanging in the air or a hobbit holding an object whose owner is gone.
 ##
 ## **The paths.** Where they have walked, a byte per patch of ground. The one
 ## record in here that is a picture rather than a number, and the only one the

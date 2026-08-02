@@ -187,7 +187,9 @@ Bottle3D/scripts/
   causeway.gd    the necks between regions - and they answer `height`
   wear.gd        where they have walked. One byte a patch, only ever up
   progress.gd    what survives being put down
-  charge.gd      the stillness rule. Being deleted, see the handoff
+  feast.gd       the two-hour feed rim and the food item meshes
+  coast.gdshader the coastline feed fill, head and breathing outline
+  lock_marks.gd  the paid-region padlocks, drawn by a custom Control
   ground.gdshader  ground colour plus the worn paths
 ```
 
@@ -198,16 +200,14 @@ Bottle3D/scripts/
 
 ## The handoffs
 
-`NEXT-SESSION-feeding-and-locks.md` - remove the stillness rule, add the
-two-hour feed with the coastline as its progress indicator, drop the camera
-bounds, add paid regions. Four changes, three of which reverse decisions the
-docs list as settled. **The first task of that session is correcting
-`HANDOFF.md`**, which still describes the app as it was.
+`NEXT-SESSION-feeding-and-locks.md` - completed 2026-08-02.
+It removed the stillness rule and camera pan bounds, added the two-hour coastline feed, and gated the Dunes and Ice with local locks.
+StoreKit remains deliberately outside the Godot project.
 
-`NEXT-SESSION-what-the-other-sites-build.md` - the larger design question, now
-partly answered: regions grow villages, houses come from a grammar rather than a
-hundred authored queues, and one travelling band of builders moves through a
-world whose finished regions keep their own permanent residents.
+`NEXT-SESSION-what-the-other-sites-build.md` - next.
+Start with the save-format work.
+`Progress` must become per-site rather than per-region, and every house needs a saved seed and generator version before a grammar exists.
+Otherwise valid saves silently rebuild the wrong houses.
 
 `DESIGN-one-world.md` - the pivot that produced the current shape. Mostly built.
 Its business model section is contradicted by the paid regions above and needs
