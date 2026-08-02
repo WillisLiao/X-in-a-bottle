@@ -2,6 +2,8 @@ class_name RiftlineArena
 extends Node3D
 
 const PULP_LIT := preload("res://shaders/pulp_lit.gdshader")
+const SUN_COVER_SPAWN := Vector3(-15.0, 0.1, 6.0)
+const VOID_COVER_SPAWN := Vector3(16.0, 0.1, -6.0)
 
 var player: Duelist
 var bot: BotDuelist
@@ -104,13 +106,15 @@ func _build_arena() -> void:
 func _build_match() -> void:
 	director = MatchDirector.new()
 	add_child(director)
-	director.add_spawn(Duelist.Team.SUN, Vector3(-13, 0.1, 0))
-	director.add_spawn(Duelist.Team.VOID, Vector3(13, 0.1, 0))
+	# Each duelist begins with its gray lane block between it and the center.
+	# This makes the first action a deliberate peek rather than an instant sight-line.
+	director.add_spawn(Duelist.Team.SUN, SUN_COVER_SPAWN)
+	director.add_spawn(Duelist.Team.VOID, VOID_COVER_SPAWN)
 
 	player = Duelist.new()
 	player.name = "SunDuelist"
 	player.build(Duelist.Team.SUN, true)
-	player.position = Vector3(-13, 0.1, 0)
+	player.position = SUN_COVER_SPAWN
 	player.rotation.y = -PI * 0.5
 	add_child(player)
 	director.register_duelist(player)
@@ -118,7 +122,7 @@ func _build_match() -> void:
 	bot = BotDuelist.new()
 	bot.name = "VoidDuelist"
 	bot.build(Duelist.Team.VOID, false)
-	bot.position = Vector3(11, 0.1, 0)
+	bot.position = VOID_COVER_SPAWN
 	bot.rotation.y = PI * 0.5
 	bot.target = player
 	add_child(bot)
