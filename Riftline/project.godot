@@ -6,6 +6,7 @@ config_version=5
 
 config/name="Riftline"
 run/main_scene="res://main.tscn"
+config/icon="res://icons/icon_1024.png"
 config/features=PackedStringArray("4.7", "Mobile")
 
 [display]
@@ -50,5 +51,7 @@ jump={
 
 renderer/rendering_method="mobile"
 renderer/rendering_method.mobile="mobile"
+; iOS accepts only projects that prepare portable ETC2/ASTC texture data.
+textures/vram_compression/import_etc2_astc=true
 textures/default_filters/use_nearest_mipmap_filter=false
 environment/defaults/default_clear_color=Color(0.0196078, 0.027451, 0.0705882, 1)
