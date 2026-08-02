@@ -25,6 +25,7 @@ var health := HEALTH
 var eliminated := false
 var stance: Stance = Stance.STAND
 var weapon: Weapon = Weapon.PULSE
+var match_active := false
 var _fire_remaining := 0.0
 var _collision: CollisionShape3D
 var _capsule: CapsuleShape3D
@@ -99,9 +100,19 @@ func apply_look(delta: Vector2) -> void:
 	rotate_y(-delta.x * 0.006)
 	head.rotation.x = clampf(head.rotation.x - delta.y * 0.006, -1.05, 0.9)
 
+func set_match_active(active: bool) -> void:
+	match_active = active
+	if not active:
+		velocity.x = 0.0
+		velocity.z = 0.0
+		_fire_remaining = 0.0
+
 func set_stance(next_stance: Stance) -> void:
-	if eliminated or stance == next_stance:
+	if eliminated or not match_active or stance == next_stance:
 		return
+	_apply_stance(next_stance)
+
+func _apply_stance(next_stance: Stance) -> void:
 	stance = next_stance
 	var body_height := 1.8
 	var body_radius := 0.48
@@ -133,7 +144,9 @@ func set_combat_pose(aiming: bool, delta: float) -> void:
 		camera.fov = lerpf(camera.fov, 56.0 if aiming else 78.0, minf(1.0, delta * 13.0))
 
 func drive(move_input: Vector2, wants_fire: bool, wants_jump: bool, delta: float) -> void:
-	if eliminated:
+	if eliminated or not match_active:
+		velocity.x = 0.0
+		velocity.z = 0.0
 		return
 	_fire_remaining = maxf(0.0, _fire_remaining - delta)
 
@@ -161,7 +174,7 @@ func drive(move_input: Vector2, wants_fire: bool, wants_jump: bool, delta: float
 		fire_forward()
 
 func fire_forward() -> void:
-	if eliminated or _fire_remaining > 0.0:
+	if eliminated or not match_active or _fire_remaining > 0.0:
 		return
 	_fire_remaining = FIRE_COOLDOWN if weapon == Weapon.PULSE else 0.72
 	var origin := head.global_position + -head.global_transform.basis.z * 0.46
@@ -175,19 +188,21 @@ func fire_forward() -> void:
 		_fire_ray(origin, pellet, 13.0, 17.0)
 
 func fire_at(target: Vector3) -> void:
-	if eliminated or _fire_remaining > 0.0:
+	if eliminated or not match_active or _fire_remaining > 0.0:
 		return
 	_fire_remaining = FIRE_COOLDOWN
 	var origin := head.global_position + Vector3.UP * 0.03
 	_fire_ray(origin, (target - origin).normalized(), FIRE_DAMAGE)
 
 func switch_weapon() -> void:
+	if eliminated or not match_active:
+		return
 	weapon = Weapon.SCATTER if weapon == Weapon.PULSE else Weapon.PULSE
 	var color := Color("ffc05b") if weapon == Weapon.PULSE else Color("b479ff")
 	_weapon_mesh.material_override = _material(color, 0.65)
 
 func take_damage(amount: float, attacker: Duelist) -> void:
-	if eliminated:
+	if eliminated or not match_active:
 		return
 	health = maxf(0.0, health - amount)
 	damaged.emit(amount, health)
@@ -204,7 +219,7 @@ func respawn_at(point: Vector3) -> void:
 	eliminated = false
 	visible = true
 	collision_layer = 2
-	set_stance(Stance.STAND)
+	_apply_stance(Stance.STAND)
 
 func _fire_ray(origin: Vector3, direction: Vector3, damage: float, range: float = FIRE_RANGE) -> void:
 	var query := PhysicsRayQueryParameters3D.create(origin, origin + direction * range, 1 | 2)

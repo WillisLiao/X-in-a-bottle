@@ -24,18 +24,30 @@ func _ready() -> void:
 	_build_match()
 	_build_hud()
 	_read_capture_arguments()
+	director.begin()
 	if not _capture_path.is_empty():
 		_capture_after_delay()
 
 func _physics_process(delta: float) -> void:
 	if player == null:
 		return
-	var keyboard := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
-	var movement := hud.movement if hud.movement.length_squared() > 0.001 else keyboard
+	if hud.take_rematch():
+		director.take_rematch()
 	player.apply_look(hud.take_look_delta())
 	if hud.gyro_enabled:
 		var gyroscope := Input.get_gyroscope()
 		player.apply_look(Vector2(gyroscope.y, -gyroscope.x) * 2.4)
+	if not director.is_live() or not hud.can_drive_combat():
+		# Non-live beats can still show the arena and accept camera look, but no combat intent survives into the next phase.
+		hud.take_jump()
+		hud.take_crouch()
+		hud.take_prone()
+		hud.take_weapon_switch()
+		player.set_combat_pose(false, delta)
+		player.drive(Vector2.ZERO, false, false, delta)
+		return
+	var keyboard := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
+	var movement := hud.movement if hud.movement.length_squared() > 0.001 else keyboard
 	if hud.take_crouch():
 		player.toggle_crouch()
 	if hud.take_prone():
@@ -142,12 +154,18 @@ func _build_hud() -> void:
 	add_child(layer)
 	hud = DuelHud.new()
 	layer.add_child(hud)
+	director.phase_changed.connect(_on_phase_changed)
+	director.match_finished.connect(hud.show_match_result)
 
 func _on_player_damaged(_amount: float, remaining: float) -> void:
 	hud.show_damage(remaining)
 
 func _on_score_changed(sun: int, void_score: int) -> void:
 	hud.set_score(sun, void_score)
+
+func _on_phase_changed(phase: MatchDirector.Phase) -> void:
+	hud.set_match_phase(phase)
+	hud.set_combat_input_enabled(phase == MatchDirector.Phase.LIVE)
 
 func _show_shot(origin: Vector3, end: Vector3, team: Duelist.Team) -> void:
 	var beam := MeshInstance3D.new()

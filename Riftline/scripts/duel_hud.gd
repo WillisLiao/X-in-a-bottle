@@ -1,6 +1,7 @@
 class_name DuelHud
 extends Control
 
+
 const CONFIG_PATH := "user://riftline_controls.cfg"
 const LAYOUT_SECTION := "hud_layout_v1"
 const SNAP_POINTS := 8.0
@@ -45,6 +46,11 @@ var _editor_drag_start := Vector2.ZERO
 var _editor_start_center := Vector2.ZERO
 var _editor_dragging := false
 var _layout_dirty := false
+var _combat_input_enabled := true
+var _match_result_visible := false
+var _match_result_victory := false
+var _rematch_requested := false
+var _match_phase: MatchDirector.Phase = MatchDirector.Phase.OPENING
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -106,11 +112,45 @@ func open_hud_layout() -> void:
 	_layout_dirty = false
 	queue_redraw()
 
+func set_combat_input_enabled(enabled: bool) -> void:
+	_combat_input_enabled = enabled
+	if not enabled:
+		_release_all_touch_ownership()
+	queue_redraw()
+
+func can_drive_combat() -> bool:
+	return _combat_input_enabled and not _settings_open and not _layout_editor and not _match_result_visible
+
+func set_match_phase(phase: MatchDirector.Phase) -> void:
+	_match_phase = phase
+	if phase != MatchDirector.Phase.FINISHED:
+		_match_result_visible = false
+		_rematch_requested = false
+	queue_redraw()
+
+func show_match_result(winner: Duelist.Team) -> void:
+	_match_result_victory = winner == Duelist.Team.SUN
+	_match_result_visible = true
+	_rematch_requested = false
+	_release_all_touch_ownership()
+	queue_redraw()
+
+func take_rematch() -> bool:
+	var requested := _rematch_requested
+	_rematch_requested = false
+	return requested
+
 func show_damage(current_health: float) -> void:
 	health = current_health
 	damage_flash = 1.0
 
 func _gui_input(event: InputEvent) -> void:
+	if _match_result_visible:
+		if event is InputEventScreenTouch and event.pressed and _rematch_rect().grow(12.0).has_point(event.position):
+			_rematch_requested = true
+		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed and _rematch_rect().grow(12.0).has_point(event.position):
+			_rematch_requested = true
+		return
 	if event is InputEventScreenTouch:
 		if _layout_editor:
 			_handle_editor_touch(event.index, event.position, event.pressed)
@@ -144,6 +184,8 @@ func _handle_touch(index: int, point: Vector2, pressed: bool) -> void:
 		return
 	if _pressed_circle(point, _settings_center(), 30.0):
 		open_settings()
+		return
+	if not _combat_input_enabled:
 		return
 	var key := _layout_key_at(point)
 	if key == "move":
@@ -286,6 +328,12 @@ func _draw_gameplay_hud() -> void:
 		draw_circle(Vector2(size.x * 0.5 + 19.0 + score * 13.0, safe.position.y + 18), 4.0, enemy)
 	if damage_flash > 0.0:
 		draw_rect(Rect2(Vector2.ZERO, size), Color(1.0, 0.18, 0.1, damage_flash * 0.16), false, 22.0)
+	if _match_result_visible:
+		_draw_match_result()
+	elif _match_phase == MatchDirector.Phase.OPENING:
+		_draw_round_beat("READY", "HOLD THE LINE", friendly)
+	elif _match_phase == MatchDirector.Phase.INTERMISSION:
+		_draw_round_beat("LINES RESETTING", "FIND THE NEXT PEEK", enemy)
 
 func _draw_button(key: String, color: Color, active: bool) -> void:
 	var spec: Dictionary = _control_specs()[key]
@@ -310,6 +358,52 @@ func _draw_weapon_indicator(color: Color) -> void:
 		for offset in [-10.0, 0.0, 10.0]:
 			draw_circle(center + Vector2(offset, 0), 5.0, Color("c292ff"))
 
+func _draw_match_result() -> void:
+	var accent := Color("ffad5d") if _match_result_victory else Color("71cfff")
+	var card := _match_result_card()
+	draw_rect(Rect2(Vector2.ZERO, size), Color("020612", 0.78))
+	draw_rect(card, Color("0b1730", 0.99))
+	draw_line(card.position, card.position + Vector2(card.size.x, 0), accent, 3.0)
+	var emblem := card.position + Vector2(54, 62)
+	if _match_result_victory:
+		var diamond := PackedVector2Array([emblem + Vector2(0, -22), emblem + Vector2(22, 0), emblem + Vector2(0, 22), emblem + Vector2(-22, 0)])
+		draw_colored_polygon(diamond, Color(accent, 0.26))
+		draw_polyline(diamond, Color(accent, 0.96), 2.5)
+	else:
+		draw_circle(emblem, 22.0, Color(accent, 0.2))
+		draw_arc(emblem, 22.0, 0.0, TAU, 24, accent, 2.5)
+		draw_line(emblem + Vector2(-10, -10), emblem + Vector2(10, 10), accent, 2.5)
+		draw_line(emblem + Vector2(10, -10), emblem + Vector2(-10, 10), accent, 2.5)
+	var font := ThemeDB.fallback_font
+	var title := "VICTORY" if _match_result_victory else "DEFEAT"
+	draw_string(font, card.position + Vector2(98, 67), title, HORIZONTAL_ALIGNMENT_LEFT, -1, 30, Color("f1f6ff"))
+	draw_string(font, card.position + Vector2(100, 94), "THE RIFT HOLDS" if _match_result_victory else "THE RIFT PUSHES BACK", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(accent, 0.92))
+	draw_string(font, card.position + Vector2(32, 128), "RESET THE DUEL AND TRY A NEW LINE", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("b6c9e8"))
+	draw_rect(_rematch_rect(), Color(accent, 0.16), true)
+	draw_rect(_rematch_rect(), Color(accent, 0.92), false, 1.8)
+	var label := "REMATCH"
+	var label_width := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
+	draw_string(font, _rematch_rect().get_center() + Vector2(-label_width * 0.5, 6), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, accent)
+
+func _draw_round_beat(title: String, subtitle: String, accent: Color) -> void:
+	var center := size * 0.5 + Vector2(0, 72)
+	var width := 290.0 if title == "READY" else 380.0
+	var rect := Rect2(center - Vector2(width * 0.5, 28), Vector2(width, 56))
+	draw_rect(rect, Color("071126", 0.72))
+	draw_line(rect.position, rect.position + Vector2(rect.size.x, 0), accent, 2.0)
+	var font := ThemeDB.fallback_font
+	var title_width := font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, 18).x
+	draw_string(font, center + Vector2(-title_width * 0.5, 2), title, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color("f1f6ff"))
+	var subtitle_width := font.get_string_size(subtitle, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
+	draw_string(font, center + Vector2(-subtitle_width * 0.5, 20), subtitle, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(accent, 0.9))
+
+func _match_result_card() -> Rect2:
+	return Rect2(size * 0.5 - Vector2(260, 130), Vector2(520, 260))
+
+func _rematch_rect() -> Rect2:
+	var card := _match_result_card()
+	return Rect2(card.position + Vector2(140, 174), Vector2(240, 54))
+
 func _pressed_circle(point: Vector2, center: Vector2, radius: float) -> bool:
 	return point.distance_squared_to(center) <= radius * radius
 
@@ -331,15 +425,15 @@ func _handle_settings_touch(point: Vector2, pressed: bool) -> void:
 		ads_sensitivity = clampf((point.x - ads_track.position.x) / ads_track.size.x * 1.4 + 0.3, 0.3, 1.7)
 		_save_control_settings()
 		return
-	if Rect2(panel.position + Vector2(24, 168), Vector2(142, 42)).has_point(point):
+	if Rect2(panel.position + Vector2(24, 168), Vector2(142, 44)).has_point(point):
 		_aim_toggle = not _aim_toggle
 		_save_control_settings()
 		return
-	if Rect2(panel.position + Vector2(184, 168), Vector2(142, 42)).has_point(point):
+	if Rect2(panel.position + Vector2(184, 168), Vector2(142, 44)).has_point(point):
 		gyro_enabled = not gyro_enabled
 		_save_control_settings()
 		return
-	if Rect2(panel.position + Vector2(24, 222), Vector2(210, 42)).has_point(point):
+	if Rect2(panel.position + Vector2(24, 222), Vector2(210, 44)).has_point(point):
 		open_hud_layout()
 
 func _draw_settings_panel(friendly: Color, enemy: Color) -> void:
@@ -353,10 +447,10 @@ func _draw_settings_panel(friendly: Color, enemy: Color) -> void:
 	draw_string(font, panel.position + Vector2(24, 137), "ADS", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, enemy)
 	_draw_setting_slider(panel.position + Vector2(154, 88), panel.size.x - 190, camera_sensitivity, friendly)
 	_draw_setting_slider(panel.position + Vector2(154, 134), panel.size.x - 190, ads_sensitivity, friendly)
-	_draw_setting_chip(Rect2(panel.position + Vector2(24, 168), Vector2(142, 42)), "AIM %s" % ("TAP" if _aim_toggle else "HOLD"), friendly, _aim_toggle)
-	_draw_setting_chip(Rect2(panel.position + Vector2(184, 168), Vector2(142, 42)), "GYRO %s" % ("ON" if gyro_enabled else "OFF"), Color("c292ff"), gyro_enabled)
-	_draw_setting_chip(Rect2(panel.position + Vector2(344, 168), Vector2(142, 42)), "QUICK SWAP", Color("c292ff"), true)
-	_draw_setting_chip(Rect2(panel.position + Vector2(24, 222), Vector2(210, 42)), "HUD LAYOUT", enemy, true)
+	_draw_setting_chip(Rect2(panel.position + Vector2(24, 168), Vector2(142, 44)), "AIM %s" % ("TAP" if _aim_toggle else "HOLD"), friendly, _aim_toggle)
+	_draw_setting_chip(Rect2(panel.position + Vector2(184, 168), Vector2(142, 44)), "GYRO %s" % ("ON" if gyro_enabled else "OFF"), Color("c292ff"), gyro_enabled)
+	_draw_setting_chip(Rect2(panel.position + Vector2(344, 168), Vector2(142, 44)), "QUICK SWAP", Color("c292ff"), true)
+	_draw_setting_chip(Rect2(panel.position + Vector2(24, 222), Vector2(210, 44)), "HUD LAYOUT", enemy, true)
 	draw_string(font, panel.position + Vector2(24, panel.size.y - 22), "Tap outside to return", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("92a7c7"))
 
 func _draw_setting_slider(position: Vector2, width: float, value: float, color: Color) -> void:
@@ -484,6 +578,7 @@ func _apply_editor_action(action: String) -> void:
 			data.opacity = clampf(float(data.opacity) - 0.1, 0.35, 1.0)
 		elif action == "opacity_up":
 			data.opacity = clampf(float(data.opacity) + 0.1, 0.35, 1.0)
+	_enforce_layout_constraints()
 	_layout_dirty = true
 	_save_control_settings()
 	queue_redraw()
@@ -493,7 +588,7 @@ func _editor_panel() -> Rect2:
 
 func _editor_button_rect(button: String) -> Rect2:
 	var panel := _editor_panel()
-	var y := panel.position.y + 84.0
+	var y := panel.position.y + 88.0
 	if button in ["size_down", "size_up", "opacity_down", "opacity_up"]:
 		y = panel.position.y + 42.0
 	var x := panel.position.x
@@ -517,7 +612,7 @@ func _editor_button_rect(button: String) -> Rect2:
 		"done":
 			width = 82.0
 			x += 572.0
-	return Rect2(x, y, width, 34.0)
+	return Rect2(x, y, width, 44.0)
 
 func _settings_panel() -> Rect2:
 	return Rect2(size * 0.5 - Vector2(260, 170), Vector2(520, 340))
@@ -616,6 +711,10 @@ func _set_layout_center(key: String, point: Vector2) -> void:
 			if offset.length() < required:
 				candidate = _clamp_center(other_center + (Vector2.RIGHT if offset.length_squared() < 0.01 else offset.normalized()) * required, radius, safe)
 	_layout[key].center = _normalized_center(candidate, safe)
+
+func _enforce_layout_constraints() -> void:
+	for key in MOVABLE_KEYS:
+		_set_layout_center(key, _control_center(key))
 
 func _clamp_center(point: Vector2, radius: float, safe: Rect2) -> Vector2:
 	return Vector2(clampf(point.x, safe.position.x + radius, safe.end.x - radius), clampf(point.y, safe.position.y + radius, safe.end.y - radius))
