@@ -4,6 +4,7 @@ extends Node3D
 const PULP_LIT := preload("res://shaders/pulp_lit.gdshader")
 const SUN_COVER_SPAWN := Vector3(-15.0, 0.1, 6.0)
 const VOID_COVER_SPAWN := Vector3(16.0, 0.1, -6.0)
+const OPENING_HOLD_SECONDS := 2.5
 
 var player: Duelist
 var bot: BotDuelist
@@ -14,6 +15,7 @@ var _capture_path := ""
 var _capture_after := 2.0
 var _capture_settings := false
 var _capture_character := false
+var _capture_overview := false
 
 func _ready() -> void:
 	_build_environment()
@@ -125,6 +127,7 @@ func _build_match() -> void:
 	bot.position = VOID_COVER_SPAWN
 	bot.rotation.y = PI * 0.5
 	bot.target = player
+	bot.hold_opening_position(OPENING_HOLD_SECONDS)
 	add_child(bot)
 	director.register_duelist(bot)
 
@@ -220,12 +223,19 @@ func _read_capture_arguments() -> void:
 			_capture_settings = true
 		elif argument == "--character":
 			_capture_character = true
+		elif argument == "--overview":
+			_capture_overview = true
 	if _capture_settings:
 		hud.open_settings()
 	if _capture_character:
 		# This is a renderer-only inspection hook for silhouette review, not an alternate gameplay state.
 		bot.position = Vector3(-6.0, 0.1, 0.0)
 		bot.set_physics_process(false)
+	if _capture_overview:
+		# A renderer-only inspection hook that lets captures verify both spawn halves at once.
+		player.camera.cull_mask = 1 | 2
+		player.camera.global_position = Vector3(0.0, 31.0, 27.0)
+		player.camera.look_at(Vector3(0.0, 0.0, 0.0))
 
 func _capture_after_delay() -> void:
 	await get_tree().create_timer(_capture_after).timeout
