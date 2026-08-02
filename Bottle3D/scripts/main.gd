@@ -219,12 +219,6 @@ var _drift := 0.0
 var _pan_mode := false
 var _pan := Vector3.ZERO
 
-## How far the camera may be slid off the middle of a region. Multiplied out as
-## the map opens up, because a limit tuned to a thirteen-metre island would pin
-## the camera to the centre of an eighty-metre world.
-const PAN_LIMIT := 3.4
-const PAN_LIMIT_MAP := 26.0
-
 var _touches := {}
 var _pinch_from := 0.0
 var _pinch_zoom := 1.0
@@ -250,6 +244,7 @@ var _arg_fire := -1
 var _arg_yaw := NAN
 var _arg_zoom := NAN
 var _arg_pitch := NAN
+var _arg_pan := Vector2(NAN, NAN)
 var _capturing := false
 var _elapsed: float = 0.0
 
@@ -294,6 +289,8 @@ func _ready() -> void:
 		_zoom_to = -1.0
 	if not is_nan(_arg_pitch):
 		_pitch = _arg_pitch
+	if not is_nan(_arg_pan.x):
+		_pan = Vector3(_arg_pan.x, 0.0, _arg_pan.y)
 
 	if _arg_fire >= 0 and _world != null:
 		_world.send_fire(_arg_fire)
@@ -525,9 +522,6 @@ func _pan_camera(by: Vector2) -> void:
 
 	_pan -= right * by.x * rate
 	_pan += forward * by.y * rate
-	var limit := lerpf(PAN_LIMIT, PAN_LIMIT_MAP, _map)
-	if _pan.length() > limit:
-		_pan = _pan.normalized() * limit
 	_drift = 14.0
 
 
@@ -1268,6 +1262,10 @@ func _read_capture_args() -> void:
 			# which is most of why nobody noticed it was never on screen.
 			_arg_pitch = clampf(deg_to_rad(float(arg.trim_prefix("--pitch="))),
 				PITCH_MIN, 0.62)
+		elif arg.begins_with("--pan="):
+			var parts := arg.trim_prefix("--pan=").split(",", false)
+			if parts.size() == 2:
+				_arg_pan = Vector2(float(parts[0]), float(parts[1]))
 		elif arg.begins_with("--fire="):
 			# Sends the lantern to a region at launch, so eighty seconds of
 			# somebody walking can be looked at without tapping anything.
