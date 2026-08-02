@@ -40,9 +40,15 @@ scripts/causeway.gd  the necks between regions - and they answer `height`,
                      which is what lets an elf walk out of its own region
 ```
 
-**Next: `handoffs/NEXT-SESSION-what-the-other-sites-build.md`.** It frames the
-one question everything else is now waiting on, and lists the smaller things
-owed alongside it.
+**Next: `handoffs/NEXT-SESSION-feeding-and-locks.md`.** On 2026-08-02 the owner
+decided four changes, the largest of which removes the stillness rule - the
+premise this whole app was built on. Three of the four reverse decisions
+recorded below under "worth not relitigating", so **the first task of that
+session is to correct this file**, before any code moves. Nothing in it is
+built.
+
+`handoffs/NEXT-SESSION-what-the-other-sites-build.md` is still the larger design
+question and is not superseded by any of it.
 
 **In order:**
 
