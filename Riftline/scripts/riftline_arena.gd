@@ -14,6 +14,7 @@ var _mouse_captured := false
 var _capture_path := ""
 var _capture_after := 2.0
 var _capture_settings := false
+var _capture_hud_layout := false
 var _capture_character := false
 var _capture_overview := false
 
@@ -221,12 +222,16 @@ func _read_capture_arguments() -> void:
 			_capture_after = maxf(0.2, argument.trim_prefix("--after=").to_float())
 		elif argument == "--settings":
 			_capture_settings = true
+		elif argument == "--hud-layout":
+			_capture_hud_layout = true
 		elif argument == "--character":
 			_capture_character = true
 		elif argument == "--overview":
 			_capture_overview = true
 	if _capture_settings:
 		hud.open_settings()
+	if _capture_hud_layout:
+		hud.open_hud_layout()
 	if _capture_character:
 		# This is a renderer-only inspection hook for silhouette review, not an alternate gameplay state.
 		bot.position = Vector3(-6.0, 0.1, 0.0)
