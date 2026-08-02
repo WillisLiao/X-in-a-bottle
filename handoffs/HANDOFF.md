@@ -9,6 +9,12 @@ Dated detail goes in `devlogs/`, not here.
 **`Bottle3D/` is the live project. It is called Hobbitle and the bundle ID is
 `com.lull.hobbitle`.** Godot 4.7, landscape.
 
+**If you have not worked in this repo before, read
+`handoffs/WORKING-NOTES.md` next.** It is the tacit knowledge: how to run and
+capture, five failure modes that give no clue what they are, the invariants that
+look like bugs and must not be "fixed", and the house style. All of it was
+learned by losing time to it.
+
 **Read `handoffs/DESIGN-one-world.md` first.** On 2026-08-02 the owner
 decided to drop island-choosing entirely: the five biomes become five regions
 of one world that the hobbits expand across, and the business model is
@@ -48,9 +54,11 @@ session is to correct this file**, before any code moves. Nothing in it is
 built.
 
 `handoffs/NEXT-SESSION-what-the-other-sites-build.md` is still the larger design
-question and is not superseded by any of it. It now carries the owner's answer
+question and is not superseded by any of it. It now carries the owner's answers
 to most of it: regions grow **villages** of houses, drawn at random from a
-per-region style, no two alike. Author a grammar rather than a hundred houses.
+per-region style, no two alike, built from a grammar rather than a hundred
+authored queues - and **one travelling band of builders** moves through the
+world, leaving each finished region with permanent residents of its own.
 
 **In order:**
 

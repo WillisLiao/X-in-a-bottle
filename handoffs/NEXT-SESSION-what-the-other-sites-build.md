@@ -43,6 +43,98 @@ is twelve to twenty single sites, and that document needs amending to match.
 This is a good direction and it answers most of the question this file was
 written to ask. Three things about it want changing or watching.
 
+### Who is in a region: one travelling band, and settlers who never leave
+
+Decided 2026-08-02, and it is the best single idea in this document.
+
+**There is one band of builders and it is the same band all game.** They travel.
+When a region is finished they move on to one that is not.
+
+**Each region also keeps its own people, permanently.** They arrive as the
+village fills and they stay there for the rest of the world's life. They are not
+the band and they never join it.
+
+So there are two populations and they do different jobs:
+
+| | The band | The settlers |
+| --- | --- | --- |
+| How many | About twelve, fixed | Grows with the village |
+| Where | Wherever the work is | The region they belong to, forever |
+| What they do | Build | Live |
+| Saved as | One world-level roster | Per-region seeds |
+| The point of them | Continuity - you know these people | A finished place that is not empty |
+
+#### Why this is better than what was planned
+
+**It answers the crew-size question left open by removing the stillness rule.**
+`NEXT-SESSION-feeding-and-locks.md` asks what sets the population once `Charge`
+is deleted. The answer is now simply: the band is the crew, a fixed roster of
+about twelve, and it travels. No curve, no number, nothing to optimise.
+
+**It removes the second of the two risks `DESIGN-one-world.md` names.** That
+document worried that "attention splits" - a bigger world advancing more slowly
+per unit of attention because only what is watched moves. With one travelling
+band there is only ever *one* place being built, so attention cannot split. The
+other regions are either finished and alive, or settled and waiting. The risk
+does not need managing, it stops existing.
+
+**It gives "finished" something to look like.** A completed region is not a
+switched-off level. It has smoke, lit windows, people wandering and fishing, and
+no scaffolding and no crew. You can go back and look at it, and it is the only
+place in the app where nothing is being worked on and that is the point.
+
+**It makes recognition worth vastly more.** The affinities and the seeded bodies
+already mean you know these twelve. Now you know them for the whole world rather
+than for one island, and the one who laid the first footing in the Meadow is
+still there when the last roof goes on in the Ice. That is the generations idea
+from `DESIGN-one-world.md` arriving almost for free.
+
+#### The migration is the set piece
+
+The lantern is one person carrying a light to claim a place. The migration is
+**the entire band crossing a neck of land in a line**, which is the same
+machinery at twelve times the scale and will be the best thing in the app.
+
+Everything needed for it exists. `Causeway` answers `height`, `ElfWorld` holds
+the `Land` of its neighbours, and `Task.CARRY_FIRE` is a worked example of an
+elf walking out of its own region and back. A migration is that, for everybody,
+one way, and staggered so they string out along the causeway rather than moving
+as a blob.
+
+#### Questions this opens
+
+**Does the user choose where the band goes, or does it pick?** Recommended: the
+user chooses, by tapping a settled region on the map, and may do it before the
+current region is finished. It costs the walk, which is a real price and a
+watchable one.
+
+**Where do settlers come from?** Recommended: one household per completed house,
+appearing when the roof goes on. It gives every house an immediate reason to
+exist and makes the village fill visibly rather than at a threshold.
+
+**Do settlers do anything?** Recommended: they live. Smoke, lit windows, the
+existing pastimes - fishing, sitting, swimming - and wandering between houses.
+They must not work, or the distinction between a village and a site collapses.
+
+**Do band members ever retire into a village they built?** Not required, and
+worth considering anyway: an old mason stepping out of the band and into a house
+on the region they framed, replaced by somebody young, is the whole generations
+idea in one image, and you would meet them again every time you passed through.
+This is the most promising thread in the document and it is not on any critical
+path.
+
+#### What it does to the code
+
+`_residents` is currently a `PackedInt32Array` of seeds per region and is the
+only thing about an elf that is saved. It splits in two: **a world-level band
+roster**, and **per-region settler seeds**. `Progress` also needs to know which
+region the band is in.
+
+Note that this makes the band's affinities world state rather than region state.
+They are currently saved per island, so a straight move is a save migration -
+merge whatever the most-played region has into the band and drop the rest, or
+accept that formed specialisms reset once.
+
 ### Do not author a hundred houses. Author a grammar that yields more.
 
 A hundred hand-written queues at `plan.gd` scale is fifty thousand works.

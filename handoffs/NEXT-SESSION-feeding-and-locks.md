@@ -74,22 +74,23 @@ something, it costs nothing, and it should survive.
 the accelerometer and are not part of this change. The break still runs on
 app-open time alone.
 
-### Decide: what sets the crew size now
-
-This is the part that is not just deletion, and it needs a decision before any
-of the above is touched.
+### What sets the crew size now: answered
 
 Today the population is `_charge.population(capacity)`: nought to twelve over
 fifteen minutes of perfect stillness, on a hard front-loaded curve. With the
 accelerometer gone there is nothing driving that number.
 
-Recommended: **a full crew, arriving rather than appearing.** Keep
-`World._grow` and `spawn_seconds` so the twelve still walk in one at a time over
-about twenty seconds when a region opens, and delete the population argument
-from `advance` entirely. `held() < capacity` becomes the only condition.
+**Answered on 2026-08-02 by a decision recorded in
+`NEXT-SESSION-what-the-other-sites-build.md`: the crew is a single band of about
+twelve who travel the world together.** Fixed roster, no curve, nothing to
+optimise. Read that file's section "Who is in a region" before touching this,
+because it also splits `_residents` into a world-level band and per-region
+settlers, and you do not want to do that migration twice.
 
-The alternative - crew size grows with time spent in the region - reintroduces a
-progress curve on a number, which the app has refused everywhere else.
+For this session, the minimum is: keep `World._grow` and `spawn_seconds` so they
+still walk in one at a time over about twenty seconds rather than appearing, and
+delete the population argument from `advance`. `held() < capacity` becomes the
+only condition.
 
 ### Knock-on effects worth expecting
 
@@ -380,9 +381,35 @@ purchase flow as a separate piece behind that seam.
 5. Locks, up to but not including the purchase flow.
 6. The purchase flow, as its own session.
 
+## Answered on 2026-08-02
+
+**Leaving the app running is legitimate play.** With the stillness rule gone,
+nothing stops the phone sitting face-down on a desk earning the build, the break
+cycle, the feed clock and the worn paths. That was raised and accepted: app-open
+time is the currency now.
+
+Two consequences a fresh reader should not have to work out:
+
+The project sets no `display/window/energy_saving/keep_screen_on` override, so
+Godot's default of `true` applies and the screen never sleeps. That was harmless
+when the premise required the phone to be left alone *in view*; it now means the
+app can run indefinitely in a drawer. If that ever wants changing it is one line
+in `project.godot`.
+
+`HANDOFF.md` carries a marketing line - "no ads, no energy timers, no
+skip-the-wait, no daily rewards", and "an app that monetises attention is
+self-refuting" - which is proposed for the store page. With a two-hour boost
+timer and paid regions it cannot ship as written. Not a code problem, but
+somebody has to rewrite it before launch and it should not be discovered late.
+
+**The feed stays at 3x for ten minutes.** Confirmed, having been told that it
+makes a week-long house finish roughly a quarter faster. It is meant to be
+dramatic and obviously worth coming back for. Do not quietly soften it while
+tuning; if the week needs to stay a week, raise `Plan.EFFORT` instead so the
+change is explicit.
+
 ## Open questions
 
-- Is "meat" the fish, or a fourth food?
 - Can the feed be tapped during a break?
 - Is 3x for ten minutes the intended size once it is on screen, or was it a
   first guess?
@@ -393,9 +420,7 @@ purchase flow as a separate piece behind that seam.
   last stood in, since that is the one whose clock is running everywhere else.
   The coastline glow follows the clock, so it will be part way round when you
   come back down to it.
-- With the stillness rule gone, what stops the app being left running in a
-  pocket? Nothing, and that may be fine, but it was previously the entire
-  answer.
+- Is "meat" the fish, or a fourth food? Assumed here: it is the fish.
 
 ## How to look at any of it
 
