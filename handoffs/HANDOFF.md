@@ -48,7 +48,9 @@ session is to correct this file**, before any code moves. Nothing in it is
 built.
 
 `handoffs/NEXT-SESSION-what-the-other-sites-build.md` is still the larger design
-question and is not superseded by any of it.
+question and is not superseded by any of it. It now carries the owner's answer
+to most of it: regions grow **villages** of houses, drawn at random from a
+per-region style, no two alike. Author a grammar rather than a hundred houses.
 
 **In order:**
 

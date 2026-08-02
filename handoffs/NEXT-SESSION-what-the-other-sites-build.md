@@ -23,6 +23,114 @@ Seasons, generations, the finite world and the ending all depend on knowing what
 
 ---
 
+## Partly answered, later on 2026-08-02: villages, from a grammar
+
+The owner's proposal, and two decisions taken with it.
+
+**A hundred different houses.** Every house built follows one of a hundred
+structures, and a house already built cannot come round again, so a user never
+sees the same building twice.
+
+**Which one you get is random within the region's style.** The region fixes the
+vocabulary - roof pitch, palette, massing, how big the openings are - and the
+draw picks a variant inside it. So an Ice house and a Dunes house are never
+mistakable for each other, but no two Ice houses are the same either.
+
+**A region grows a village, not one house.** Several sites per region rather
+than one. This supersedes the reading of `DESIGN-one-world.md` where the world
+is twelve to twenty single sites, and that document needs amending to match.
+
+This is a good direction and it answers most of the question this file was
+written to ask. Three things about it want changing or watching.
+
+### Do not author a hundred houses. Author a grammar that yields more than a
+### hundred.
+
+A hundred hand-written queues at `plan.gd` scale is fifty thousand works.
+That is not a season of content, it is the rest of the project's life, and it
+would be the single largest thing anyone had ever done here by two orders of
+magnitude.
+
+The same result comes out of a small number of authored parts combined:
+
+| Axis | Roughly |
+| --- | --- |
+| Footprint | 5 - square, long, L, T, stepped |
+| Storeys | 4 - one, two, three, three and an attic |
+| Roof | 4 - gable, hipped, gambrel, half-hipped |
+| Cladding | 5 - board, plaster and timber, stone, shingle, reed |
+| Window rhythm | 3 |
+
+Twenty-one authored pieces, twelve hundred combinations.
+Constrain each region to the ones its style permits and there are still a couple
+of hundred valid houses per region, drawn without replacement.
+That is more variety than a hundred, at something like a sixtieth of the work,
+and it is the only version of this that is actually buildable.
+
+The variety has to come from **massing, pitch, palette and window rhythm**.
+Not textures. There is not a single texture anywhere in this project - every
+surface is vertex colours on faceted geometry, and the necks between regions
+have a comment in them about how the app has refused textures everywhere else.
+Starting now would look like a different product bolted on.
+
+### Villages are what makes the numbers work, and `plan.gd` already knows why
+
+A house is a week. Ten houses a region across five regions is a year, which is
+not a finishable world.
+
+But the second house in a region is not a week, and the reason is already built:
+`plan.gd` contains ten workshops and six machines the elves have to build before
+they can use them, and those are one-time. House two skips all of it and is only
+its bill of materials.
+
+So the shape is: **the first house in a region costs a week and includes the
+infrastructure; the rest cost two or three days each.** A village of six is
+about three weeks a region, and a full world is three or four months. Long, but
+genuinely finishable, and it means a village visibly accelerates as it grows -
+which is the correct feeling for a settlement taking hold.
+
+Worth checking that number against what `Plan.EFFORT` and the proposed 3x feed
+in `NEXT-SESSION-feeding-and-locks.md` do to it, because those two also move it.
+
+### The one that will bite: the save format
+
+`Progress` stores `done` as a `PackedInt32Array` of indices into the queue.
+Those indices only mean anything relative to the queue that produced them.
+
+The moment a queue is generated per house from a seed, **the seed has to be
+saved with the site and the queue rebuilt from it before `done` is applied**, or
+a reload silently reconstructs a different building out of the same list of
+finished work numbers.
+
+Save a generator version alongside the seed. The first time somebody adjusts the
+grammar - and somebody will - every existing save will otherwise rebuild the
+wrong house without erroring, which is the worst failure mode available here.
+
+Two smaller consequences of villages, both anticipated by `DESIGN-one-world.md`:
+
+**Progress has to become per-site rather than per-region.** That document already
+called this: "a queue currently belongs to an island and would need to belong to
+a *site*, with several sites per region." This is the forcing function.
+
+**`Biome.LAYOUT` has one `site`.** A village needs several plot positions per
+region that do not collide with the quarry, mine, grove, reedbed or hearth. Worth
+placing them so the paths between them cross, because the ground already records
+where people walk and **a village will wear its own street plan into the terrain
+without anybody authoring one.** That is the best thing about this whole
+direction and it costs nothing.
+
+### And watch the frame rate
+
+Ten finished houses standing in a region, each a few hundred small meshes, will
+not hold thirty frames on a phone that also has to stay cool for twenty-five
+minutes.
+
+A house that is finished never changes again, so merge each one into a single
+static mesh on completion, the way `_merged` already does for clutter. Do this
+when the second house goes in rather than when the tenth does.
+
+---
+
 ## What the design document already commits to
 
 Worth not relitigating, because these were decided deliberately.
@@ -33,6 +141,9 @@ It is several sites per region, and `DESIGN-one-world.md` says so directly: a qu
 
 **The world is finite and can be finished.**
 "I finished it" is a rare, real, once-per-owner event.
+Note that the village decision stretches this from twelve to twenty buildings to
+something nearer thirty or forty, and `DESIGN-one-world.md` should be amended
+rather than left saying the old number.
 An app about attention that never ends is an app about retention, which is the opposite thing.
 
 **The regions have to interact.**
@@ -97,10 +208,18 @@ The safest rule is probably: a site's bill may only reach into regions that are 
 
 ---
 
-## Before writing four hundred works, answer these
+## Still to answer
 
-1. **How many sites does a region get?** Twelve to twenty across five regions is two to four each. Is the Meadow's house one site or is it the whole of the Meadow?
-2. **Is there a second house anywhere?** Or is the house unique, and everything else infrastructure?
+Questions one and two below were answered on 2026-08-02 by the village decision
+above: a region gets several sites, and they are all houses.
+What is left:
+
+1. **How big is a village?** Six was used for the arithmetic above and is a
+   guess. It sets the length of the whole game more than any other number except
+   `Plan.EFFORT`.
+2. **Does a village have anything in it that is not a house?** A well, a green, a
+   bridge between two plots. Cheap variety, and it stops a region reading as a
+   housing estate.
 3. **What does finishing look like?** The last work of the last site - what happens on screen? This is the once-per-owner moment and it should be designed before the run-up to it is.
 4. **Does anybody live in the new regions?** Right now the lantern lights a hearth and the carrier walks home. Nobody lives there. A settled region with a fire and no people is fine as a waypoint and wrong as a settlement.
 5. **What is the Ice for?** It is the furthest, hardest, most timber-starved region, deliberately placed behind the Green. If it is not the last thing you do, the geography is wrong.
