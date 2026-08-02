@@ -74,6 +74,13 @@ The paid locks were removed with the living-world slice.
 The owner correctly noted that the app still looks like the retired passive builder because its title enters the close construction view.
 The next pass makes the living field map the first view, freezes legacy construction while that field is open, and makes a close village a deliberate camera descent.
 
+**The map-first field loop is now built.** `main.gd` has explicit `FIELD` and
+`VILLAGE` modes, title entry and `--screen=field` open at full map distance,
+and the legacy world only advances in village mode.
+`FieldMarks` makes the unclaimed route rumor legible at field scale and gives a
+brief warm claim bloom through the existing `Country.claim_rumor()` path.
+`--screen=map` remains a compatibility alias.
+
 **In order:**
 
 - **What a second and third site build.** Still the largest genuine unknown in

@@ -1,11 +1,7 @@
 class_name Menu
 extends CanvasLayer
 
-## The way in. One screen, six words of copy, one control.
-##
-## This is a focus app, so the menu's job is to be got through and not to be
-## enjoyed, and anything here that invites a second look is working against the
-## product.
+## The way into the living field. One screen, one action, no checklist.
 ##
 ## ## The picker is gone
 ##
@@ -73,7 +69,7 @@ func show_title() -> void:
 	rule.size = Vector2(2.0, 2.0)
 	root.add_child(rule)
 
-	var under := _label("Hobbits in a bottle", 46, Color(INK, 0.48))
+	var under := _label("The paths you walk become roads.", 46, Color(INK, 0.48))
 	under.anchor_left = 0.0
 	under.anchor_right = 1.0
 	under.offset_top = 664.0
@@ -88,10 +84,8 @@ func show_title() -> void:
 	_action.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	root.add_child(_action)
 
-	# The one thing the app has to teach. It used to live on the picker, which is
-	# the only thing on that screen worth keeping, so it moved here rather than
-	# being deleted along with it.
-	_hint = _label("They only build while the phone is still.", 40, Color(INK, 0.30))
+	# The title names the premise, then gets out of the way before the field.
+	_hint = _label("Find what the road leaves behind.", 40, Color(INK, 0.30))
 	_hint.anchor_left = 0.0
 	_hint.anchor_right = 1.0
 	_hint.offset_top = 1000.0

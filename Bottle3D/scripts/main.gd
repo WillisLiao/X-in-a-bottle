@@ -35,6 +35,8 @@ extends Node3D
 
 const TARGET_FPS := 30
 
+enum ViewMode { FIELD, VILLAGE }
+
 ## Everything above this is a hand on the phone. Below it is a desk, a passing
 ## lorry, somebody walking past.
 const ORBIT_RATE := 0.0022
@@ -165,7 +167,8 @@ var _fill_energy := 1.0
 var _ambient_energy := 1.0
 var _menu: Menu
 var _mode_label: Label
-var _rumor_marks: RumorMarks
+var _field_marks: FieldMarks
+var _view_mode := ViewMode.VILLAGE
 
 var _world: ElfWorld
 var _island := 0
@@ -239,7 +242,7 @@ func _ready() -> void:
 	_island = clampi(Progress.last_island(), 0, Biome.COUNT - 1)
 	_country = Country.new()
 	add_child(_country)
-	_rumor_marks.set_context(_camera, _country)
+	_field_marks.set_context(_camera, _country)
 
 	_menu = Menu.new()
 	add_child(_menu)
@@ -255,11 +258,10 @@ func _ready() -> void:
 			routes.record_debug_route(_arg_route)
 		routes.persist()
 
-	if _capture_screen == "world" or _capture_screen == "map":
-		_enter(_island)
-		if _capture_screen == "map":
-			_zoom = ZOOM_MAX
-			_zoom_to = -1.0
+	if _capture_screen == "world":
+		_enter_village(_island)
+	elif _capture_screen == "map" or _capture_screen == "field":
+		_enter_field(_island)
 	else:
 		_menu.show_title()
 
@@ -289,8 +291,8 @@ func _process(delta: float) -> void:
 	_move_camera(delta)
 	if _country:
 		_country.set_map(_map)
-	if _rumor_marks:
-		_rumor_marks.set_map(_map)
+	if _field_marks:
+		_field_marks.set_map(_map)
 	_fade_back(delta)
 	_rest_light(delta)
 	_maybe_capture()
@@ -298,13 +300,14 @@ func _process(delta: float) -> void:
 	if _world == null or _menu.showing():
 		return
 
-	_world.advance(delta)
+	if _view_mode == ViewMode.VILLAGE:
+		_world.advance(delta)
 
 
 # --- moving between places ---------------------------------------------------
 
 func _on_begin() -> void:
-	_enter(_island)
+	_enter_field(_island)
 
 
 func _on_dismissed() -> void:
@@ -317,17 +320,25 @@ func _on_dismissed() -> void:
 ## The camera keeps its angle across a move, and descends into the new place
 ## rather than arriving at it. That is the difference between travelling and
 ## changing screens, and it is most of what the picker was deleted for.
-func _enter(region: int) -> void:
+func _enter_field(region: int) -> void:
+	_prepare_region(region)
+	_view_mode = ViewMode.FIELD
+	_zoom = ZOOM_MAX
+	_zoom_to = -1.0
+	_menu.hide_all()
+
+
+## A place is prepared once and then either viewed from the country or entered
+## close enough to watch. Keeping these paths separate makes the field a real
+## product mode rather than an accidental consequence of a zoom value.
+func _prepare_region(region: int) -> void:
 	var arriving := _world == null
 	if not arriving and _island == region:
-		_zoom_to = 1.0
-		_menu.hide_all()
 		return
 
 	_leave()
 	_island = clampi(region, 0, Biome.COUNT - 1)
 	Progress.set_last_island(_island)
-
 	Progress.flush()
 
 	_world = ElfWorld.new(_island)
@@ -335,14 +346,11 @@ func _enter(region: int) -> void:
 	add_child(_world)
 	_world.build()
 
-	# The bottle is never empty.
-	# These two arrive without calling `advance`, because it now owns every
-	# app-open clock and an invisible bootstrap must not earn time toward food.
+	# The bottle is never empty, but bootstrap scenery must not earn time.
 	for _i in ElfWorld.STARTING_OBJECTS:
 		_world._grow()
 
 	_country.show_from(_island)
-
 	_apply_lighting(_world)
 	_camera.fov = _world.lens
 	_pan = Vector3.ZERO
@@ -352,7 +360,6 @@ func _enter(region: int) -> void:
 		_zoom = 1.0
 		_zoom_to = -1.0
 	else:
-		# Came in off the map, so keep the angle and fall the rest of the way.
 		_zoom_to = 1.0
 	if _force_rest >= 0.0:
 		_world.force_rest(_force_rest)
@@ -361,9 +368,19 @@ func _enter(region: int) -> void:
 	if _arg_feast:
 		_world.force_feed(1.0)
 		_world.call_feast()
-
-	_menu.hide_all()
 	_drift = 6.0
+
+
+## Descending is the only path that makes the construction scene active.
+func _enter_village(region: int) -> void:
+	_prepare_region(region)
+	_view_mode = ViewMode.VILLAGE
+	_zoom_to = 1.0
+	_menu.hide_all()
+
+
+func _enter(region: int) -> void:
+	_enter_village(region)
 
 
 ## A lantern got where it was going. The world that sent it cannot draw the
@@ -464,6 +481,10 @@ func _pinch(span: float) -> void:
 	_dragged = true
 	_zoom_to = -1.0
 	_zoom = clampf(_pinch_zoom * (_pinch_from / span), ZOOM_MIN, ZOOM_MAX)
+	if _view_mode == ViewMode.FIELD and _zoom < MAP_FROM:
+		_view_mode = ViewMode.VILLAGE
+	elif _view_mode == ViewMode.VILLAGE and _zoom >= MAP_FROM:
+		_view_mode = ViewMode.FIELD
 
 
 ## Turning the island, and leaning over it.
@@ -531,14 +552,16 @@ func _finish_press(at: Vector2) -> void:
 	# A complete coastline makes the whole region the target.
 	# This stays inside the close view because a map tap already has a place
 	# travel meaning, and a food event must never steal that gesture.
-	if _map < 0.35 and _world != null and _world.feed_ready():
+	if _view_mode == ViewMode.VILLAGE and _map < 0.35 \
+			and _world != null and _world.feed_ready():
 		if _world.call_feast():
 			return
 
 	# Out on the map, a tap is somewhere to go.
-	if _map > 0.35 and _country.claim_rumor(at, _camera):
+	if _view_mode == ViewMode.FIELD and _country.claim_rumor(at, _camera):
+		_field_marks.claim_feedback(at)
 		return
-	if _map > 0.35 and _tap_region(at):
+	if _view_mode == ViewMode.FIELD and _map > 0.35 and _tap_region(at):
 		return
 
 
@@ -565,7 +588,7 @@ func _tap_region(at: Vector2) -> bool:
 		return false
 	if best == _island:
 		# Already living there. Go back down to it.
-		_zoom_to = 1.0
+		_enter_village(_island)
 		return true
 
 	# Somewhere people already live. No save here: `_enter` leaves the region it
@@ -693,8 +716,8 @@ func _rest_light(delta: float) -> void:
 func _build_back() -> void:
 	var layer := CanvasLayer.new()
 	layer.layer = 110
-	_rumor_marks = RumorMarks.new()
-	layer.add_child(_rumor_marks)
+	_field_marks = FieldMarks.new()
+	layer.add_child(_field_marks)
 
 	# Which mode dragging is in right now, not which one the tap switches to -
 	# that is the way round people actually read a toggle.
