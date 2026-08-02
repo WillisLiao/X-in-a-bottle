@@ -170,10 +170,16 @@ var _mode_label: Label
 var _field_marks: FieldMarks
 var _expedition_marks: ExpeditionMarks
 var _sleeping_hill: SleepingHillVisual
+var _rooted_gate: RootedGateVisual
+var _lost_lights: LostLightsVisual
+var _migration: MigrationVisual
 var _fable_state: FableState
 var _fable_journey: FableJourney
 var _fable_source: FableJourneySource
 var _expedition_stage := "dormant"
+var _act_fable := ""
+var _act_stage := ""
+var _act_marks: ActMarks
 var _view_mode := ViewMode.VILLAGE
 
 var _world: ElfWorld
@@ -232,6 +238,9 @@ var _arg_route_reset := false
 var _arg_story := ""
 var _arg_story_reset := false
 var _arg_story_stage := ""
+var _arg_act_reset := false
+var _arg_fable := ""
+var _arg_fable_stage := ""
 var _capturing := false
 var _elapsed: float = 0.0
 
@@ -258,6 +267,14 @@ func _ready() -> void:
 	add_child(_sleeping_hill)
 	_sleeping_hill.rebuild()
 	_expedition_marks.set_context(_camera, _sleeping_hill)
+	_rooted_gate = RootedGateVisual.new(_fable_state)
+	add_child(_rooted_gate)
+	_rooted_gate.rebuild()
+	_lost_lights = LostLightsVisual.new(_fable_state)
+	add_child(_lost_lights)
+	_lost_lights.rebuild()
+	_act_marks.set_context(_camera, _rooted_gate, _lost_lights)
+	_sync_act_state()
 
 	_island = clampi(Progress.last_island(), 0, Biome.COUNT - 1)
 	_country = Country.new()
@@ -279,6 +296,8 @@ func _ready() -> void:
 		routes.persist()
 	if not _arg_story.is_empty():
 		_apply_story_capture()
+	if not _arg_fable.is_empty():
+		_apply_act_capture()
 
 	if _capture_screen == "world":
 		_enter_village(_island)
@@ -326,6 +345,9 @@ func _process(delta: float) -> void:
 
 	if _view_mode == ViewMode.VILLAGE:
 		_world.advance(delta)
+	if _migration and _migration.running():
+		if _migration.advance(delta):
+			_finish_migration()
 
 
 # --- moving between places ---------------------------------------------------
@@ -434,7 +456,7 @@ func _notification(what: int) -> void:
 
 
 func _begin_expedition() -> void:
-	if _expedition_stage != "dormant" or _fable_state.sleeping_hill != FableState.UNRESOLVED:
+	if _expedition_stage != "dormant" or _fable_state.resolution("sleeping_hill") != FableState.UNRESOLVED:
 		return
 	_expedition_stage = "carrying"
 	_fable_journey.begin()
@@ -452,7 +474,7 @@ func _on_expedition_completed() -> void:
 	_expedition_marks.set_stage(_expedition_stage)
 
 func _resolve_expedition(outcome: String) -> void:
-	if _expedition_stage != "choosing" or not _fable_state.resolve_sleeping_hill(outcome):
+	if _expedition_stage != "choosing" or not _fable_state.resolve("sleeping_hill", outcome):
 		return
 	_fable_state.persist()
 	_expedition_marks.play_resolution_bloom()
@@ -463,6 +485,133 @@ func _resolve_expedition(outcome: String) -> void:
 		_enter_village(_island)
 	else:
 		_view_mode = ViewMode.FIELD
+	_sync_act_state()
+
+func _sync_act_state() -> void:
+	_act_fable = FableCatalog.available(_fable_state)
+	_rooted_gate.visible = FableCatalog.unlocked(_fable_state, FableCatalog.ROOTED_GATE)
+	_lost_lights.visible = FableCatalog.unlocked(_fable_state, FableCatalog.LOST_LIGHTS)
+	if _act_fable == FableCatalog.ROOTED_GATE:
+		_act_stage = "rooted_dormant"
+		_act_marks.set_stage(_act_stage)
+	elif _act_fable == FableCatalog.LOST_LIGHTS:
+		_act_stage = "lost_dormant"
+		_act_marks.set_stage(_act_stage)
+	elif _act_fable == FableCatalog.MIGRATION:
+		_act_stage = "migration_ready"
+		_act_marks.set_stage(_act_stage)
+	else:
+		_act_stage = ""
+		_act_marks.set_stage("")
+
+func _begin_rooted_gate() -> void:
+	if _act_fable != FableCatalog.ROOTED_GATE or _act_stage != "rooted_dormant":
+		return
+	_act_stage = "rooted_choosing"
+	_act_marks.set_stage(_act_stage)
+
+func _resolve_rooted_gate(species: String) -> void:
+	if _act_stage != "rooted_choosing" or not _fable_state.resolve(FableCatalog.ROOTED_GATE, species):
+		return
+	_fable_state.persist()
+	_rooted_gate.rebuild()
+	_act_stage = "lost_dormant"
+	_act_fable = FableCatalog.LOST_LIGHTS
+	_act_marks.set_stage(_act_stage)
+	_lost_lights.visible = true
+
+func _begin_lost_lights() -> void:
+	if _act_stage != "lost_dormant":
+		return
+	_act_stage = "lost_choosing"
+	_act_marks.set_stage(_act_stage)
+
+func _resolve_lost_lights(destination: String) -> void:
+	if _act_stage != "lost_choosing" or not _fable_state.resolve(FableCatalog.LOST_LIGHTS, destination):
+		return
+	_fable_state.persist()
+	_lost_lights.rebuild()
+	if _fable_state.all_chapters_resolved():
+		_act_fable = FableCatalog.MIGRATION
+		_act_stage = "migration_ready"
+		_act_marks.set_stage(_act_stage)
+
+func _begin_migration() -> void:
+	if _act_stage != "migration_ready" or _migration != null:
+		return
+	var people: Array[Dictionary] = []
+	if _world:
+		for person in _world.expedition_people():
+			people.append(person)
+	if people.is_empty():
+		people = [
+			{"seed": _fable_state.seed_for("rooted_gate"), "species": FableState.HOBBIT},
+			{"seed": _fable_state.seed_for("lost_lights"), "species": FableState.TROLL},
+			{"seed": _fable_state.world_seed, "species": FableState.HOBBIT},
+		]
+	_migration = MigrationVisual.new(people)
+	add_child(_migration)
+	_migration.begin()
+	_act_stage = "migration_running"
+	_act_marks.set_stage(_act_stage)
+
+func _finish_migration() -> void:
+	if not _fable_state.meadow_act_complete:
+		if not _fable_state.complete_meadow_act():
+			return
+		_fable_state.persist()
+	Progress.set_last_island(3)
+	Progress.settle(3)
+	Progress.flush()
+	if _country:
+		_country.show_from(_island, true)
+	_rooted_gate.visible = true
+	_lost_lights.visible = true
+	_act_stage = ""
+	_act_fable = ""
+	_act_marks.set_stage("")
+	_sync_act_state()
+
+func _apply_act_capture() -> void:
+	if _arg_act_reset:
+		_fable_state = FableState.new(FableState.new_world_seed())
+		_fable_state.persist()
+		_sleeping_hill.set_state(_fable_state)
+		_sleeping_hill.rebuild()
+		_rooted_gate.set_state(_fable_state)
+		_rooted_gate.rebuild()
+		_lost_lights.set_state(_fable_state)
+		_lost_lights.rebuild()
+	if _arg_fable == FableCatalog.ROOTED_GATE and _fable_state.resolution(FableCatalog.SLEEPING_HILL) == FableState.UNRESOLVED:
+		_fable_state.resolve(FableCatalog.SLEEPING_HILL, FableState.GROVE)
+	if _arg_fable in [FableCatalog.LOST_LIGHTS, FableCatalog.MIGRATION] and _fable_state.resolution(FableCatalog.SLEEPING_HILL) == FableState.UNRESOLVED:
+		_fable_state.resolve(FableCatalog.SLEEPING_HILL, FableState.GROVE)
+	if _arg_fable == FableCatalog.MIGRATION and _fable_state.resolution(FableCatalog.ROOTED_GATE) == FableState.UNRESOLVED:
+		_fable_state.resolve(FableCatalog.ROOTED_GATE, FableState.TROLL)
+	if _arg_fable == FableCatalog.MIGRATION and _fable_state.resolution(FableCatalog.LOST_LIGHTS) == FableState.UNRESOLVED:
+		_fable_state.resolve(FableCatalog.LOST_LIGHTS, FableState.OUTWARD)
+	_fable_state.persist()
+	_sync_act_state()
+	match _arg_fable_stage:
+		"choosing":
+			if _arg_fable == FableCatalog.ROOTED_GATE:
+				_begin_rooted_gate()
+			elif _arg_fable == FableCatalog.LOST_LIGHTS:
+				_begin_lost_lights()
+		"troll", "hobbit":
+			_begin_rooted_gate()
+			_resolve_rooted_gate(_arg_fable_stage)
+		"home", "outward":
+			_begin_lost_lights()
+			_resolve_lost_lights(_arg_fable_stage)
+		"complete":
+			_fable_state.resolve(FableCatalog.ROOTED_GATE, FableState.TROLL)
+			_fable_state.resolve(FableCatalog.LOST_LIGHTS, FableState.OUTWARD)
+			_fable_state.resolve(FableCatalog.SLEEPING_HILL, FableState.GROVE)
+			_fable_state.complete_meadow_act()
+			_fable_state.persist()
+			_act_stage = "migration_ready"
+			_begin_migration()
 
 func _apply_story_capture() -> void:
 	if _arg_story_reset:
@@ -482,7 +631,7 @@ func _apply_story_capture() -> void:
 			_on_story_step(step)
 		_on_expedition_completed()
 	elif _arg_story_stage in ["hollow", "grove"]:
-		_fable_state.resolve_sleeping_hill(_arg_story_stage)
+		_fable_state.resolve("sleeping_hill", _arg_story_stage)
 		_fable_state.persist()
 		_sleeping_hill.rebuild()
 		_expedition_stage = "resolved"
@@ -502,6 +651,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				_dragged = false
 				if _expedition_stage in ["carrying", "choosing"]:
 					_expedition_marks.begin_drag(event.position)
+				elif _act_stage in ["rooted_choosing", "lost_choosing"]:
+					_act_marks.begin_drag(event.position)
 			elif _touches.size() == 2:
 				_pinch_from = _pinch_span()
 				_pinch_zoom = _zoom
@@ -514,6 +665,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		_touches[event.index] = event.position
 		if _expedition_stage in ["carrying", "choosing"]:
 			_expedition_marks.drag_to(event.position)
+		elif _act_stage in ["rooted_choosing", "lost_choosing"]:
+			_act_marks.drag_to(event.position)
 		elif _touches.size() >= 2:
 			_pinch(_pinch_span())
 		elif _pan_mode:
@@ -538,14 +691,19 @@ func _unhandled_input(event: InputEvent) -> void:
 				_dragged = false
 				if _expedition_stage in ["carrying", "choosing"]:
 					_expedition_marks.begin_drag(event.position)
+				elif _act_stage in ["rooted_choosing", "lost_choosing"]:
+					_act_marks.begin_drag(event.position)
 			else:
 				_expedition_marks.end_drag()
+				_act_marks.end_drag()
 				_finish_press(event.position)
 
 	elif event is InputEventMouseMotion and event.device != -1:
 		if event.button_mask & MOUSE_BUTTON_MASK_LEFT:
 			if _expedition_stage in ["carrying", "choosing"]:
 				_expedition_marks.drag_to(event.position)
+			elif _act_stage in ["rooted_choosing", "lost_choosing"]:
+				_act_marks.drag_to(event.position)
 			elif _pan_mode:
 				_pan_camera(event.relative)
 			else:
@@ -636,6 +794,12 @@ func _finish_press(at: Vector2) -> void:
 	if _expedition_marks.tap(at):
 		if _expedition_stage == "dormant":
 			_begin_expedition()
+		return
+	if _act_marks.tap(at):
+		if _act_stage == "rooted_dormant":
+			_begin_rooted_gate()
+		elif _act_stage == "lost_dormant":
+			_begin_lost_lights()
 		return
 
 	# Bottom left corner: which way a one-finger drag turns.
@@ -818,6 +982,11 @@ func _build_back() -> void:
 	_expedition_marks.cairn_tapped.connect(_on_story_step)
 	_expedition_marks.choice_tapped.connect(_resolve_expedition)
 	layer.add_child(_expedition_marks)
+	_act_marks = ActMarks.new()
+	_act_marks.rooted_species_chosen.connect(_resolve_rooted_gate)
+	_act_marks.lost_destination_chosen.connect(_resolve_lost_lights)
+	_act_marks.migration_tapped.connect(_begin_migration)
+	layer.add_child(_act_marks)
 
 	# Which mode dragging is in right now, not which one the tap switches to -
 	# that is the way round people actually read a toggle.
@@ -1367,6 +1536,12 @@ func _read_capture_args() -> void:
 			_arg_story_reset = true
 		elif arg.begins_with("--story-stage="):
 			_arg_story_stage = arg.trim_prefix("--story-stage=")
+		elif arg == "--act-reset":
+			_arg_act_reset = true
+		elif arg.begins_with("--fable="):
+			_arg_fable = arg.trim_prefix("--fable=").replace("-", "_")
+		elif arg.begins_with("--fable-stage="):
+			_arg_fable_stage = arg.trim_prefix("--fable-stage=")
 		elif arg.begins_with("--fire="):
 			# Sends the lantern to a region at launch, so eighty seconds of
 			# somebody walking can be looked at without tapping anything.

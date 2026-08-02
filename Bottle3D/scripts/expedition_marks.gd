@@ -116,11 +116,11 @@ func _draw() -> void:
 		_draw_seed(_seed_at, breath)
 		_draw_destination(_hearth_at, Color(1.0, 0.67, 0.25, 0.88), true)
 		_draw_destination(_beyond_at, Color(0.80, 0.72, 0.45, 0.88), false)
-	elif stage == "resolved" and _visual._state.sleeping_hill == FableState.GROVE:
+	elif stage == "resolved" and _visual._state.resolution("sleeping_hill") == FableState.GROVE:
 		draw_line(_hill_at, _beyond_at, Color(1.0, 0.64, 0.22, 0.55), 8.0, true)
 		_draw_grove(_beyond_at)
 	if _resolution_bloom > 0.0:
-		var bloom_at := _hearth_at if _visual._state.sleeping_hill == FableState.HOLLOW else _beyond_at
+		var bloom_at := _hearth_at if _visual._state.resolution("sleeping_hill") == FableState.HOLLOW else _beyond_at
 		draw_circle(bloom_at, lerpf(22.0, 180.0, 1.0 - _resolution_bloom),
 			Color(1.0, 0.70, 0.26, _resolution_bloom * 0.24), false, 9.0, true)
 

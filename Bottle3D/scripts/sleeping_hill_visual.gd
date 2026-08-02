@@ -46,10 +46,10 @@ func rebuild() -> void:
 	_seed = null
 	_build_hill()
 	_build_hearth()
-	_build_route(_state.sleeping_hill != FableState.UNRESOLVED)
-	if _state.sleeping_hill == FableState.HOLLOW:
+	_build_route(_state.resolution("sleeping_hill") != FableState.UNRESOLVED)
+	if _state.resolution("sleeping_hill") == FableState.HOLLOW:
 		_build_hollow_door()
-	elif _state.sleeping_hill == FableState.GROVE:
+	elif _state.resolution("sleeping_hill") == FableState.GROVE:
 		_build_grove()
 
 func set_route_step(step: int) -> void:
@@ -62,7 +62,7 @@ func raise_seed() -> void:
 		_seed.visible = true
 
 func resolve(outcome: String) -> void:
-	_state.resolve_sleeping_hill(outcome)
+	_state.resolve("sleeping_hill", outcome)
 	rebuild()
 
 func _build_hill() -> void:

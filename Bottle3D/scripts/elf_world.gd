@@ -590,6 +590,17 @@ func build() -> void:
 func held() -> int:
 	return _elves.size()
 
+## The fable can borrow the residents' stable identity without borrowing the
+## builder's queue or tick. This keeps a migration recognisable after reload.
+func expedition_people() -> Array[Dictionary]:
+	var people: Array[Dictionary] = []
+	for e in _elves:
+		people.append({
+			"seed": e.seed_value,
+			"species": "troll" if e.species == Species.TROLL else "hobbit",
+		})
+	return people
+
 
 # --- the ground --------------------------------------------------------------
 #
