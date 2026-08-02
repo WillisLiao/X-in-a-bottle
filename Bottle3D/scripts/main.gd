@@ -2,39 +2,21 @@ extends Node3D
 
 ## Hobbitle.
 ##
-## The phone is the bottle, so nothing draws a vessel. One world of five
-## regions, and one rule holding the whole thing up:
+## The phone is the bottle, so nothing draws a vessel.
+## One world of five regions grows while its current place is open.
+## The hobbits build whether the phone is still, in a pocket, or being carried.
 ##
-##   **They only build while the phone is still.**
-##
-## Move it and the elves down tools and some of them leave. Put it down and they
-## come back, over the next fifteen minutes, and get on with it. That is the
-## entire mechanism and there is nothing else to do.
-##
-## **Nothing that has been built ever comes apart.** A disturbance costs you
-## hours forwards, by taking the crew away and making them walk back, and never
-## backwards. Against a build that takes a week, a mechanic that can undo an
-## evening is a mechanic that teaches people not to open the app.
+## **Nothing that has been built ever comes apart.**
+## Against a build that takes a week, a mechanic that can undo an evening is a
+## mechanic that teaches people not to open the app.
 ##
 ## Every hour of building they stop for a quarter of an hour, and that break only
 ## runs down while you are here watching it. See `ElfWorld.WORK_PERIOD`.
 ##
-## ## Touching is free now, and that is a change
-##
-## It used to cost. Every tap and every swipe drained the bottle, on the
-## reasoning that handling the phone is handling the phone. That was the right
-## instinct and the wrong rule, because it meant the app charged you for turning
-## the world round to see what was happening on the far side - it punished
-## paying attention, which is the opposite of what a focus app is for.
-##
-## So the cost is now movement alone, measured on the accelerometer. A phone flat
-## on a desk with a finger turning the island is perfectly still and costs
-## nothing. A phone picked up is not, and costs a great deal. That is also the
-## honest version of the rule: what breaks a stretch of work is picking the thing
-## up, not looking at it.
-##
-## Which frees the gestures to do what they should always have done - drag to
-## turn the region, pinch to come in close enough to watch one elf's hands.
+## Device gravity only supplies the small tilt parallax.
+## It never changes the crew, work rate, or what the hobbits decide to do.
+## Drag turns the region and pinch comes in close enough to watch one elf's
+## hands.
 ##
 ## ## Zoom out is the map
 ##
@@ -192,18 +174,6 @@ var _island := 0
 ## watched moves is what makes a bigger world affordable at all.
 var _country: Country
 
-var _charge := Charge.new()
-
-## Smoothed device motion. Heavy smoothing, because one spike from a door closing
-## must not empty somebody's bottle.
-var _agitation: float = 0.0
-
-## Slowly-followed average of the accelerometer. Agitation is deviation from this
-## rather than from an assumed gravity vector, which works whichever convention
-## the platform reports acceleration in.
-var _accel_baseline: Vector3 = Vector3.ZERO
-var _baseline_ready := false
-
 var _tilt: Vector2 = Vector2.ZERO
 var _has_sensors := false
 
@@ -303,7 +273,6 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_elapsed += delta
-	_read_motion(delta)
 	_move_camera(delta)
 	_fade_back(delta)
 	_rest_light(delta)
@@ -312,15 +281,7 @@ func _process(delta: float) -> void:
 	if _world == null or _menu.showing():
 		return
 
-	var was_disturbed := _charge.is_disturbed
-
-	# Movement only. A finger on the glass is not a disturbance any more.
-	_charge.update(delta, _agitation, false)
-
-	if _charge.is_disturbed and not was_disturbed:
-		_world.disturbed()
-
-	_world.advance(delta, _charge.population(_world.capacity), _charge.is_disturbed)
+	_world.advance(delta)
 
 
 # --- moving between places ---------------------------------------------------
@@ -360,8 +321,8 @@ func _enter(region: int) -> void:
 	# The bottle is never empty. Somebody is in the region the moment it opens,
 	# so the first thing seen is the place itself and not a black screen to be
 	# earned.
-	for _i in Charge.STARTING_OBJECTS:
-		_world.advance(999.0, Charge.STARTING_OBJECTS, false)
+	for _i in ElfWorld.STARTING_OBJECTS:
+		_world.advance(999.0)
 
 	_country.show_from(_island)
 
@@ -585,10 +546,8 @@ func _tap_region(at: Vector2) -> bool:
 	# Somewhere nobody lives yet, joined to here by a neck of land. Tapping it
 	# does not take you there - it sends somebody, and then you watch them go.
 	#
-	# This is the one place the app asks for a stretch of held attention with
-	# nothing else happening in it, and it is deliberate. A region costs about
-	# eighty seconds of watching one person walk. There is no way to buy it, no
-	# way to skip it and no way to do it while the phone is in your pocket.
+	# A region costs about eighty seconds of watching one person walk.
+	# That watchable crossing remains the only way to settle an available region.
 	if _world != null and Region.NEIGHBOURS.get(_island, []).has(best):
 		if _world.journey() < 0:
 			_world.send_fire(best)
@@ -736,40 +695,6 @@ func _fade_back(delta: float) -> void:
 		clampf(delta * 2.0, 0.0, 1.0))
 
 
-# --- motion ------------------------------------------------------------------
-
-## Agitation as deviation from a slowly-followed baseline, rather than
-## accelerometer minus gravity.
-##
-## The subtraction approach assumes the platform reports acceleration with
-## gravity included. If it already removes gravity, the difference is a constant
-## 1G and the bottle reads as permanently shaken. Measuring deviation from
-## whatever the signal rests at works under either convention, and dividing by
-## the baseline magnitude makes it unit-agnostic.
-##
-## The baseline follows slowly, which also means a steady tilt is absorbed rather
-## than punished. Leaning the phone to look into the bottle stays free.
-func _read_motion(delta: float) -> void:
-	if not _has_sensors:
-		return
-
-	var accel := Input.get_accelerometer()
-	if accel.length() < 0.01:
-		accel = Input.get_gravity()
-	if accel.length() < 0.01:
-		return
-
-	if not _baseline_ready:
-		_accel_baseline = accel
-		_baseline_ready = true
-
-	_accel_baseline = _accel_baseline.lerp(accel, clampf(delta * 0.6, 0.0, 1.0))
-
-	var scale := maxf(_accel_baseline.length(), 0.001)
-	_agitation = _agitation * 0.82 \
-		+ ((accel - _accel_baseline).length() / scale) * 0.18
-
-
 ## How far back the camera has to stand for the whole arc of regions to fit
 ## across the frame, in metres.
 ##
@@ -837,8 +762,7 @@ func _move_camera(delta: float) -> void:
 	if _has_sensors:
 		# Tilt still adds a little parallax on top of wherever the user has put
 		# the camera. It is the difference between looking at a screen and
-		# looking into something, and it costs nothing: the baseline absorbs a
-		# steady lean, so leaning is free while picking the phone up is not.
+		# looking into something, and it is deliberately separate from work.
 		var g := Input.get_gravity()
 		if g.length() > 0.1:
 			g = g.normalized()

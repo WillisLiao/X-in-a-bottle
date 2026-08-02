@@ -3,10 +3,9 @@ extends Node3D
 
 ## One world inside the bottle.
 ##
-## Every world obeys the same rule: things are caught and kept. Stillness adds
-## another object and it stays; disturbance takes a share away. What that looks
-## like is entirely up to the world - lightning held in the air, a tree putting
-## out branches, ice stacking up, elves arriving.
+## Every world fills at its own visible pace and keeps what it has made.
+## What that looks like is entirely up to the world - lightning held in the air,
+## a tree putting out branches, ice stacking up, hobbits arriving.
 
 ## Shown briefly when swiped to, then it fades away.
 var title: String = ""
@@ -49,10 +48,6 @@ var fill_energy: float = 0.28
 var ambient_color: Color = Color("131B2F")
 var ambient_energy: float = 0.55
 
-## Fraction lost per disturbance. Never all of it: losing the lot would make a
-## disturbance a reset rather than a cost, and the cost is the product.
-const LOSS_FRACTION := 0.30
-
 var _since_spawn: float = 0.0
 
 
@@ -61,7 +56,7 @@ func build() -> void:
 	pass
 
 
-func _tick(_delta: float, _population: int, _disturbed: bool) -> void:
+func _tick(_delta: float) -> void:
 	pass
 
 
@@ -70,27 +65,17 @@ func _grow() -> bool:
 	return false
 
 
-## Take a share away.
-func _shrink() -> void:
-	pass
-
-
 func held() -> int:
 	return 0
 
 
-func advance(delta: float, population: int, disturbed: bool) -> void:
+func advance(delta: float) -> void:
 	_since_spawn += delta
-	if held() < population and _since_spawn > spawn_seconds:
+	if held() < capacity and _since_spawn > spawn_seconds:
 		if _grow():
 			_since_spawn = 0.0
 
-	_tick(delta, population, disturbed)
-
-
-## Called on the frame a disturbance begins.
-func disturbed() -> void:
-	_shrink()
+	_tick(delta)
 
 
 ## An unlit additive material, used for everything that glows in here. Unshaded

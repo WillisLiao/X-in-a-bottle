@@ -12,7 +12,7 @@ extends RefCounted
 ## that were not there on Monday, and if you spent Tuesday watching them fetch
 ## stone the track to the quarry is the deepest one. That is a record of
 ## attention that cannot be gamed, because the only way to make it is to have
-## actually left the phone alone and watched.
+## actually kept the region open and watched.
 ##
 ## ## It used to be a lie
 ##
@@ -25,9 +25,8 @@ extends RefCounted
 ## ## It only goes one way
 ##
 ## Paths do not fade here. Real ones do, and it was tempting, and it is the
-## wrong call for the same reason a disturbance never takes finished work off
-## the queue: against a build that takes a week, anything that quietly undoes
-## an evening teaches people not to open the app. What you did stays done.
+## wrong call because against a build that takes a week, anything that quietly
+## undoes an evening teaches people not to open the app. What you did stays done.
 ##
 ## ## What it costs
 ##

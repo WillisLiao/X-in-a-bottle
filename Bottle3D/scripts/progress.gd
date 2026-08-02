@@ -16,8 +16,8 @@ extends RefCounted
 ##
 ## What is deliberately *not* saved is any notion of time passing while you were
 ## away. There is no offline progress and there will not be. The only thing that
-## moves this app forward is a phone lying still with the screen on, and an elf
-## who laid a joist while you were asleep would be a lie about what you did.
+## moves this app forward is an app-open region, and a hobbit who laid a joist
+## while you were asleep would be a lie about what you did.
 ##
 ## Four things are kept per island.
 ##
@@ -38,8 +38,8 @@ extends RefCounted
 ## possibly the most effective: recognising somebody is most of believing in
 ## them.
 ##
-## **The hours.** How much building this island has actually had out of you, plus
-## where it is in the work-and-rest cycle.
+## **The hours.** How much app-open time this region has had, plus where it is
+## in the work-and-rest cycle.
 ##
 ## **The paths.** Where they have walked, a byte per patch of ground. The one
 ## record in here that is a picture rather than a number, and the only one the
@@ -207,10 +207,11 @@ static func phase(island: int) -> String:
 
 ## How long this island has actually had somebody working on it.
 ##
-## Counted only while the world is open, on this island, and building - so it
-## excludes the menu, the other four islands, and the fifteen minutes an hour
-## they spend sitting down. It is the honest answer to "how much of this did I
-## do", which over a week is the only number worth keeping.
+## Counted only while the world is open on this region.
+## It excludes the menu and the other four regions, but includes the quarter
+## hour the crew spends resting.
+## It is the honest answer to "how much of this did I do", which over a week is
+## the only number worth keeping.
 static func build_time(island: int) -> String:
 	var s := int(read(island)["focus"])
 	return "%d:%02d:%02d" % [s / 3600, (s / 60) % 60, s % 60]

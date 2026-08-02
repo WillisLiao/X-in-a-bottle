@@ -41,9 +41,9 @@ extends RefCounted
 ## That is somewhere near ten thousand acts, and an act - walk there, work, walk
 ## back - averages twenty-five seconds.
 ##
-## Seventy elf-hours, then. Against an average of seven or eight elves actually
-## present, which is what the charge curve gives you, that is nine to twelve
-## hours of held stillness, and nobody holds still for nine hours in one sitting.
+## Seventy hobbit-hours, then.
+## Against the fixed travelling band of twelve, that is several hours of active
+## work spread over the app-open week and its scheduled breaks.
 ## `EFFORT` is the one dial: it multiplies every bill of materials, so a week can
 ## become a fortnight or a weekend without touching anything else.
 

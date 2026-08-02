@@ -72,6 +72,11 @@ const LAND_Z := Biome.LAND_Z
 enum Task { NONE, GATHER, CRAFT, HAUL, DELIVER, FIT, LOOK, REST, IDLE, OWN,
 	PLAY, CARRY_FIRE }
 
+## The bottle is never empty.
+## Two people appear with the first view, then the fixed band walks in one at a
+## time over the next twenty seconds instead of materialising as a crowd.
+const STARTING_OBJECTS := 2
+
 ## Two bodies, two jobs. Small and quick does the fine work; big and slow does
 ## what the small ones physically cannot. Roughly nine to three at a full crew.
 enum Species { HOBBIT, TROLL }
@@ -453,8 +458,10 @@ var _works: Array[Work] = []
 var _anchors: Dictionary = {}
 var _mats: Dictionary = {}
 
-## Every elf who lives here, as the integer they are generated from. They come
-## and go with the charge, but the same people come back.
+## Every elf who lives here, as the integer they are generated from.
+## The later band migration will lift these seeds to world state.
+## This session only fixes the roster at capacity, so it deliberately leaves
+## that save migration untouched.
 var _residents: PackedInt32Array = PackedInt32Array()
 var _resident_affinity := {}
 
@@ -465,12 +472,6 @@ var _house_light: OmniLight3D
 var _events: Array = []
 
 var _time := 0.0
-var _quake := 0.0
-
-## How recently the phone moved. While this is up the elves have downed tools -
-## which is the whole app in one variable.
-var _rattled := 0.0
-
 var _focus := 0.0
 
 ## Where they are in the hour, and how much of the break is left.
@@ -665,37 +666,24 @@ func _ashore(p: Vector3) -> Vector3:
 
 # --- the world tick ----------------------------------------------------------
 
-func _tick(delta: float, _population: int, disturbed: bool) -> void:
+func _tick(delta: float) -> void:
 	_time += delta
-	_quake = maxf(0.0, _quake - delta * 1.4)
+	# This is app-open time on the watched region, not completed labour.
+	# The stillness branch once excluded disturbance frames, and that distinction
+	# disappeared with the accelerometer rule.
+	_focus += delta
 
 	if _rest_left > 0.0:
-		# The break runs on app-open time alone. Movement is not a disturbance
-		# during it: they have stopped anyway, and charging somebody for picking
-		# their phone up during a rest would make the rest a second shift.
+		# The break runs on app-open time alone.
 		_rest_left = maxf(0.0, _rest_left - delta)
 		_rest_note = maxf(0.0, _rest_note - delta)
-		_rattled = 0.0
 		if _rest_left <= 0.0:
 			_wake()
 		_dirty = true
 	else:
-		# The phone moved. Tools go down, work stops accruing, and it takes them a
-		# moment to settle back to it - but nothing that is already built comes
-		# apart. Undoing the work was the wrong cost: it made a phone call able to
-		# erase an evening, and the point is to slow the build down, not to send
-		# it backwards.
-		if disturbed:
-			_rattled = 1.0
-		else:
-			_rattled = maxf(0.0, _rattled - delta * 0.34)
-			_focus += delta
-			_cycle += delta
-			if _cycle >= WORK_PERIOD:
-				_down_tools()
-
-	position = Vector3(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0), 0.0) \
-		* _quake * 0.05
+		_cycle += delta
+		if _cycle >= WORK_PERIOD:
+			_down_tools()
 
 	if _fire:
 		_fire.light_energy = 1.5 + sin(_time * 7.3) * 0.18 + sin(_time * 3.1) * 0.12
@@ -962,14 +950,6 @@ func _decide(e: Elf) -> void:
 	# which is the entire point of a break.
 	if resting():
 		_decide_rest(e)
-		return
-
-	# Nothing gets decided while the phone is in somebody's hand. They mill,
-	# they look up, and they wait for it to be put down.
-	if _rattled > 0.35:
-		e.task = Task.IDLE
-		_head_for(e, _somewhere_own(e))
-		e.pause = randf_range(1.0, 2.5)
 		return
 
 	# Tiredness is a weight, not a rule. A stubborn elf keeps working well past
@@ -1651,13 +1631,10 @@ func _tick_elf(e: Elf, delta: float) -> void:
 		elif e.task == Task.LOOK or e.task == Task.OWN:
 			target *= 0.85
 
-		# The rule, at the one moment it is unmistakable. Everybody else is
-		# somewhere in a cycle a disturbance merely delays; the carrier is
-		# eighty seconds into a single errand across open ground, and they stop
-		# where they stand and wait, holding the light, until the phone is put
-		# back down. They also do not walk through the break - a quarter of an
-		# hour off is a quarter of an hour off wherever you happen to be.
-		if e.task == Task.CARRY_FIRE and (_rattled > 0.35 or resting()):
+		# A carrier does not walk through a break.
+		# A quarter of an hour off is a quarter of an hour off wherever the
+		# person happened to be when it started.
+		if e.task == Task.CARRY_FIRE and resting():
 			target = 0.0
 
 		# Accelerate from rest and decelerate into arrival, both over about
@@ -1914,12 +1891,6 @@ func _address(e: Elf, delta: float) -> void:
 func _act(e: Elf, delta: float) -> void:
 	if e.lose_left > 0.0:
 		_tick_lose(e, delta)
-		return
-
-	# Downed tools. Work in progress is held rather than lost, so putting the
-	# phone down for a second does not cost the last four minutes of a chop.
-	if _rattled > 0.35 and e.task != Task.REST and e.task != Task.IDLE \
-			and e.task != Task.CARRY_FIRE:
 		return
 
 	match e.task:
@@ -2694,7 +2665,7 @@ func _animate(e: Elf, delta: float, walking_now: bool) -> void:
 		grip_dir = Vector3(0, -0.35, 0.94)
 		hands = true
 		posture += 0.06
-	elif not walking_now and e.work_left > 0.0 and _rattled < 0.35:
+	elif not walking_now and e.work_left > 0.0:
 		match e.motion:
 			"sweep":
 				# A scythe or a shovel is a sweep, not a blow: bent over, the
@@ -2750,12 +2721,6 @@ func _animate(e: Elf, delta: float, walking_now: bool) -> void:
 			arm_a = 0.10
 			arm_b = 0.10
 			posture = 0.0
-	elif _rattled > 0.35 and not walking_now:
-		# Stopped and looking up. Nobody carries on hammering while the ground
-		# is moving.
-		arm_a = -0.30
-		arm_b = -0.24
-		posture = -0.10
 	elif e.task == Task.IDLE and not walking_now and e.lose_left <= 0.0:
 		# One personal idle fidget, the same one every time this individual
 		# stands still with nothing to do - the thing that makes it somebody
@@ -3096,63 +3061,6 @@ func _shadow_blob(e: Elf) -> void:
 	node.position = Vector3(0, 0.006, 0)
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	e.node.add_child(node)
-
-
-## The phone moved, so some of them go.
-##
-## **Nothing that has been built comes apart.** An earlier version knocked the
-## last two works off the top, on the rule that what was built can be lost, and
-## it was wrong here. That rule was written for a bottle that filled in fifteen
-## minutes and emptied in one; against a build that takes a week it means a phone
-## call can erase an evening, and the honest response to a mechanic that can
-## erase an evening is to stop opening the app.
-##
-## Losing people is enough of a cost. The crew takes fifteen unbroken minutes to
-## come back up to strength, so a disturbance still costs real hours of building
-## - it just costs them forwards, by slowing the work down, rather than backwards
-## by undoing it. Progress only ever goes one way now.
-func _shrink() -> void:
-	if resting():
-		return
-
-	_quake = 1.0
-
-	var leaving := int(ceil(float(_elves.size()) * LOSS_FRACTION))
-	for _i in leaving:
-		if _elves.size() <= 1:
-			break
-		var index := randi() % _elves.size()
-		var e := _elves[index]
-
-		# Whatever they were holding is put back rather than vanishing with them.
-		if e.carrying:
-			var holder := e.carrying
-			e.grip.remove_child(holder)
-			var home := _home_for(e.carry_kind)
-			for child in holder.get_children():
-				holder.remove_child(child)
-				if home:
-					home.node.add_child(child)
-					home.items.append(child)
-				else:
-					child.queue_free()
-			if home:
-				home.settle()
-			holder.queue_free()
-		if e.station and e.station.taken_by == e.id:
-			e.station.taken_by = -1
-		if e.work and e.work.taken_by == e.id:
-			e.work.taken_by = -1
-		_drop_tool(e)
-
-		e.node.queue_free()
-		_elves.remove_at(index)
-
-	for e in _elves:
-		_cheer(e, -0.55)
-
-	_dirty = true
-	_save()
 
 
 # --- materials ---------------------------------------------------------------

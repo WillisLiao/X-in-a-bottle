@@ -16,7 +16,7 @@ extends SceneTree
 ## is no camera angle from which that is obvious.
 
 const NAMES := ["none", "gather", "craft", "haul", "deliver", "fit", "look",
-	"rest", "idle", "own", "play"]
+	"rest", "idle", "own", "play", "carry fire"]
 
 
 func _process(_delta: float) -> bool:
@@ -39,14 +39,12 @@ func _run() -> void:
 	root.add_child(world)
 	world.build()
 
-	var charge := Charge.new()
 	var dt := 1.0 / 30.0
 	var steps := int(minutes * 60.0 / dt)
 	var spent := {}
 
 	for i in steps:
-		charge.update(dt, 0.0, false)
-		world.advance(dt, charge.population(world.capacity), false)
+		world.advance(dt)
 		if i % 15 == 0:
 			for e in world._elves:
 				spent[e.task] = int(spent.get(e.task, 0)) + 1
