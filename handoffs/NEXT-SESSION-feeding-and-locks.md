@@ -108,8 +108,9 @@ rewriting rather than trimming.
 
 ## 2. The feed
 
-Every two hours you may tap a circular progress bar, and food rains on the
-region. They eat, and then work at **three times speed for ten minutes**.
+Every two hours the region's own coastline finishes lighting up and begins to
+breathe. Tap it and food rains on the region. They eat, and then work at
+**three times speed for ten minutes**.
 
 ### The clock
 
@@ -121,31 +122,114 @@ Store it per region alongside `focus` and `cycle` in `Progress`, as a single
 float of seconds accumulated, and persist it. Two hours is `7200.0`.
 
 Note the interaction with the existing cycle: two hours of app-open time is
-roughly two full work hours plus two fifteen-minute breaks, so the circle comes
-round a little under every third work period. That is fine, but it means the
-feed will sometimes become available mid-break. Decide whether tapping it during
-a break is allowed. Recommended: no, and the ring is drawn dim while resting.
+roughly two full work hours plus two fifteen-minute breaks, so the feed comes
+round a little under every third work period. That is fine, but it means it will
+sometimes become available mid-break. Decide whether tapping it during a break is
+allowed. Recommended: no, and the glow is held dim while resting.
 
-### The ring
+### The coastline is the progress bar
 
-The first real HUD element in the app. The only other one is a `Label` reading
-"Turn" or "Move" in the bottom left.
+Decided 2026-08-02, replacing an earlier plan for a circular bar in the corner.
 
-Draw it, do not theme it. Everything in this app is drawn: see the deleted
-`Menu.Plot` class in the git history for the house-on-a-chip drawing, which is
-the closest precedent. A `Control` with `_draw()` in a `CanvasLayer`, an arc
-that fills clockwise, in `EMBER` (`FF9A4A`) against `INK` at low alpha.
+**A light travels round the region's own shoreline.** It sets off from one point
+on the coast and works its way round over the two hours. When it closes the
+circuit the whole outline begins to breathe - a slow pulse, in and out - and
+that is what says it can be tapped.
 
-It is consistent with the existing rules provided it is **a ring and never a
-number**. `Progress.fraction`'s own comment already says "shown as a ring, never
-as a percentage", so there is precedent and language for this.
+This is much the better idea and it is worth being clear why, because it is not
+just decoration:
 
-Where: top right is free and is where the turn/move icons were also asked to go.
-Those two want designing together rather than separately.
+**It keeps the app at zero HUD.** The only overlay in the entire product is one
+`Label` reading "Turn" or "Move". A ring in the corner would have been the first
+piece of furniture, and furniture is what this app has spent its whole life
+refusing. A coastline that lights up is the world telling you something, which
+is how everything else here already works: the break is a sunset, progress is a
+house going up, attention spent is a path worn into the ground.
 
-It should fade like `_fade_back` does rather than sitting at full strength for
-twenty-five minutes, but it must not fade to nothing once it is full - a full
-ring is the one thing on screen asking to be tapped.
+**It is non-numeric by construction.** There is nothing to read, nothing to
+optimise, and no way to express it as a percentage even if somebody wanted to.
+
+**It uses something that was already made real.** The terrain work turned the
+shoreline from a rectangle with its corners hanging off into a closed, wandering
+outline. That was done for the map's sake and it pays off twice here.
+
+**A full outline reads from across a room.** The glow clips the existing bloom
+threshold in `main._build_environment`, so a breathing coast is unmissable
+without being loud.
+
+#### How to draw it
+
+A separate thin rim mesh rather than anything done to the ground. Do not try to
+find the silhouette in the terrain mesh or shade the edge of it - the folded
+coastline has collapsed vertices along it and is the wrong thing to read from.
+
+The shore curve is available in closed form from the same wobble `Land.height`
+uses. For a bearing `a`:
+
+```
+wobble = 1 + 0.10 * sin(3a + 0.7) + 0.06 * sin(5a + 2.1)
+d      = SHORE * wobble / sqrt((cos a / LAND_X)^2 + (sin a / LAND_Z)^2)
+point  = (d * cos a, land.height(point), d * sin a)
+```
+
+`SHORE` a little inside `1.02` - about `0.95` - so the line sits on the land
+rather than part way down the flank. Take the height from `Land.height` so it
+follows the relief, and lift it a few centimetres clear of the ground or it will
+z-fight along its whole length.
+
+Walk `a` round in a hundred and twenty steps, build a narrow ribbon or a thin
+tube, and carry each vertex's position round the loop as `UV.x` in nought to
+one. That value is the whole mechanism.
+
+#### The shader
+
+Two uniforms: `progress` in nought to one, and `breathe`.
+
+Below `progress`, lit. Above it, dark, but not invisible - a faint unlit rim all
+the way round is what makes the lit part legible as a portion of something
+rather than as a stray mark. A short bright head at the leading edge, falling
+off behind it over a few per cent of the loop, is what makes it read as
+travelling rather than as filling.
+
+Emission well past white so it blooms, in `EMBER` (`FF9A4A`), and warmer at the
+head.
+
+Once `progress` reaches one, hand over to `breathe`: the entire outline
+modulated by something like `0.55 + 0.45 * sin(t * 1.3)`, a four or five second
+period. A breath, not a blink. It must be slow enough to be calm and deep enough
+that a glance catches it.
+
+#### Two things that will not behave as expected
+
+**It will not visibly move.** Two hours around a forty-unit perimeter is about
+half a centimetre a second. Nobody will ever catch it travelling. That is
+acceptable and arguably right - you notice it has got further while you were
+away - but it means the *head* has to be clear enough that its position is
+readable at a glance, because the position is the only information there is.
+Do not waste time trying to make the motion perceptible.
+
+**The Ice will fight it.** A warm glow on a pale blue-white coast is much weaker
+than the same glow on the Meadow or the Green. Expect to need a per-biome accent
+colour, in the same way each region already designs its own sky. The Ice
+probably wants something colder and brighter rather than ember.
+
+Also worth watching: during a break the hearth is meant to be the brightest
+thing in the world, and a breathing coastline would take that away. Holding the
+glow dim while `resting()` fixes both this and the mid-break tap question above.
+
+#### Tapping it
+
+There is no target to hit. When the outline is breathing, **a tap anywhere on
+the region** feeds them.
+
+Guard it to `_map < 0.35` in `main._finish_press`, because out on the map a tap
+on a region already means travel to it or send a lantern. Put it after the
+corner toggle and before anything else.
+
+Only the region being watched glows. The far regions in `Country` have no feed
+clock running, because nothing accrues in a place nobody is looking at, so their
+coastlines stay dark - which incidentally keeps the map readable: one settled
+region has a fire, the watched one has a fire and possibly a lit coast.
 
 ### The rain
 
@@ -288,8 +372,11 @@ purchase flow as a separate piece behind that seam.
 3. Remove the stillness rule, including the crew-size decision. Everything else
    is easier once this is gone, and the feed in particular would otherwise have
    to reason about being tapped mid-disturbance.
-4. The feed: ring, rain, eat and cook, then the speed-up last so it is tuned
-   against a working meal rather than the other way round.
+4. The feed, in this order: the coastline glow, then the rain, then eating and
+   cooking, and the speed-up last so it is tuned against a working meal rather
+   than the other way round. The glow is worth building first even though it is
+   the least mechanical part - it is the only bit anyone will look at for two
+   hours at a stretch.
 5. Locks, up to but not including the purchase flow.
 6. The purchase flow, as its own session.
 
@@ -299,9 +386,13 @@ purchase flow as a separate piece behind that seam.
 - Can the feed be tapped during a break?
 - Is 3x for ten minutes the intended size once it is on screen, or was it a
   first guess?
-- Does the ring keep filling while the camera is out on the map, where there is
-  no single region being watched? Recommended: yes, on the region you last
-  stood in, since that is the one whose clock is running everywhere else.
+- Does the coastline glow survive a region being finished, or does a completed
+  region stop asking to be fed?
+- Does the feed clock keep filling while the camera is out on the map, where
+  there is no single region being watched? Recommended: yes, on the region you
+  last stood in, since that is the one whose clock is running everywhere else.
+  The coastline glow follows the clock, so it will be part way round when you
+  come back down to it.
 - With the stillness rule gone, what stops the app being left running in a
   pocket? Nothing, and that may be fine, but it was previously the entire
   answer.
@@ -317,5 +408,6 @@ cd Bottle3D
 `--screen` is `title`, `world` or `map`; `--island` (or `--region`) 0-4; also
 `--yaw`, `--pitch`, `--zoom`, `--rest` and `--fire=<region>`.
 
-A `--feed` argument that fills the ring instantly will pay for itself within
-about ten minutes of working on it, in the same way `--fire` did.
+A `--feed=<0..1>` argument that sets the coastline straight to a given point
+round the loop will pay for itself within about ten minutes of working on it, in
+the same way `--fire` did. Without it every look at the glow costs two hours.
