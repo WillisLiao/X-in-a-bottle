@@ -40,7 +40,11 @@ scripts/causeway.gd  the necks between regions - and they answer `height`,
                      which is what lets an elf walk out of its own region
 ```
 
-**Next, in order:**
+**Next: `handoffs/NEXT-SESSION-what-the-other-sites-build.md`.** It frames the
+one question everything else is now waiting on, and lists the smaller things
+owed alongside it.
+
+**In order:**
 
 - **What a second and third site build.** Still the largest genuine unknown in
   the whole direction. `plan.gd` knows how to make one three-storey house.
