@@ -15,6 +15,7 @@ var _capture_path := ""
 var _capture_after := 2.0
 var _capture_settings := false
 var _capture_hud_layout := false
+var _capture_match_end := false
 var _capture_character := false
 var _capture_overview := false
 
@@ -25,6 +26,9 @@ func _ready() -> void:
 	_build_hud()
 	_read_capture_arguments()
 	director.begin()
+	if _capture_match_end:
+		# Renderer-only inspection hook for the terminal overlay; normal matches reach it through MatchDirector.
+		hud.show_match_result(Duelist.Team.SUN)
 	if not _capture_path.is_empty():
 		_capture_after_delay()
 
@@ -242,6 +246,8 @@ func _read_capture_arguments() -> void:
 			_capture_settings = true
 		elif argument == "--hud-layout":
 			_capture_hud_layout = true
+		elif argument == "--match-end":
+			_capture_match_end = true
 		elif argument == "--character":
 			_capture_character = true
 		elif argument == "--overview":
