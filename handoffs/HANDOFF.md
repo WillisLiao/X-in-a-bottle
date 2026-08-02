@@ -56,21 +56,17 @@ scripts/causeway.gd  the necks between regions - and they answer `height`,
                      which is what lets an elf walk out of its own region
 ```
 
-**Completed 2026-08-02: `handoffs/NEXT-SESSION-feeding-and-locks.md`.**
-The camera no longer has pan bounds.
-The stillness rule is gone while tilt parallax and the work-and-rest cycle remain.
-Every region now has a two-hour app-open feed shown by its coastline, which calls down food and grants a temporary three-times work haste.
-The Dunes and Ice now have local `Progress` gates and white map padlocks.
-The actual StoreKit purchase flow remains deliberately separate from the local lock and gate.
+**Current work: `handoffs/DESIGN-living-world.md`.**
+On 2026-08-02 the owner pivoted Hobbitle from a calm app-open construction toy into a location-based social settlement game.
+The core proposition is now that real walking routes become shared fantasy trade roads, local folklore, and player-authored boroughs.
+This is not a focus app and it must never need a player to leave the renderer running to progress.
 
-**Next: `handoffs/NEXT-SESSION-what-the-other-sites-build.md`.**
-Execute `handoffs/NEXT-SESSION-what-the-other-sites-build.md`.
-Start with the save-format work: `Progress` must become per-site rather than per-region, and a per-house seed plus generator version must be saved before any grammar exists.
-Getting that wrong silently rebuilds the wrong buildings from valid saves.
+The first implementation slice is deliberately offline and local.
+It proves that a coarse route sample can become a persistent visible road and a place-bound rumor before accounts, location permissions, map data, or a backend are introduced.
+The route ledger must store coarse fantasy cells rather than raw GPS trails.
 
-That handoff carries the owner's answers to most of the larger design question.
-Regions grow **villages** of houses, drawn at random from a per-region style, no two alike, built from a grammar rather than a hundred authored queues.
-One travelling band of builders moves through the world, leaving each finished region with permanent residents of its own.
+`NEXT-SESSION-what-the-other-sites-build.md` remains useful historical design work on house grammars and permanent residents.
+The earlier feed, paid-lock, and app-open progression work is prototype machinery rather than the released game's loop.
 
 **In order:**
 
@@ -102,29 +98,16 @@ Lull is still a live idea; the 2D `Bottle` is superseded and should be retired.
 
 ## What Hobbitle is
 
-**Hobbitle**, short for Hobbits in a Bottle, because the long name truncates
-on the iOS home screen. It was called Elvle until 2026-08-02, and the class
-name `ElfWorld`, the array `_elves` and a lot of the prose in the source still
-say elf. That is deliberate: renaming an identifier four thousand lines deep
-buys nothing a user can see. The people are hobbits and trolls.
-
+**Hobbitle**, short for Hobbits in a Bottle, is a location-based social settlement game.
+The real world slowly becomes a shared fantasy civilisation through the routes its players actually walk.
 The phone is the bottle, so nothing draws a vessel.
-One world of five regions, each with one three-storey house on it that takes
-about a week of app-open time to finish.
-The hobbits build whether the phone is still, in a pocket, or being carried.
-There is no accelerometer-based penalty, population curve, or lost work.
 
-Every two hours of app-open time in the watched region, its coastline finishes lighting up and begins to breathe.
-Tap anywhere on that region while it is not resting to call down a meal.
-They cook fish, eat the meal, then work at three times speed for ten minutes.
-The coastline is the feed's only progress indicator.
-It is a world event rather than a HUD or a timer.
+Players discover local rumors, travelers, materials, and sites while they move through real places.
+Their discoveries build a personal village and contribute to shared boroughs that develop their own roads, markets, stories, and architecture.
+The world should be exciting to revisit because people and places changed, not because an app was left running.
 
-The Shore and Green open when a hobbit carries a lantern to them.
-The Dunes and Ice are paid regions.
-Payment removes their lock, but a lantern must still settle them.
-The purchase implementation is intentionally outside the Godot layer until a
-separate StoreKit session.
+The five-region construction world presently in `Bottle3D/` is a visual prototype and a source of reusable construction machinery.
+Its feed, paid locks, and app-open progression are not the released product direction.
 
 **Nothing that has been built ever comes apart.**
 Against a build that takes a week, a mechanic that can undo an evening teaches
