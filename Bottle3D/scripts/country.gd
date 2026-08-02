@@ -106,6 +106,11 @@ func _far_region(index: int) -> Node3D:
 	_scatter_canopy(root, land, wear, index)
 	if Progress.settled(index):
 		_light_hearth(root, land)
+	if Region.requires_purchase(index) and not Progress.purchased(index):
+		# The actual padlock is screen space, so it remains readable at every
+		# map distance. This marker is kept on the real region that owns it,
+		# rather than in a second list of map annotations.
+		root.set_meta("map_lock", true)
 	return root
 
 

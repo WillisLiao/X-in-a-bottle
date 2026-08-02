@@ -96,6 +96,15 @@ const NEIGHBOURS := {
 	1: [4],
 }
 
+## The two distant ends of the world are paid gates.
+## Buying one only makes the land available to a lantern.
+## It never settles the region or manufactures any progress.
+const PAID := [2, 1]
+
+
+static func requires_purchase(index: int) -> bool:
+	return PAID.has(index)
+
 
 ## Every join, once each rather than once from each end.
 static func links() -> Array:

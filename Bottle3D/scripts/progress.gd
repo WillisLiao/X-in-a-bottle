@@ -164,6 +164,38 @@ static func settle(region: int) -> void:
 	_open().set_value("world", "settled", found)
 
 
+## Which paid gates have been removed.
+## This is world state rather than a region record because a purchase belongs to
+## the person holding the bottle, not to the site behind the gate.
+static func purchased_regions() -> PackedInt32Array:
+	var cfg := _open()
+	return PackedInt32Array(cfg.get_value("world", "purchased", PackedInt32Array()))
+
+
+static func purchased(region: int) -> bool:
+	return purchased_regions().has(region)
+
+
+static func set_purchased(region: int, value: bool) -> void:
+	if not Region.requires_purchase(region):
+		return
+	var found := purchased_regions()
+	if value and not found.has(region):
+		found.append(region)
+	elif not value:
+		var at := found.find(region)
+		if at >= 0:
+			found.remove_at(at)
+	_open().set_value("world", "purchased", found)
+
+
+## Local debug seam for the StoreKit session that does not exist yet.
+## `--purchase=<region>` calls this so both the locked and unlocked map can be
+## captured without manufacturing a native purchase flow in this project.
+static func toggle_purchased(region: int) -> void:
+	set_purchased(region, not purchased(region))
+
+
 ## Whether the start screen has ever been got past. Used only to decide whether
 ## the first thing shown is the title or the island you were last on.
 static func seen_title() -> bool:

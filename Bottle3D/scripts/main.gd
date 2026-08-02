@@ -165,6 +165,7 @@ var _fill_energy := 1.0
 var _ambient_energy := 1.0
 var _menu: Menu
 var _mode_label: Label
+var _lock_marks: LockMarks
 
 var _world: ElfWorld
 var _island := 0
@@ -217,6 +218,7 @@ var _arg_pitch := NAN
 var _arg_pan := Vector2(NAN, NAN)
 var _arg_feed := NAN
 var _arg_feast := false
+var _arg_purchase := -1
 var _capturing := false
 var _elapsed: float = 0.0
 
@@ -236,6 +238,7 @@ func _ready() -> void:
 	_island = clampi(Progress.last_island(), 0, Biome.COUNT - 1)
 	_country = Country.new()
 	add_child(_country)
+	_lock_marks.set_context(_camera, _country)
 
 	_menu = Menu.new()
 	add_child(_menu)
@@ -243,6 +246,9 @@ func _ready() -> void:
 	_menu.dismissed.connect(_on_dismissed)
 
 	_read_capture_args()
+	if _arg_purchase >= 0:
+		Progress.toggle_purchased(_arg_purchase)
+		Progress.flush()
 
 	if _capture_screen == "world" or _capture_screen == "map":
 		_enter(_island)
@@ -276,6 +282,8 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	_elapsed += delta
 	_move_camera(delta)
+	if _lock_marks:
+		_lock_marks.set_map(_map)
 	_fade_back(delta)
 	_rest_light(delta)
 	_maybe_capture()
@@ -546,6 +554,11 @@ func _tap_region(at: Vector2) -> bool:
 
 	if best < 0:
 		return false
+	if Region.requires_purchase(best) and not Progress.purchased(best):
+		# A purchase only removes the gate. It does not make the region settled
+		# or bypass the lantern walk, and the StoreKit flow lives behind this
+		# local seam in a later session.
+		return true
 	if best == _island:
 		# Already living there. Go back down to it.
 		_zoom_to = 1.0
@@ -676,6 +689,9 @@ func _rest_light(delta: float) -> void:
 func _build_back() -> void:
 	var layer := CanvasLayer.new()
 	layer.layer = 110
+
+	_lock_marks = LockMarks.new()
+	layer.add_child(_lock_marks)
 
 	# Which mode dragging is in right now, not which one the tap switches to -
 	# that is the way round people actually read a toggle.
@@ -1212,6 +1228,13 @@ func _read_capture_args() -> void:
 			# Starts a complete feed at launch, so the rain and meal can be
 			# checked without synthesising a screen tap in headless captures.
 			_arg_feast = true
+		elif arg.begins_with("--purchase="):
+			# Local-only StoreKit seam.
+			# Repeating the same capture command toggles the selected paid region
+			# between its lock and its lantern gate without pretending a purchase
+			# happened in a debug export.
+			_arg_purchase = clampi(int(arg.trim_prefix("--purchase=")), 0,
+				Biome.COUNT - 1)
 		elif arg.begins_with("--fire="):
 			# Sends the lantern to a region at launch, so eighty seconds of
 			# somebody walking can be looked at without tapping anything.
