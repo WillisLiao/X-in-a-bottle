@@ -1,0 +1,209 @@
+class_name RiftlineArena
+extends Node3D
+
+var player: Duelist
+var bot: BotDuelist
+var hud: DuelHud
+var director: MatchDirector
+var _mouse_captured := false
+var _capture_path := ""
+var _capture_after := 2.0
+var _capture_settings := false
+
+func _ready() -> void:
+	_build_environment()
+	_build_arena()
+	_build_match()
+	_build_hud()
+	_read_capture_arguments()
+	if not _capture_path.is_empty():
+		_capture_after_delay()
+
+func _physics_process(delta: float) -> void:
+	if player == null:
+		return
+	var keyboard := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
+	var movement := hud.movement if hud.movement.length_squared() > 0.001 else keyboard
+	player.apply_look(hud.take_look_delta())
+	if hud.gyro_enabled:
+		var gyroscope := Input.get_gyroscope()
+		player.apply_look(Vector2(gyroscope.y, -gyroscope.x) * 2.4)
+	if hud.take_crouch():
+		player.toggle_crouch()
+	if hud.take_prone():
+		player.toggle_prone()
+	if hud.take_weapon_switch():
+		player.switch_weapon()
+	player.set_combat_pose(hud.aim_held, hud.peek_direction, delta)
+	player.drive(movement, hud.fire_held or Input.is_action_pressed("fire"), hud.take_jump() or Input.is_action_just_pressed("jump"), delta)
+	hud.set_stance(player.stance)
+	hud.set_weapon(player.weapon)
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
+		_mouse_captured = event.pressed
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if _mouse_captured else Input.MOUSE_MODE_VISIBLE
+	elif event is InputEventMouseMotion and _mouse_captured:
+		player.apply_look(event.relative)
+
+func _build_environment() -> void:
+	var environment := Environment.new()
+	environment.background_mode = Environment.BG_COLOR
+	environment.background_color = Color("061027")
+	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	environment.ambient_light_color = Color("819fd4")
+	environment.ambient_light_energy = 1.15
+	environment.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	var world_environment := WorldEnvironment.new()
+	world_environment.environment = environment
+	add_child(world_environment)
+
+	var key := DirectionalLight3D.new()
+	key.rotation_degrees = Vector3(-56, -28, 0)
+	key.light_color = Color("dce9ff")
+	key.light_energy = 1.8
+	key.shadow_enabled = true
+	add_child(key)
+
+	var rim := OmniLight3D.new()
+	rim.position = Vector3(10, 5, -4)
+	rim.light_color = Color("ff8958")
+	rim.light_energy = 5.0
+	rim.omni_range = 17.0
+	add_child(rim)
+
+	var fill := OmniLight3D.new()
+	fill.position = Vector3(-10, 5, 4)
+	fill.light_color = Color("5dbdff")
+	fill.light_energy = 4.5
+	fill.omni_range = 17.0
+	add_child(fill)
+
+func _build_arena() -> void:
+	_add_solid_box(Vector3(0, -0.5, 0), Vector3(44, 1, 32), Color("213354"), 0.0)
+	_add_solid_box(Vector3(0, 3, -16), Vector3(44, 6, 1), Color("182846"), 0.0)
+	_add_solid_box(Vector3(0, 3, 16), Vector3(44, 6, 1), Color("182846"), 0.0)
+	_add_solid_box(Vector3(-22, 3, 0), Vector3(1, 6, 32), Color("182846"), 0.0)
+	_add_solid_box(Vector3(22, 3, 0), Vector3(1, 6, 32), Color("182846"), 0.0)
+
+	# Four asymmetric blockers create sight-line decisions now and still read as lanes in a five-person match.
+	_add_solid_box(Vector3(-4, 1.7, -5), Vector3(3.2, 3.4, 3.2), Color("2c4776"), 0.1)
+	_add_solid_box(Vector3(5, 1.7, 4), Vector3(3.2, 3.4, 3.2), Color("2c4776"), 0.1)
+	_add_solid_box(Vector3(-10, 1.1, 6), Vector3(2.0, 2.2, 6.2), Color("263e68"), 0.1)
+	_add_solid_box(Vector3(11, 1.1, -6), Vector3(2.0, 2.2, 6.2), Color("263e68"), 0.1)
+	_add_emissive_rail(Vector3(0, 0.06, -10), Vector3(28, 0.08, 0.08), Color("4cc5ff"))
+	_add_emissive_rail(Vector3(0, 0.06, 10), Vector3(28, 0.08, 0.08), Color("ff8655"))
+	_add_emissive_rail(Vector3(-15, 0.06, 0), Vector3(0.08, 0.08, 20), Color("4cc5ff"))
+	_add_emissive_rail(Vector3(15, 0.06, 0), Vector3(0.08, 0.08, 20), Color("ff8655"))
+
+func _build_match() -> void:
+	director = MatchDirector.new()
+	add_child(director)
+	director.add_spawn(Duelist.Team.SUN, Vector3(-13, 0.1, 0))
+	director.add_spawn(Duelist.Team.VOID, Vector3(13, 0.1, 0))
+
+	player = Duelist.new()
+	player.name = "SunDuelist"
+	player.build(Duelist.Team.SUN, true)
+	player.position = Vector3(-13, 0.1, 0)
+	player.rotation.y = -PI * 0.5
+	add_child(player)
+	director.register_duelist(player)
+
+	bot = BotDuelist.new()
+	bot.name = "VoidDuelist"
+	bot.build(Duelist.Team.VOID, false)
+	bot.position = Vector3(11, 0.1, 0)
+	bot.rotation.y = PI * 0.5
+	bot.target = player
+	add_child(bot)
+	director.register_duelist(bot)
+
+	player.shot.connect(_show_shot)
+	bot.shot.connect(_show_shot)
+	player.damaged.connect(_on_player_damaged)
+	director.score_changed.connect(_on_score_changed)
+
+func _build_hud() -> void:
+	var layer := CanvasLayer.new()
+	add_child(layer)
+	hud = DuelHud.new()
+	layer.add_child(hud)
+
+func _on_player_damaged(_amount: float, remaining: float) -> void:
+	hud.show_damage(remaining)
+
+func _on_score_changed(sun: int, void_score: int) -> void:
+	hud.set_score(sun, void_score)
+
+func _show_shot(origin: Vector3, end: Vector3, team: Duelist.Team) -> void:
+	var beam := MeshInstance3D.new()
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = 0.025
+	mesh.bottom_radius = 0.025
+	mesh.height = origin.distance_to(end)
+	beam.mesh = mesh
+	beam.material_override = _emissive_material(Color("ffb15c") if team == Duelist.Team.SUN else Color("75dbff"), 7.0)
+	beam.position = origin.lerp(end, 0.5)
+	add_child(beam)
+	beam.look_at(end, Vector3.UP)
+	beam.rotate_object_local(Vector3.RIGHT, PI * 0.5)
+	_remove_beam(beam)
+
+func _remove_beam(beam: MeshInstance3D) -> void:
+	await get_tree().create_timer(0.055).timeout
+	beam.queue_free()
+
+func _add_solid_box(position: Vector3, dimensions: Vector3, color: Color, emission: float) -> void:
+	var body := StaticBody3D.new()
+	body.position = position
+	add_child(body)
+	var mesh_instance := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = dimensions
+	mesh_instance.mesh = box
+	mesh_instance.material_override = _emissive_material(color, emission)
+	body.add_child(mesh_instance)
+	var collision := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = dimensions
+	collision.shape = shape
+	body.add_child(collision)
+
+func _add_emissive_rail(position: Vector3, dimensions: Vector3, color: Color) -> void:
+	var rail := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = dimensions
+	rail.mesh = box
+	rail.position = position
+	rail.material_override = _emissive_material(color, 5.5)
+	add_child(rail)
+
+func _emissive_material(color: Color, energy: float) -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.albedo_color = color
+	material.metallic = 0.25
+	material.roughness = 0.35
+	material.emission_enabled = energy > 0.0
+	material.emission = color
+	material.emission_energy_multiplier = energy
+	return material
+
+func _read_capture_arguments() -> void:
+	for argument in OS.get_cmdline_user_args():
+		if argument.begins_with("--capture="):
+			_capture_path = argument.trim_prefix("--capture=")
+		elif argument.begins_with("--after="):
+			_capture_after = maxf(0.2, argument.trim_prefix("--after=").to_float())
+		elif argument == "--settings":
+			_capture_settings = true
+	if _capture_settings:
+		hud.open_settings()
+
+func _capture_after_delay() -> void:
+	await get_tree().create_timer(_capture_after).timeout
+	var image := get_viewport().get_texture().get_image()
+	var error := image.save_png(_capture_path)
+	if error != OK:
+		push_error("Could not write Riftline capture: %s" % _capture_path)
+	get_tree().quit()

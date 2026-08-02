@@ -1,0 +1,54 @@
+; Engine configuration file.
+; Riftline is intentionally portrait-free: a competitive shooter needs a stable landscape grip.
+config_version=5
+
+[application]
+
+config/name="Riftline"
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.7", "Mobile")
+
+[display]
+
+[display/window]
+size/viewport_width=1280
+size/viewport_height=588
+size/window_width_override=1280
+size/window_height_override=588
+size/resizable=true
+stretch/mode="canvas_items"
+handheld/orientation=0
+
+[input]
+
+move_forward={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"physical_keycode":87)]
+}
+move_back={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"physical_keycode":83)]
+}
+move_left={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"physical_keycode":65)]
+}
+move_right={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"physical_keycode":68)]
+}
+fire={
+"deadzone": 0.5,
+"events": [Object(InputEventMouseButton,"button_index":1)]
+}
+jump={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"physical_keycode":32)]
+}
+
+[rendering]
+
+renderer/rendering_method="mobile"
+renderer/rendering_method.mobile="mobile"
+textures/default_filters/use_nearest_mipmap_filter=false
+environment/defaults/default_clear_color=Color(0.0196078, 0.027451, 0.0705882, 1)
