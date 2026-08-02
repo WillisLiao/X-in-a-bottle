@@ -99,5 +99,7 @@ It can instead make every player want to show someone the unusual world they mad
 
 ## First playable story
 
-`NEXT-SESSION-first-expedition.md` implements the first myth, **The Sleeping Hill**.
+`435fc8e` implements the first myth, **The Sleeping Hill**.
 It is the proof that Hobbitle is an adventure game rather than a screensaver.
+`NEXT-SESSION-meadow-act.md` is the active implementation mission.
+It makes The Sleeping Hill the first chapter of a complete Meadow Act that ends with the band migrating to Shore.

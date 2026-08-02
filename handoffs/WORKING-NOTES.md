@@ -211,8 +211,11 @@ It has no device location, permissions, accounts, backend, or StoreKit work.
 `NEXT-SESSION-map-first-field-loop.md` - completed in `9cbf377`.
 It turns the existing continuous map into the game's actual front door and demotes the passive construction view to a village visit.
 
-`NEXT-SESSION-first-expedition.md` - next after `9cbf377`.
+`NEXT-SESSION-first-expedition.md` - completed in `435fc8e`.
 It turns the stopped location-plan scaffold into The Sleeping Hill, an entirely offline story with a permanent Hollow Door or Lantern Grove outcome.
+
+`NEXT-SESSION-meadow-act.md` - next after `435fc8e`.
+It grows The Sleeping Hill into a complete Meadow Act with Rooted Gate, Field of Lost Lights, and a permanent migration to Shore.
 
 `NEXT-SESSION-feeding-and-locks.md` - completed historical work from 2026-08-02.
 It removed the stillness rule and camera pan bounds and added the two-hour coastline feed.

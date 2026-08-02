@@ -6,10 +6,10 @@ Dated detail goes in `devlogs/`, not here.
 
 ## Where the work is
 
-**The Sleeping Hill expedition is now implemented in the working tree.**
+**The Sleeping Hill expedition was completed in `435fc8e`.**
 The offline fable state, three-step route, world-relative hill geometry, projected touch interaction, Hollow Door outcome, Lantern Grove outcome, and story capture hooks are in `Bottle3D/`.
 The pure test is `tools/fable_state_test.gd`.
-The next session should inspect the committed captures and test on an iPhone before expanding the Meadow story.
+The next session should inspect its captures and test it on an iPhone before expanding the Meadow story.
 
 **`Bottle3D/` is the live project. It is called Hobbitle and the bundle ID is
 `com.lull.hobbitle`.** Godot 4.7, landscape.
@@ -22,7 +22,7 @@ The next session should inspect the committed captures and test on an iPhone bef
    that look like bugs and must not be "fixed", and the house style. All of it
    was learned by losing time to it.
 3. **`handoffs/DESIGN-offline-long-road.md`**, for the active product direction.
-4. **`handoffs/NEXT-SESSION-first-expedition.md`**, for the next implementation mission.
+4. **`handoffs/NEXT-SESSION-meadow-act.md`**, for the next implementation mission.
 5. **`handoffs/DESIGN-one-world.md`**, for the physical five-region map that the offline game reuses.
 6. `devlogs/2026-08-02.md` if you want the reasoning behind a specific number.
    It is long. Most constants in the code have their argument there.
@@ -76,8 +76,8 @@ The paid locks were removed with the living-world slice.
 **Completed in `9cbf377`: `handoffs/NEXT-SESSION-map-first-field-loop.md`.**
 The title now enters the living field map, legacy construction pauses there, and the close village is a deliberate camera descent.
 
-**Next work: `handoffs/NEXT-SESSION-first-expedition.md`.**
-It implements The Sleeping Hill, a fully offline journey from a field disturbance to a permanent Hollow Door or Lantern Grove.
+**Next work: `handoffs/NEXT-SESSION-meadow-act.md`.**
+It turns The Sleeping Hill proof into a complete Meadow Act with two more myths, permanent map-visible choices, and the band's migration to Shore.
 
 **The map-first field loop is now built.** `main.gd` has explicit `FIELD` and
 `VILLAGE` modes, title entry and `--screen=field` open at full map distance,
@@ -132,17 +132,15 @@ Its paid locks have been removed.
 Against a build that takes a week, a mechanic that can undo an evening teaches
 people not to open the app.
 
-**Every hour of building they stop for a quarter of an hour**, and that break runs down only while the app is open on that region.
-There is deliberately nothing to do while it does.
-Take the break with them and they are ready when you get back; do not, and they are still sitting there.
-Tilt and ordinary phone movement do not affect a break.
+Legacy construction still has a work and rest simulation because it remains useful visual prototype machinery.
+It must never be the source of expedition progress or a reason to leave the app open.
 
 **Touching the screen is free.**
 Drag orbits, pinch zooms, and taps do not cost progress.
 The small tilt parallax remains because it makes the phone feel like a bottle,
 not because it controls work.
 
-## The three pieces
+## Legacy construction machinery
 
 **`plan.gd` - the queue.**
 498 works in the order a house is actually built.
