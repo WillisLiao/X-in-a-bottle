@@ -1,6 +1,8 @@
 class_name RiftlineArena
 extends Node3D
 
+const PULP_LIT := preload("res://shaders/pulp_lit.gdshader")
+
 var player: Duelist
 var bot: BotDuelist
 var hud: DuelHud
@@ -9,6 +11,7 @@ var _mouse_captured := false
 var _capture_path := ""
 var _capture_after := 2.0
 var _capture_settings := false
+var _capture_character := false
 
 func _ready() -> void:
 	_build_environment()
@@ -34,7 +37,7 @@ func _physics_process(delta: float) -> void:
 		player.toggle_prone()
 	if hud.take_weapon_switch():
 		player.switch_weapon()
-	player.set_combat_pose(hud.aim_held, hud.peek_direction, delta)
+	player.set_combat_pose(hud.aim_held, delta)
 	player.drive(movement, hud.fire_held or Input.is_action_pressed("fire"), hud.take_jump() or Input.is_action_just_pressed("jump"), delta)
 	hud.set_stance(player.stance)
 	hud.set_weapon(player.weapon)
@@ -49,10 +52,10 @@ func _unhandled_input(event: InputEvent) -> void:
 func _build_environment() -> void:
 	var environment := Environment.new()
 	environment.background_mode = Environment.BG_COLOR
-	environment.background_color = Color("061027")
+	environment.background_color = Color("102346")
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	environment.ambient_light_color = Color("819fd4")
-	environment.ambient_light_energy = 1.15
+	environment.ambient_light_color = Color("8ea8cf")
+	environment.ambient_light_energy = 0.48
 	environment.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	var world_environment := WorldEnvironment.new()
 	world_environment.environment = environment
@@ -60,41 +63,43 @@ func _build_environment() -> void:
 
 	var key := DirectionalLight3D.new()
 	key.rotation_degrees = Vector3(-56, -28, 0)
-	key.light_color = Color("dce9ff")
-	key.light_energy = 1.8
+	key.light_color = Color("ffe0b5")
+	key.light_energy = 1.35
 	key.shadow_enabled = true
 	add_child(key)
 
 	var rim := OmniLight3D.new()
 	rim.position = Vector3(10, 5, -4)
-	rim.light_color = Color("ff8958")
-	rim.light_energy = 5.0
+	rim.light_color = Color("ec6a4c")
+	rim.light_energy = 2.2
 	rim.omni_range = 17.0
 	add_child(rim)
 
 	var fill := OmniLight3D.new()
 	fill.position = Vector3(-10, 5, 4)
-	fill.light_color = Color("5dbdff")
-	fill.light_energy = 4.5
+	fill.light_color = Color("72b9ea")
+	fill.light_energy = 2.0
 	fill.omni_range = 17.0
 	add_child(fill)
 
 func _build_arena() -> void:
-	_add_solid_box(Vector3(0, -0.5, 0), Vector3(44, 1, 32), Color("213354"), 0.0)
-	_add_solid_box(Vector3(0, 3, -16), Vector3(44, 6, 1), Color("182846"), 0.0)
-	_add_solid_box(Vector3(0, 3, 16), Vector3(44, 6, 1), Color("182846"), 0.0)
-	_add_solid_box(Vector3(-22, 3, 0), Vector3(1, 6, 32), Color("182846"), 0.0)
-	_add_solid_box(Vector3(22, 3, 0), Vector3(1, 6, 32), Color("182846"), 0.0)
+	_add_solid_box(Vector3(0, -0.5, 0), Vector3(44, 1, 32), Color("3d547c"), 0.0)
+	_add_solid_box(Vector3(0, 3, -16), Vector3(44, 6, 1), Color("28496e"), 0.0)
+	_add_solid_box(Vector3(0, 3, 16), Vector3(44, 6, 1), Color("28496e"), 0.0)
+	_add_solid_box(Vector3(-22, 3, 0), Vector3(1, 6, 32), Color("28496e"), 0.0)
+	_add_solid_box(Vector3(22, 3, 0), Vector3(1, 6, 32), Color("28496e"), 0.0)
 
 	# Four asymmetric blockers create sight-line decisions now and still read as lanes in a five-person match.
-	_add_solid_box(Vector3(-4, 1.7, -5), Vector3(3.2, 3.4, 3.2), Color("2c4776"), 0.1)
-	_add_solid_box(Vector3(5, 1.7, 4), Vector3(3.2, 3.4, 3.2), Color("2c4776"), 0.1)
-	_add_solid_box(Vector3(-10, 1.1, 6), Vector3(2.0, 2.2, 6.2), Color("263e68"), 0.1)
-	_add_solid_box(Vector3(11, 1.1, -6), Vector3(2.0, 2.2, 6.2), Color("263e68"), 0.1)
-	_add_emissive_rail(Vector3(0, 0.06, -10), Vector3(28, 0.08, 0.08), Color("4cc5ff"))
-	_add_emissive_rail(Vector3(0, 0.06, 10), Vector3(28, 0.08, 0.08), Color("ff8655"))
-	_add_emissive_rail(Vector3(-15, 0.06, 0), Vector3(0.08, 0.08, 20), Color("4cc5ff"))
-	_add_emissive_rail(Vector3(15, 0.06, 0), Vector3(0.08, 0.08, 20), Color("ff8655"))
+	_add_solid_box(Vector3(-4, 1.7, -5), Vector3(3.2, 3.4, 3.2), Color("bd7254"), 0.0)
+	_add_solid_box(Vector3(5, 1.7, 4), Vector3(3.2, 3.4, 3.2), Color("d39a52"), 0.0)
+	_add_solid_box(Vector3(-10, 1.1, 6), Vector3(2.0, 2.2, 6.2), Color("496f8e"), 0.0)
+	_add_solid_box(Vector3(11, 1.1, -6), Vector3(2.0, 2.2, 6.2), Color("496f8e"), 0.0)
+	_add_pulp_cylinder(Vector3(-4, 4.2, -5), 0.9, 1.7, Color("e5b46b"))
+	_add_pulp_cylinder(Vector3(5, 4.2, 4), 0.9, 1.7, Color("e5b46b"))
+	_add_emissive_rail(Vector3(0, 0.06, -10), Vector3(28, 0.08, 0.08), Color("a7dced"))
+	_add_emissive_rail(Vector3(0, 0.06, 10), Vector3(28, 0.08, 0.08), Color("f4a55e"))
+	_add_emissive_rail(Vector3(-15, 0.06, 0), Vector3(0.08, 0.08, 20), Color("a7dced"))
+	_add_emissive_rail(Vector3(15, 0.06, 0), Vector3(0.08, 0.08, 20), Color("f4a55e"))
 
 func _build_match() -> void:
 	director = MatchDirector.new()
@@ -143,7 +148,7 @@ func _show_shot(origin: Vector3, end: Vector3, team: Duelist.Team) -> void:
 	mesh.bottom_radius = 0.025
 	mesh.height = origin.distance_to(end)
 	beam.mesh = mesh
-	beam.material_override = _emissive_material(Color("ffb15c") if team == Duelist.Team.SUN else Color("75dbff"), 7.0)
+	beam.material_override = _pulp_material(Color("ffb15c") if team == Duelist.Team.SUN else Color("75dbff"), 6.0)
 	beam.position = origin.lerp(end, 0.5)
 	add_child(beam)
 	beam.look_at(end, Vector3.UP)
@@ -162,7 +167,7 @@ func _add_solid_box(position: Vector3, dimensions: Vector3, color: Color, emissi
 	var box := BoxMesh.new()
 	box.size = dimensions
 	mesh_instance.mesh = box
-	mesh_instance.material_override = _emissive_material(color, emission)
+	mesh_instance.material_override = _pulp_material(color, emission)
 	body.add_child(mesh_instance)
 	var collision := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
@@ -176,17 +181,29 @@ func _add_emissive_rail(position: Vector3, dimensions: Vector3, color: Color) ->
 	box.size = dimensions
 	rail.mesh = box
 	rail.position = position
-	rail.material_override = _emissive_material(color, 5.5)
+	rail.material_override = _pulp_material(color, 5.5)
 	add_child(rail)
 
-func _emissive_material(color: Color, energy: float) -> StandardMaterial3D:
-	var material := StandardMaterial3D.new()
-	material.albedo_color = color
-	material.metallic = 0.25
-	material.roughness = 0.35
-	material.emission_enabled = energy > 0.0
-	material.emission = color
-	material.emission_energy_multiplier = energy
+func _add_pulp_cylinder(position: Vector3, radius: float, height: float, color: Color) -> void:
+	var cylinder := MeshInstance3D.new()
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = radius * 0.82
+	mesh.bottom_radius = radius
+	mesh.height = height
+	cylinder.mesh = mesh
+	cylinder.position = position
+	cylinder.material_override = _pulp_material(color, 0.0)
+	add_child(cylinder)
+
+func _pulp_material(color: Color, glow: float) -> ShaderMaterial:
+	var material := ShaderMaterial.new()
+	material.shader = PULP_LIT
+	material.set_shader_parameter("base_tint", color)
+	material.set_shader_parameter("shadow_tint", Color("10213d").lerp(color, 0.2))
+	material.set_shader_parameter("rim_tint", Color("dce9ef") if glow <= 0.0 else color)
+	material.set_shader_parameter("rim_strength", 0.14 if glow <= 0.0 else 0.28)
+	material.set_shader_parameter("glow_strength", glow)
+	material.set_shader_parameter("brush_scale", 1.3)
 	return material
 
 func _read_capture_arguments() -> void:
@@ -197,8 +214,14 @@ func _read_capture_arguments() -> void:
 			_capture_after = maxf(0.2, argument.trim_prefix("--after=").to_float())
 		elif argument == "--settings":
 			_capture_settings = true
+		elif argument == "--character":
+			_capture_character = true
 	if _capture_settings:
 		hud.open_settings()
+	if _capture_character:
+		# This is a renderer-only inspection hook for silhouette review, not an alternate gameplay state.
+		bot.position = Vector3(-6.0, 0.1, 0.0)
+		bot.set_physics_process(false)
 
 func _capture_after_delay() -> void:
 	await get_tree().create_timer(_capture_after).timeout

@@ -20,7 +20,7 @@ func _physics_process(delta: float) -> void:
 	head.rotation.x = clampf(lerpf(head.rotation.x, -0.03, delta * 4.0), -0.45, 0.4)
 	var strafe := sin(_time * 1.8) * 0.82
 	var advance := 0.42 if distance > 14.0 else -0.16 if distance < 7.0 else 0.08
-	set_combat_pose(false, 0, delta)
+	set_combat_pose(false, delta)
 	drive(Vector2(strafe, -advance), false, false, delta)
 	if distance < 32.0 and _has_line_of_sight():
 		fire_at(target.head.global_position)

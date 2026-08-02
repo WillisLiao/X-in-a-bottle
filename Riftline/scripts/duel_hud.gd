@@ -4,7 +4,6 @@ extends Control
 var movement := Vector2.ZERO
 var fire_held := false
 var aim_held := false
-var peek_direction := 0
 var health := 100.0
 var damage_flash := 0.0
 var camera_sensitivity := 1.0
@@ -24,8 +23,6 @@ var _aim_touch := -1
 var _jump_touch := -1
 var _crouch_touch := -1
 var _prone_touch := -1
-var _left_peek_touch := -1
-var _right_peek_touch := -1
 var _switch_touch := -1
 var _left_origin := Vector2.ZERO
 var _left_position := Vector2.ZERO
@@ -35,7 +32,6 @@ var _stance := Duelist.Stance.STAND
 var _weapon := Duelist.Weapon.PULSE
 var _settings_open := false
 var _aim_toggle := false
-var _peek_toggle := false
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -137,14 +133,6 @@ func _handle_touch(index: int, point: Vector2, pressed: bool) -> void:
 		_prone_touch = index
 		_prone_requested = true
 		return
-	if _pressed_circle(point, _left_peek_center(), 34.0):
-		_left_peek_touch = index
-		peek_direction = 0 if _peek_toggle and peek_direction < 0 else -1
-		return
-	if _pressed_circle(point, _right_peek_center(), 34.0):
-		_right_peek_touch = index
-		peek_direction = 0 if _peek_toggle and peek_direction > 0 else 1
-		return
 	if _pressed_circle(point, _switch_center(), 37.0):
 		_switch_touch = index
 		_weapon_switch_requested = true
@@ -179,14 +167,6 @@ func _release_touch(index: int) -> void:
 		_aim_touch = -1
 		if not _aim_toggle:
 			aim_held = false
-	if index == _left_peek_touch:
-		_left_peek_touch = -1
-		if not _peek_toggle:
-			peek_direction = 0 if _right_peek_touch < 0 else 1
-	if index == _right_peek_touch:
-		_right_peek_touch = -1
-		if not _peek_toggle:
-			peek_direction = 0 if _left_peek_touch < 0 else -1
 	if index == _jump_touch:
 		_jump_touch = -1
 	if index == _crouch_touch:
@@ -220,8 +200,6 @@ func _draw() -> void:
 	_draw_button(_jump_center(), 40.0, enemy, _jump_touch >= 0, "JUMP")
 	_draw_button(_crouch_center(), 37.0, friendly, _stance == Duelist.Stance.CROUCH, "C")
 	_draw_button(_prone_center(), 37.0, friendly, _stance == Duelist.Stance.PRONE, "P")
-	_draw_button(_left_peek_center(), 34.0, enemy, peek_direction < 0, "L")
-	_draw_button(_right_peek_center(), 34.0, enemy, peek_direction > 0, "R")
 	_draw_button(_switch_center(), 37.0, Color("c292ff"), _switch_touch >= 0, "SWAP")
 	_draw_weapon_indicator(friendly)
 	_draw_button(_settings_center(), 24.0, enemy, _settings_open, "SET")
@@ -281,10 +259,6 @@ func _handle_settings_touch(point: Vector2, pressed: bool) -> void:
 		_save_control_settings()
 		return
 	if Rect2(panel.position + Vector2(184, 168), Vector2(142, 42)).has_point(point):
-		_peek_toggle = not _peek_toggle
-		_save_control_settings()
-		return
-	if Rect2(panel.position + Vector2(344, 168), Vector2(142, 42)).has_point(point):
 		gyro_enabled = not gyro_enabled
 		_save_control_settings()
 
@@ -300,8 +274,8 @@ func _draw_settings_panel(friendly: Color, enemy: Color) -> void:
 	_draw_setting_slider(panel.position + Vector2(130, 88), panel.size.x - 164, camera_sensitivity, friendly)
 	_draw_setting_slider(panel.position + Vector2(130, 134), panel.size.x - 164, ads_sensitivity, friendly)
 	_draw_setting_chip(Rect2(panel.position + Vector2(24, 168), Vector2(142, 42)), "AIM %s" % ("TAP" if _aim_toggle else "HOLD"), friendly, _aim_toggle)
-	_draw_setting_chip(Rect2(panel.position + Vector2(184, 168), Vector2(142, 42)), "PEEK %s" % ("TAP" if _peek_toggle else "HOLD"), enemy, _peek_toggle)
-	_draw_setting_chip(Rect2(panel.position + Vector2(344, 168), Vector2(142, 42)), "GYRO %s" % ("ON" if gyro_enabled else "OFF"), Color("c292ff"), gyro_enabled)
+	_draw_setting_chip(Rect2(panel.position + Vector2(184, 168), Vector2(142, 42)), "GYRO %s" % ("ON" if gyro_enabled else "OFF"), Color("c292ff"), gyro_enabled)
+	_draw_setting_chip(Rect2(panel.position + Vector2(344, 168), Vector2(142, 42)), "QUICK SWAP", Color("c292ff"), true)
 	draw_string(font, panel.position + Vector2(24, panel.size.y - 22), "Tap outside to return", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("92a7c7"))
 
 func _draw_setting_slider(position: Vector2, width: float, value: float, color: Color) -> void:
@@ -328,7 +302,6 @@ func _load_control_settings() -> void:
 	ads_sensitivity = clampf(float(config.get_value("sensitivity", "ads", ads_sensitivity)), 0.3, 1.7)
 	gyro_enabled = bool(config.get_value("controls", "gyro", gyro_enabled))
 	_aim_toggle = bool(config.get_value("controls", "aim_toggle", _aim_toggle))
-	_peek_toggle = bool(config.get_value("controls", "peek_toggle", _peek_toggle))
 
 func _save_control_settings() -> void:
 	var config := ConfigFile.new()
@@ -336,7 +309,6 @@ func _save_control_settings() -> void:
 	config.set_value("sensitivity", "ads", ads_sensitivity)
 	config.set_value("controls", "gyro", gyro_enabled)
 	config.set_value("controls", "aim_toggle", _aim_toggle)
-	config.set_value("controls", "peek_toggle", _peek_toggle)
 	config.save("user://riftline_controls.cfg")
 
 func _left_fire_center() -> Vector2:
@@ -356,12 +328,6 @@ func _crouch_center() -> Vector2:
 
 func _prone_center() -> Vector2:
 	return Vector2(size.x - 394.0, size.y - 102.0)
-
-func _left_peek_center() -> Vector2:
-	return Vector2(size.x - 310.0, size.y - 282.0)
-
-func _right_peek_center() -> Vector2:
-	return Vector2(size.x - 394.0, size.y - 282.0)
 
 func _switch_center() -> Vector2:
 	return Vector2(size.x - 394.0, size.y - 198.0)
