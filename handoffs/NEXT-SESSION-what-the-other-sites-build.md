@@ -43,8 +43,7 @@ is twelve to twenty single sites, and that document needs amending to match.
 This is a good direction and it answers most of the question this file was
 written to ask. Three things about it want changing or watching.
 
-### Do not author a hundred houses. Author a grammar that yields more than a
-### hundred.
+### Do not author a hundred houses. Author a grammar that yields more.
 
 A hundred hand-written queues at `plan.gd` scale is fifty thousand works.
 That is not a season of content, it is the rest of the project's life, and it
@@ -141,10 +140,8 @@ It is several sites per region, and `DESIGN-one-world.md` says so directly: a qu
 
 **The world is finite and can be finished.**
 "I finished it" is a rare, real, once-per-owner event.
-Note that the village decision stretches this from twelve to twenty buildings to
-something nearer thirty or forty, and `DESIGN-one-world.md` should be amended
-rather than left saying the old number.
 An app about attention that never ends is an app about retention, which is the opposite thing.
+The village decision stretches the count from twelve to twenty buildings to something nearer thirty or forty, but it does not touch the principle, and `DESIGN-one-world.md` should be amended to the new number rather than left contradicting the code.
 
 **The regions have to interact.**
 This is the load-bearing one.
