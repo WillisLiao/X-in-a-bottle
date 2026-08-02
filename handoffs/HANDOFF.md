@@ -6,6 +6,11 @@ Dated detail goes in `devlogs/`, not here.
 
 ## Where the work is
 
+**The Sleeping Hill expedition is now implemented in the working tree.**
+The offline fable state, three-step route, world-relative hill geometry, projected touch interaction, Hollow Door outcome, Lantern Grove outcome, and story capture hooks are in `Bottle3D/`.
+The pure test is `tools/fable_state_test.gd`.
+The next session should inspect the committed captures and test on an iPhone before expanding the Meadow story.
+
 **`Bottle3D/` is the live project. It is called Hobbitle and the bundle ID is
 `com.lull.hobbitle`.** Godot 4.7, landscape.
 

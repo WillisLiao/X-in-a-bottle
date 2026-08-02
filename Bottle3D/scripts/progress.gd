@@ -198,6 +198,16 @@ static func set_claimed_rumors(ids: PackedStringArray) -> void:
 	_open().set_value("world", "claimed_rumors", ids)
 
 
+## Versioned offline fable record. It is intentionally one opaque dictionary
+## here; FableState owns its schema and migration decisions.
+static func fable_state() -> Dictionary:
+	return _open().get_value("fable", "state", {})
+
+
+static func set_fable_state(state: Dictionary) -> void:
+	_open().set_value("fable", "state", state)
+
+
 ## Whether the start screen has ever been got past. Used only to decide whether
 ## the first thing shown is the title or the island you were last on.
 static func seen_title() -> bool:

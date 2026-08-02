@@ -168,6 +168,12 @@ var _ambient_energy := 1.0
 var _menu: Menu
 var _mode_label: Label
 var _field_marks: FieldMarks
+var _expedition_marks: ExpeditionMarks
+var _sleeping_hill: SleepingHillVisual
+var _fable_state: FableState
+var _fable_journey: FableJourney
+var _fable_source: FableJourneySource
+var _expedition_stage := "dormant"
 var _view_mode := ViewMode.VILLAGE
 
 var _world: ElfWorld
@@ -223,6 +229,9 @@ var _arg_feed := NAN
 var _arg_feast := false
 var _arg_route := ""
 var _arg_route_reset := false
+var _arg_story := ""
+var _arg_story_reset := false
+var _arg_story_stage := ""
 var _capturing := false
 var _elapsed: float = 0.0
 
@@ -238,6 +247,17 @@ func _ready() -> void:
 	_build_finish()
 	_build_sky()
 	_build_back()
+	_fable_state = FableState.load()
+	if Progress.fable_state().is_empty():
+		_fable_state.persist()
+	_fable_journey = FableJourney.new()
+	_fable_journey.completed.connect(_on_expedition_completed)
+	_fable_source = FableJourneySource.new()
+	_fable_source.step_reached.connect(_on_story_step)
+	_sleeping_hill = SleepingHillVisual.new(_fable_state)
+	add_child(_sleeping_hill)
+	_sleeping_hill.rebuild()
+	_expedition_marks.set_context(_camera, _sleeping_hill)
 
 	_island = clampi(Progress.last_island(), 0, Biome.COUNT - 1)
 	_country = Country.new()
@@ -257,6 +277,8 @@ func _ready() -> void:
 		if not _arg_route.is_empty():
 			routes.record_debug_route(_arg_route)
 		routes.persist()
+	if not _arg_story.is_empty():
+		_apply_story_capture()
 
 	if _capture_screen == "world":
 		_enter_village(_island)
@@ -293,6 +315,8 @@ func _process(delta: float) -> void:
 		_country.set_map(_map)
 	if _field_marks:
 		_field_marks.set_map(_map)
+	if _expedition_marks:
+		_expedition_marks.queue_redraw()
 	_fade_back(delta)
 	_rest_light(delta)
 	_maybe_capture()
@@ -409,6 +433,63 @@ func _notification(what: int) -> void:
 			_world.persist()
 
 
+func _begin_expedition() -> void:
+	if _expedition_stage != "dormant" or _fable_state.sleeping_hill != FableState.UNRESOLVED:
+		return
+	_expedition_stage = "carrying"
+	_fable_journey.begin()
+	_sleeping_hill.set_route_step(-1)
+	_expedition_marks.set_stage(_expedition_stage)
+
+func _on_story_step(step: int) -> void:
+	if _fable_journey.accept_step(step):
+		_sleeping_hill.set_route_step(step)
+		_expedition_marks.set_cairn_step(step + 1)
+
+func _on_expedition_completed() -> void:
+	_expedition_stage = "choosing"
+	_sleeping_hill.raise_seed()
+	_expedition_marks.set_stage(_expedition_stage)
+
+func _resolve_expedition(outcome: String) -> void:
+	if _expedition_stage != "choosing" or not _fable_state.resolve_sleeping_hill(outcome):
+		return
+	_fable_state.persist()
+	_expedition_marks.play_resolution_bloom()
+	_expedition_stage = "resolved"
+	_sleeping_hill.resolve(outcome)
+	_expedition_marks.set_stage(_expedition_stage)
+	if outcome == FableState.HOLLOW:
+		_enter_village(_island)
+	else:
+		_view_mode = ViewMode.FIELD
+
+func _apply_story_capture() -> void:
+	if _arg_story_reset:
+		_fable_state = FableState.new(FableState.new_world_seed())
+		_fable_state.persist()
+		_sleeping_hill.set_state(_fable_state)
+		_sleeping_hill.rebuild()
+	if _arg_story_stage == "dormant" or _arg_story_stage.is_empty():
+		return
+	if _arg_story_stage == "carrying":
+		_begin_expedition()
+		for step in FableJourney.STEP_COUNT - 1:
+			_on_story_step(step)
+	elif _arg_story_stage == "choosing":
+		_begin_expedition()
+		for step in FableJourney.STEP_COUNT:
+			_on_story_step(step)
+		_on_expedition_completed()
+	elif _arg_story_stage in ["hollow", "grove"]:
+		_fable_state.resolve_sleeping_hill(_arg_story_stage)
+		_fable_state.persist()
+		_sleeping_hill.rebuild()
+		_expedition_stage = "resolved"
+		_expedition_marks.set_stage(_expedition_stage)
+
+
+
 # --- input -------------------------------------------------------------------
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -419,6 +500,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				_press_at = event.position
 				_press_time = _elapsed
 				_dragged = false
+				if _expedition_stage in ["carrying", "choosing"]:
+					_expedition_marks.begin_drag(event.position)
 			elif _touches.size() == 2:
 				_pinch_from = _pinch_span()
 				_pinch_zoom = _zoom
@@ -429,7 +512,9 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	elif event is InputEventScreenDrag:
 		_touches[event.index] = event.position
-		if _touches.size() >= 2:
+		if _expedition_stage in ["carrying", "choosing"]:
+			_expedition_marks.drag_to(event.position)
+		elif _touches.size() >= 2:
 			_pinch(_pinch_span())
 		elif _pan_mode:
 			_pan_camera(event.relative)
@@ -451,12 +536,17 @@ func _unhandled_input(event: InputEvent) -> void:
 				_press_at = event.position
 				_press_time = _elapsed
 				_dragged = false
+				if _expedition_stage in ["carrying", "choosing"]:
+					_expedition_marks.begin_drag(event.position)
 			else:
+				_expedition_marks.end_drag()
 				_finish_press(event.position)
 
 	elif event is InputEventMouseMotion and event.device != -1:
 		if event.button_mask & MOUSE_BUTTON_MASK_LEFT:
-			if _pan_mode:
+			if _expedition_stage in ["carrying", "choosing"]:
+				_expedition_marks.drag_to(event.position)
+			elif _pan_mode:
 				_pan_camera(event.relative)
 			else:
 				_orbit(event.relative)
@@ -542,6 +632,10 @@ func _finish_press(at: Vector2) -> void:
 
 	if _menu.showing():
 		_menu.tapped(at)
+		return
+	if _expedition_marks.tap(at):
+		if _expedition_stage == "dormant":
+			_begin_expedition()
 		return
 
 	# Bottom left corner: which way a one-finger drag turns.
@@ -718,6 +812,12 @@ func _build_back() -> void:
 	layer.layer = 110
 	_field_marks = FieldMarks.new()
 	layer.add_child(_field_marks)
+	_expedition_marks = ExpeditionMarks.new()
+	_expedition_marks.set_context(_camera, _sleeping_hill)
+	_expedition_marks.lantern_tapped.connect(_begin_expedition)
+	_expedition_marks.cairn_tapped.connect(_on_story_step)
+	_expedition_marks.choice_tapped.connect(_resolve_expedition)
+	layer.add_child(_expedition_marks)
 
 	# Which mode dragging is in right now, not which one the tap switches to -
 	# that is the way round people actually read a toggle.
@@ -1255,13 +1355,18 @@ func _read_capture_args() -> void:
 			# checked without synthesising a screen tap in headless captures.
 			_arg_feast = true
 		elif arg.begins_with("--route="):
-			# A deterministic local route for proving the world loop before the
-			# native location bridge and shared authority exist.
+			# A deterministic local route for proving the imagined world loop.
 			_arg_route = arg.trim_prefix("--route=")
 		elif arg == "--route-reset":
 			# Capture-only cleanup for a repeatable empty-neighborhood look.
 			# This is deliberately not a player-facing way to erase a walk.
 			_arg_route_reset = true
+		elif arg.begins_with("--story="):
+			_arg_story = arg.trim_prefix("--story=")
+		elif arg == "--story-reset":
+			_arg_story_reset = true
+		elif arg.begins_with("--story-stage="):
+			_arg_story_stage = arg.trim_prefix("--story-stage=")
 		elif arg.begins_with("--fire="):
 			# Sends the lantern to a region at launch, so eighty seconds of
 			# somebody walking can be looked at without tapping anything.
