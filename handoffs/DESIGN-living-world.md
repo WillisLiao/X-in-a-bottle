@@ -1,5 +1,9 @@
 # Design: the living world
 
+> Superseded on 2026-08-02 by `DESIGN-offline-long-road.md`.
+> This document records the rejected location-based social direction.
+> Do not continue its GPS, server, account, or shared-borough work.
+
 Accepted 2026-08-02.
 
 ## The premise

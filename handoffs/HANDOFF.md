@@ -16,9 +16,9 @@ Dated detail goes in `devlogs/`, not here.
    capture, five failure modes that give no clue what they are, the invariants
    that look like bugs and must not be "fixed", and the house style. All of it
    was learned by losing time to it.
-3. **`handoffs/DESIGN-living-world.md`**, for the active product direction and its technical boundaries.
-4. **`handoffs/DESIGN-one-world.md`**, for the physical five-region map that the living world currently reuses.
-5. **Whichever historical `NEXT-SESSION-*` file** covers a subsystem you are about to reuse.
+3. **`handoffs/DESIGN-offline-long-road.md`**, for the active product direction.
+4. **`handoffs/NEXT-SESSION-first-expedition.md`**, for the next implementation mission.
+5. **`handoffs/DESIGN-one-world.md`**, for the physical five-region map that the offline game reuses.
 6. `devlogs/2026-08-02.md` if you want the reasoning behind a specific number.
    It is long. Most constants in the code have their argument there.
 
@@ -55,26 +55,24 @@ scripts/causeway.gd  the necks between regions - and they answer `height`,
                      which is what lets an elf walk out of its own region
 ```
 
-**Current work: `handoffs/DESIGN-living-world.md`.**
-On 2026-08-02 the owner pivoted Hobbitle from a calm app-open construction toy into a location-based social settlement game.
-The core proposition is now that real walking routes become shared fantasy trade roads, local folklore, and player-authored boroughs.
-This is not a focus app and it must never need a player to leave the renderer running to progress.
+**Current work: `handoffs/DESIGN-offline-long-road.md`.**
+On 2026-08-02 the owner rejected the location-based social direction because an offline game is the actual product constraint.
+Hobbitle is now a wordless expedition fable in which a familiar band crosses five strange regions and leaves permanent folk-story changes behind.
+It is not a focus app and it must never need a player to leave the renderer running to progress.
 
-The first implementation slice is deliberately offline and local, and it is built.
-`RouteBook` records coarse fantasy-world cell crossings and `CommunityRoads` renders them as persistent visible trade roads in the map.
-`RumorMarks` reveals an unclaimed place-bound rumor at the route's midpoint.
-The route ledger stores coarse fantasy cells rather than raw GPS trails.
-`--route-reset --route=meadow-shore` reproduces the slice for a capture without retaining a previous debug route.
+The route and rumor slice is built and remains useful as map and renderer machinery.
+`RouteBook`, `CommunityRoads`, and `FieldMarks` now describe imagined fantasy routes, not real-world movement or a future service.
+Do not add GPS, a location permission, accounts, a server, a shared borough, or a fake community.
 
-`NEXT-SESSION-what-the-other-sites-build.md` remains useful historical design work on house grammars and permanent residents.
-The earlier feed and app-open construction progression are prototype machinery rather than the released game's loop.
+`NEXT-SESSION-what-the-other-sites-build.md` remains useful historical design work on deterministic generators and saved seeds.
+The earlier feed and app-open construction progression remain prototype machinery rather than the released game's loop.
 The paid locks were removed with the living-world slice.
 
 **Completed in `9cbf377`: `handoffs/NEXT-SESSION-map-first-field-loop.md`.**
 The title now enters the living field map, legacy construction pauses there, and the close village is a deliberate camera descent.
 
-**Next work: `handoffs/NEXT-SESSION-first-playable-living-world.md`.**
-It must complete the first actual player story: a privacy-bounded real or debug journey becomes a route, a wordless encounter, a permanent village feature, or a local wayhouse contribution.
+**Next work: `handoffs/NEXT-SESSION-first-expedition.md`.**
+It implements The Sleeping Hill, a fully offline journey from a field disturbance to a permanent Hollow Door or Lantern Grove.
 
 **The map-first field loop is now built.** `main.gd` has explicit `FIELD` and
 `VILLAGE` modes, title entry and `--screen=field` open at full map distance,
@@ -113,12 +111,12 @@ Lull is still a live idea; the 2D `Bottle` is superseded and should be retired.
 
 ## What Hobbitle is
 
-**Hobbitle**, short for Hobbits in a Bottle, is a location-based social settlement game.
-The real world slowly becomes a shared fantasy civilisation through the routes its players actually walk.
+**Hobbitle**, short for Hobbits in a Bottle, is an offline, wordless expedition fable.
+The player guides a familiar band across five strange regions and makes each place a lasting home.
 The phone is the bottle, so nothing draws a vessel.
 
-Players discover local rumors, travelers, materials, and sites while they move through real places.
-Their discoveries build a personal village and contribute to shared boroughs that develop their own roads, markets, stories, and architecture.
+Players discover mythic disturbances, travelers, landmarks, and routes inside the fantasy world.
+Their choices build a personal country of roads, villages, and stories that could only have happened in that save.
 The world should be exciting to revisit because people and places changed, not because an app was left running.
 
 The five-region construction world presently in `Bottle3D/` is a visual prototype and a source of reusable construction machinery.
@@ -234,11 +232,10 @@ silently reverted the renderer and the orientation once each.
 ## Decisions worth not relitigating
 
 - **There are no paid region gates.** The local purchase flags, map padlocks, and StoreKit seam were removed with the living-world pivot.
-- **A location sample is private and coarse.** `Progress` stores only fantasy-world cells and crossings, never raw latitude, longitude, or a user trail.
-- **The future shared world is server-authoritative.** A client may render local route previews, but it must not decide shared road or borough progress once accounts exist.
-- **The first live location source needs explicit consent.** Native iOS location work, anti-spoofing, accounts, and a backend are separate work after the local slice.
+- **The game is offline.** Do not add location tracking, permissions, APIs, accounts, servers, shared-world claims, or a fake community.
+- **Routes are imagined world geometry.** `Progress` records only local fantasy routes and story resolutions.
 - **The feed is legacy prototype behavior.** It is not the progression loop or a reason to keep the renderer open in the released game.
-- **No offline construction rule is legacy prototype behavior.** Real-world visits and asynchronous shared outcomes replace app-open attention as the meaningful player contribution.
+- **No app-open construction rule is legacy prototype behavior.** Expeditions and immediate story outcomes replace passive watched labor as the meaningful player contribution.
 - **No percentage anywhere.** Progress is said as "Storey 2" and "Services",
   never "43%". The moment progress is a number somebody optimises it, and the
   only way to optimise anything here is to leave the phone alone longer than you

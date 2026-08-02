@@ -188,7 +188,7 @@ Bottle3D/scripts/
   country.gd     the four regions you are not standing in. Scenery, no tick
   causeway.gd    the necks between regions - and they answer `height`
   wear.gd        where they have walked. One byte a patch, only ever up
-  route_book.gd  coarse local route ledger. Never raw GPS coordinates
+  route_book.gd  local fantasy-route ledger. Never device location data
   community_roads.gd  map-level trade-road meshes and rumor-site interaction
   rumor_marks.gd custom-drawn map halos for unclaimed rumors
   progress.gd    what survives being put down
@@ -204,15 +204,15 @@ Bottle3D/scripts/
 
 ## The handoffs
 
-`DESIGN-living-world.md` - current product direction.
-The local vertical slice is built: a debug coarse route persists as a map road and reveals a claimable rumor.
-It has no raw GPS storage, location permissions, accounts, backend, or StoreKit work.
+`DESIGN-offline-long-road.md` - current product direction.
+The map-first field and route slice are reusable offline game machinery.
+It has no device location, permissions, accounts, backend, or StoreKit work.
 
 `NEXT-SESSION-map-first-field-loop.md` - completed in `9cbf377`.
 It turns the existing continuous map into the game's actual front door and demotes the passive construction view to a village visit.
 
-`NEXT-SESSION-first-playable-living-world.md` - next after `9cbf377`.
-It creates the first complete route, encounter, village, and borough story with a foreground iOS location bridge and no raw coordinate persistence.
+`NEXT-SESSION-first-expedition.md` - next after `9cbf377`.
+It turns the stopped location-plan scaffold into The Sleeping Hill, an entirely offline story with a permanent Hollow Door or Lantern Grove outcome.
 
 `NEXT-SESSION-feeding-and-locks.md` - completed historical work from 2026-08-02.
 It removed the stillness rule and camera pan bounds and added the two-hour coastline feed.
@@ -220,7 +220,7 @@ Its paid-lock portion was removed by the living-world pivot.
 
 `NEXT-SESSION-what-the-other-sites-build.md` - historical grammar research.
 Its save-format warning remains valid if the five-region prototype grows multiple generated houses.
-The next living-world implementation should instead design an explicit-consent iOS location bridge and a server-authoritative shared-cell protocol.
+Its generator-version warning remains important, but its location and shared-world implications are superseded by the offline direction.
 
 `DESIGN-one-world.md` - the earlier pivot that produced the current physical map.
 Its paid-region business-model section was superseded and should be read as history.

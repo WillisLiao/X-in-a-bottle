@@ -1,5 +1,9 @@
 # Next session: first playable living world
 
+> Superseded on 2026-08-02 by `NEXT-SESSION-first-expedition.md`.
+> The offline game has no location bridge, server, account, or shared borough.
+> Uncommitted code that began this plan must be adapted only where it supports the offline Sleeping Hill expedition.
+
 For Luna Medium.
 
 Read `HANDOFF.md`, `WORKING-NOTES.md`, `DESIGN-living-world.md`, and this file before opening Godot.
