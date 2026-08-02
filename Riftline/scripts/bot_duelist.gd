@@ -2,8 +2,6 @@ class_name BotDuelist
 extends Duelist
 
 var target: Duelist
-var _time := 0.0
-var _opening_hold_remaining := 0.0
 var _decision_remaining := 0.0
 var _reaction_remaining := 0.0
 var _tracking_remaining := 0.0
@@ -18,8 +16,8 @@ var _random := RandomNumberGenerator.new()
 func _ready() -> void:
 	_random.randomize()
 
-func hold_opening_position(seconds: float) -> void:
-	_opening_hold_remaining = maxf(_opening_hold_remaining, seconds)
+func hold_opening_position(_seconds: float) -> void:
+	# MatchDirector owns the inactive opening phase; this hook only clears stale aim before the hold.
 	_target_locked = false
 	_reaction_remaining = 0.0
 	_tracking_remaining = 0.0
@@ -28,7 +26,11 @@ func hold_opening_position(seconds: float) -> void:
 func _physics_process(delta: float) -> void:
 	if eliminated or target == null or target.eliminated:
 		return
-	_time += delta
+	if not match_active:
+		_target_locked = false
+		_move_goal = Vector2.ZERO
+		drive(Vector2.ZERO, false, false, delta)
+		return
 	_decision_remaining = maxf(0.0, _decision_remaining - delta)
 	_reaction_remaining = maxf(0.0, _reaction_remaining - delta)
 	_tracking_remaining = maxf(0.0, _tracking_remaining - delta)
@@ -46,13 +48,6 @@ func _physics_process(delta: float) -> void:
 	rotation.y = lerp_angle(rotation.y, desired_yaw, minf(1.0, delta * 4.4))
 	var aim_target := target.global_position + Vector3.UP * 0.98
 	head.rotation.x = clampf(lerpf(head.rotation.x, _pitch_to(aim_target), delta * 4.0), -0.45, 0.4)
-
-	if _opening_hold_remaining > 0.0:
-		_opening_hold_remaining = maxf(0.0, _opening_hold_remaining - delta)
-		_target_locked = false
-		_move_goal = Vector2.ZERO
-		drive(Vector2.ZERO, false, false, delta)
-		return
 
 	var has_los := _has_line_of_sight()
 	if has_los:
@@ -92,7 +87,7 @@ func _update_target_lock(delta: float) -> void:
 		_target_locked = true
 
 func _decide_movement(distance: float, has_los: bool) -> void:
-	var strafe := _random.randf_range(-0.34, 0.34)
+	var strafe := 0.0
 	var advance := 0.0
 	if distance > 18.0:
 		advance = 0.34

@@ -15,7 +15,6 @@ var _capture_path := ""
 var _capture_after := 2.0
 var _capture_settings := false
 var _capture_hud_layout := false
-var _capture_match_end := false
 var _capture_character := false
 var _capture_overview := false
 
@@ -26,9 +25,6 @@ func _ready() -> void:
 	_build_hud()
 	_read_capture_arguments()
 	director.begin()
-	if _capture_match_end:
-		# Renderer-only inspection hook for the terminal overlay; normal matches reach it through MatchDirector.
-		hud.show_match_result(Duelist.Team.SUN)
 	if not _capture_path.is_empty():
 		_capture_after_delay()
 
@@ -246,8 +242,6 @@ func _read_capture_arguments() -> void:
 			_capture_settings = true
 		elif argument == "--hud-layout":
 			_capture_hud_layout = true
-		elif argument == "--match-end":
-			_capture_match_end = true
 		elif argument == "--character":
 			_capture_character = true
 		elif argument == "--overview":
@@ -268,7 +262,12 @@ func _read_capture_arguments() -> void:
 
 func _capture_after_delay() -> void:
 	await get_tree().create_timer(_capture_after).timeout
-	var image := get_viewport().get_texture().get_image()
+	var viewport_texture := get_viewport().get_texture()
+	if viewport_texture == null:
+		push_error("Could not capture Riftline: viewport texture is unavailable")
+		get_tree().quit()
+		return
+	var image := viewport_texture.get_image()
 	var error := image.save_png(_capture_path)
 	if error != OK:
 		push_error("Could not write Riftline capture: %s" % _capture_path)
