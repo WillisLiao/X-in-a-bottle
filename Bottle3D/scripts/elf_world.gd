@@ -70,7 +70,7 @@ const LAND_Z := Biome.LAND_Z
 ## renumbering them would silently hand a week of formed specialisms to the
 ## wrong jobs.
 enum Task { NONE, GATHER, CRAFT, HAUL, DELIVER, FIT, LOOK, REST, IDLE, OWN,
-	PLAY, CARRY_FIRE }
+	PLAY, CARRY_FIRE, EAT, COOK }
 
 ## The bottle is never empty.
 ## Two people appear with the first view, then the fixed band walks in one at a
@@ -261,6 +261,21 @@ class Work:
 		return short().is_empty()
 
 
+## One dropped meal.
+## Food is transient and has none of a construction material's economy, so it
+## only tracks the physics and reservation needed to make a shared meal legible.
+class Meal:
+	var kind := Feast.Food.FRUIT
+	var node: Node3D
+	var fall_speed := 0.0
+	var bounces := 0
+	var landed := false
+	var claimed_by := -1
+	var cooking := false
+	var cooked := false
+	var eaten := false
+
+
 class Elf:
 	var id: int
 	var seed_value: int
@@ -390,6 +405,7 @@ class Elf:
 	var task: Task = Task.NONE
 	var station: Station
 	var work: Work
+	var meal: Meal
 	var from_pile: Pile
 	var to_pile: Pile
 	var want_kind := -1
@@ -467,12 +483,19 @@ var _resident_affinity := {}
 
 var _fire: OmniLight3D
 var _house_light: OmniLight3D
+var _feast: Feast
 
 ## Places where something just happened, for eyes to be drawn to.
 var _events: Array = []
+var _meals: Array[Meal] = []
 
 var _time := 0.0
 var _focus := 0.0
+var _feed := 0.0
+var _haste := 1.0
+var _haste_left := 0.0
+var _meal_goal := 0
+var _meals_eaten := 0
 
 ## Where they are in the hour, and how much of the break is left.
 var _cycle := 0.0
@@ -482,6 +505,19 @@ var _rest_note := 0.0
 var _next_id := 0
 var _since_save := 0.0
 var _dirty := false
+
+## Eight of each gives the whole twelve-person band enough to gather around
+## food, while leaving enough surplus that one slow arrival does not turn the
+## picture into a race for the last loaf.
+const FOOD_RAIN := 24
+
+## Ten minutes at three times speed is twenty minutes of additional work every
+## two hours of app-open time.
+## That makes a week-long house roughly a quarter faster for somebody who takes
+## every meal, which is intentional and must be balanced through `Plan.EFFORT`,
+## not quietly weakened here.
+const HASTE_MULTIPLIER := 3.0
+const HASTE_SECONDS := 10.0 * 60.0
 
 
 func _init(island := 0) -> void:
@@ -542,6 +578,7 @@ func build() -> void:
 
 	_build_materials()
 	_build_terrain()
+	_build_feast()
 	_build_water()
 	_build_sources()
 	_build_hearth()
@@ -672,6 +709,18 @@ func _tick(delta: float) -> void:
 	# The stillness branch once excluded disturbance frames, and that distinction
 	# disappeared with the accelerometer rule.
 	_focus += delta
+	if _haste_left > 0.0:
+		_haste_left = maxf(0.0, _haste_left - delta)
+		_dirty = true
+	var haste_target := HASTE_MULTIPLIER if _haste_left > 0.0 else 1.0
+	# A short settling avoids the visible cut a direct 3x-to-1x change made to
+	# gait and hammering. The duration is still counted at full speed.
+	_haste = lerpf(_haste, haste_target, clampf(delta * 2.8, 0.0, 1.0))
+	if _feed < Feast.FILL_SECONDS:
+		_feed = minf(Feast.FILL_SECONDS, _feed + delta)
+		_dirty = true
+	_sync_feast()
+	_tick_meals(delta)
 
 	if _rest_left > 0.0:
 		# The break runs on app-open time alone.
@@ -727,6 +776,93 @@ func _note(at: Vector3) -> void:
 
 func resting() -> bool:
 	return _rest_left > 0.0
+
+
+func feed_ready() -> bool:
+	return _feed >= Feast.FILL_SECONDS and not resting()
+
+
+func force_feed(at: float) -> void:
+	_feed = Feast.FILL_SECONDS * clampf(at, 0.0, 1.0)
+	_sync_feast()
+
+
+func call_feast() -> bool:
+	if not feed_ready():
+		return false
+
+	_feed = 0.0
+	_sync_feast()
+	_dirty = true
+	_meal_goal = maxi(_elves.size(), 1)
+	_meals_eaten = 0
+
+	for i in FOOD_RAIN:
+		var meal := Meal.new()
+		meal.kind = i % 3
+		meal.node = Feast.make_food(meal.kind)
+		meal.node.position = _food_drop_point() + Vector3(0.0, randf_range(2.8, 4.8), 0.0)
+		add_child(meal.node)
+		_meals.append(meal)
+
+	return true
+
+
+func _sync_feast() -> void:
+	if _feast:
+		_feast.set_progress(_feed / Feast.FILL_SECONDS, feed_ready())
+
+
+func _food_drop_point() -> Vector3:
+	for _try in 20:
+		var at := Vector3(
+			randf_range(-Land.LAND_X * 0.90, Land.LAND_X * 0.90), 0.0,
+			randf_range(-Land.LAND_Z * 0.90, Land.LAND_Z * 0.90))
+		if _ground(at) < -0.05:
+			continue
+		# The meal is a reason to walk across the place, not another heap at the
+		# site. Rejecting the yard is simpler and more legible than weighting a
+		# radial distribution until it looks approximately right.
+		if _gap(at, _spot("site")) < 3.0:
+			continue
+		return _on(at) + Vector3(0.0, 0.045, 0.0)
+	return _on(_off(_spot("hearth"), 3.2, 1.5)) + Vector3(0.0, 0.045, 0.0)
+
+
+func _tick_meals(delta: float) -> void:
+	for meal in _meals:
+		if meal.landed or meal.eaten:
+			continue
+		meal.fall_speed -= 8.8 * delta
+		meal.node.position.y += meal.fall_speed * delta
+		var floor := _ground(meal.node.position) + 0.045
+		if meal.node.position.y > floor:
+			continue
+		meal.node.position.y = floor
+		if meal.bounces < 2:
+			meal.fall_speed = absf(meal.fall_speed) * (0.28 if meal.bounces == 0 else 0.16)
+			meal.bounces += 1
+		else:
+			meal.landed = true
+			_note(meal.node.global_position)
+
+
+func _nearest_meal(e: Elf) -> Meal:
+	var best: Meal = null
+	var nearest := 1e9
+	for meal in _meals:
+		if not meal.landed or meal.eaten or meal.claimed_by >= 0:
+			continue
+		var distance := _gap(e.at, meal.node.position)
+		if distance < nearest:
+			nearest = distance
+			best = meal
+	return best
+
+
+func _begin_haste() -> void:
+	_haste_left = HASTE_SECONDS
+	_dirty = true
 
 
 ## How far through the break, zero to one. Drawn as a light crossing the sky
@@ -972,6 +1108,18 @@ func _decide(e: Elf) -> void:
 
 	var open := _open()
 
+	# A meal only happens every two hours, so it gets to interrupt the queue.
+	# The high weight makes this visibly read as a crew stopping for food rather
+	# than a normal delivery that happens to carry a different-coloured object.
+	var meal := _nearest_meal(e)
+	if meal:
+		var meal_task := Task.COOK if meal.kind == Feast.Food.FISH else Task.EAT
+		var s := _weigh(e, meal_task, 7.2, meal.node.position)
+		score = s
+		best = meal_task
+		best_at = meal.node.position
+		pick = {"meal": meal}
+
 	# Setting a piece. Outranks everything, because it is the only step that
 	# leaves a mark, and because a work standing fully paid for with nobody
 	# fitting it is the one situation on a site that everybody notices.
@@ -1148,6 +1296,7 @@ func _decide(e: Elf) -> void:
 	e.task = best
 	e.station = pick.get("station", null)
 	e.work = pick.get("work", null)
+	e.meal = pick.get("meal", null)
 	e.from_pile = pick.get("from", null)
 	e.to_pile = pick.get("to", null)
 	e.want_kind = int(pick.get("kind", -1))
@@ -1180,6 +1329,10 @@ func _decide(e: Elf) -> void:
 		Task.GATHER, Task.CRAFT:
 			e.station.taken_by = e.id
 			_head_for(e, _stand_near(e, e.station.stand), e.station.face)
+		Task.EAT, Task.COOK:
+			e.meal.claimed_by = e.id
+			_head_for(e, _stand_near(e, e.meal.node.position), e.meal.node.position)
+			_point(e, e.meal.node.position)
 		Task.OWN:
 			_head_for(e, e.haunt)
 			e.pause = randf_range(4.0, 9.0)
@@ -1640,9 +1793,10 @@ func _tick_elf(e: Elf, delta: float) -> void:
 		# Accelerate from rest and decelerate into arrival, both over about
 		# half a second.
 		e.walk_speed = lerpf(e.walk_speed, target, clampf(delta / 0.5, 0.0, 1.0))
-		var braking := clampf(gap / (e.pace * 0.5 + 0.05), 0.25, 1.0)
+		var pace := e.pace * _haste
+		var braking := clampf(gap / (pace * 0.5 + 0.05), 0.25, 1.0)
 
-		var step: float = minf(delta * e.pace * e.walk_speed * braking, gap)
+		var step: float = minf(delta * pace * e.walk_speed * braking, gap)
 		e.at += heading * step
 		_tread(e, step)
 		e.facing = _flat(e.facing.lerp(heading, clampf(delta * e.turn_rate, 0.0, 1.0)))
@@ -1680,6 +1834,9 @@ func _tick_elf(e: Elf, delta: float) -> void:
 	elif e.task == Task.PLAY and arrived:
 		e.energy = minf(1.0, e.energy + delta * 0.03)
 		_cheer(e, delta * 0.09)
+	elif e.task == Task.EAT and arrived:
+		e.energy = minf(1.0, e.energy + delta * 0.12)
+		_cheer(e, delta * 0.08)
 	elif e.work_left > 0.0:
 		e.energy = maxf(0.0, e.energy - delta * 0.016)
 	else:
@@ -1922,6 +2079,12 @@ func _act(e: Elf, delta: float) -> void:
 			else:
 				_decide_fire(e)
 
+		Task.EAT:
+			_eat(e, delta)
+
+		Task.COOK:
+			_cook(e, delta)
+
 		Task.LOOK:
 			# Standing and taking it in. _observe has already corrected whatever
 			# it thought was here, so the pause is the moment you can watch it
@@ -1993,7 +2156,7 @@ func _act(e: Elf, delta: float) -> void:
 				if e.tool == null:
 					_take_tool(e, "hammer")
 					e.motion = "swing"
-			e.work_left -= delta * lerpf(0.7, 1.25, e.energy)
+			e.work_left -= delta * lerpf(0.7, 1.25, e.energy) * _haste
 			if e.work_left <= 0.0:
 				_finish_work(w, e)
 				_finish(e)
@@ -2021,9 +2184,105 @@ func _act(e: Elf, delta: float) -> void:
 				_take_tool(e, st.tool)
 				e.motion = st.motion
 
-			e.work_left -= delta * lerpf(0.6, 1.25, e.energy)
+			e.work_left -= delta * lerpf(0.6, 1.25, e.energy) * _haste
 			if e.work_left <= 0.0:
 				_produce(e, st)
+
+
+func _take_meal(e: Elf) -> void:
+	var meal := e.meal
+	if meal == null or meal.eaten:
+		_finish(e)
+		return
+	var parent := meal.node.get_parent()
+	if parent:
+		parent.remove_child(meal.node)
+	e.grip.add_child(meal.node)
+	meal.node.position = Vector3(0.0, -0.045, 0.075)
+	e.carrying = meal.node
+	e.carry_kind = -1
+	e.carry_count = 1
+	_note(e.node.global_position)
+
+
+func _eat(e: Elf, delta: float) -> void:
+	var meal := e.meal
+	if meal == null or meal.eaten:
+		_finish(e)
+		return
+	if e.carrying == null and not meal.cooked:
+		_take_meal(e)
+		_head_for(e, _stand_near(e, _spot("hearth")), _spot("hearth"))
+		return
+
+	if e.pause <= 0.0:
+		e.pause = randf_range(2.4, 3.6)
+	e.pause -= delta
+	if e.pause > 0.0:
+		return
+
+	_remove_meal(e)
+	_cheer(e, 0.32)
+	_reward(e, Task.EAT, 0.08)
+	_finish(e)
+
+
+func _cook(e: Elf, delta: float) -> void:
+	var meal := e.meal
+	if meal == null or meal.eaten:
+		_finish(e)
+		return
+
+	if not meal.cooking and e.carrying == null:
+		_take_meal(e)
+		_head_for(e, _stand_near(e, _spot("hearth")), _spot("hearth"))
+		return
+
+	if not meal.cooking:
+		# Set the fish beside the fire rather than keeping it invisibly in a
+		# hand. The small waiting beat makes cooking different from simply eating
+		# the other two foods at the first place they found them.
+		e.grip.remove_child(meal.node)
+		add_child(meal.node)
+		meal.node.position = _on(_off(_spot("hearth"), 0.24, 0.16)) \
+			+ Vector3(0.0, 0.055, 0.0)
+		e.carrying = null
+		e.carry_kind = -1
+		e.carry_count = 0
+		meal.cooking = true
+		e.work_left = randf_range(3.4, 4.8)
+		e.motion = "press"
+		_take_tool(e, "bellows")
+		return
+
+	e.work_left -= delta
+	if e.work_left > 0.0:
+		return
+	meal.cooking = false
+	meal.cooked = true
+	e.task = Task.EAT
+	e.pause = 0.0
+	_head_for(e, _stand_near(e, _spot("hearth")), _spot("hearth"))
+
+
+func _remove_meal(e: Elf) -> void:
+	var meal := e.meal
+	if meal == null:
+		return
+	var parent := meal.node.get_parent()
+	if parent:
+		parent.remove_child(meal.node)
+	meal.node.queue_free()
+	meal.eaten = true
+	_meals.erase(meal)
+	e.meal = null
+	e.carrying = null
+	e.carry_kind = -1
+	e.carry_count = 0
+	_meals_eaten += 1
+	if _meal_goal > 0 and _meals_eaten >= _meal_goal:
+		_meal_goal = 0
+		_begin_haste()
 
 
 func _home_for(kind: int, not_this: Pile = null) -> Pile:
@@ -2306,6 +2565,9 @@ func _restore() -> void:
 	_focus = float(state["focus"])
 	_cycle = float(state["cycle"])
 	_rest_left = float(state["rest"])
+	_feed = float(state["feed"])
+	_haste_left = float(state["haste"])
+	_haste = HASTE_MULTIPLIER if _haste_left > 0.0 else 1.0
 	_residents = state["seeds"]
 	_resident_affinity = state["affinity"]
 
@@ -2350,6 +2612,7 @@ func _restore() -> void:
 			home.settle()
 
 	_build_house_light()
+	_sync_feast()
 
 
 func _state() -> Dictionary:
@@ -2367,7 +2630,8 @@ func _state() -> Dictionary:
 
 	return {
 		"done": done, "stock": stock, "focus": _focus,
-		"cycle": _cycle, "rest": _rest_left,
+		"cycle": _cycle, "rest": _rest_left, "feed": _feed,
+		"haste": _haste_left,
 		"seeds": _residents, "affinity": _resident_affinity,
 		"wear": _wear.to_text(), "journey": _journey,
 	}
@@ -2587,6 +2851,7 @@ func _drop_tool(e: Elf) -> void:
 
 
 func _finish(e: Elf) -> void:
+	_release_meal(e)
 	_drop_tool(e)
 	if e.station and e.station.taken_by == e.id:
 		e.station.taken_by = -1
@@ -2600,6 +2865,23 @@ func _finish(e: Elf) -> void:
 	e.pause = 0.0
 	e.face_at = Vector3.ZERO
 	e.pastime = ""
+
+
+func _release_meal(e: Elf) -> void:
+	var meal := e.meal
+	if meal == null or meal.eaten:
+		e.meal = null
+		return
+
+	if e.carrying == meal.node:
+		e.grip.remove_child(meal.node)
+		add_child(meal.node)
+		meal.node.position = _on(_off(e.at, 0.10, 0.08)) + Vector3(0.0, 0.045, 0.0)
+		e.carrying = null
+		e.carry_kind = -1
+		e.carry_count = 0
+	meal.claimed_by = -1
+	e.meal = null
 
 
 ## Their own time. Not decoration and not filler: an island where nobody ever
@@ -2625,7 +2907,7 @@ func _animate(e: Elf, delta: float, walking_now: bool) -> void:
 	# rather than full-length ones starting from nothing.
 	var walking := e.walk_speed if walking_now else 0.0
 	var swing_scale := lerpf(0.68, 1.12, m) * e.stride_amp
-	var stride := sin(_time * 3.0 * e.gait * (e.pace / 0.42) + e.phase) \
+	var stride := sin(_time * 3.0 * _haste * e.gait * (e.pace / 0.42) + e.phase) \
 		* 0.5 * walking * swing_scale
 
 	# A low elf stands folded in on itself and a pleased one stands up. Two of
@@ -2660,6 +2942,15 @@ func _animate(e: Elf, delta: float, walking_now: bool) -> void:
 		_aim_arm(e, 0, Vector3(0.10, 0.26, 0.0) + to * 0.22,
 			clampf(delta * 16.0, 0.0, 1.0))
 		posture -= 0.04
+	elif e.task == Task.EAT and not walking_now:
+		# A meal is a small repeating lift toward the face rather than another
+		# work gesture. The carried fruit or bread stays in the grip, so the
+		# motion has an object at the end of it.
+		var bite := maxf(0.0, sin(_time * 2.4 + e.phase))
+		grip_at = Vector3(0.02, 0.205 + bite * 0.060, 0.135)
+		grip_dir = Vector3(0.0, -0.30, 0.95)
+		hands = true
+		posture += 0.04
 	elif e.carrying:
 		grip_at = Vector3(0, 0.225, 0.185)
 		grip_dir = Vector3(0, -0.35, 0.94)
@@ -2690,7 +2981,7 @@ func _animate(e: Elf, delta: float, walking_now: bool) -> void:
 				# top of this file, the hands hold station, and the body hinges
 				# and unwinds underneath it. Slow cock, fast strike, then a beat
 				# of stillness with the head in the work.
-				var beat := fposmod(_time * (0.80 + e.pace * 0.5) + e.phase, 1.0)
+				var beat := fposmod(_time * _haste * (0.80 + e.pace * 0.5) + e.phase, 1.0)
 				var up := 0.0
 				if beat < 0.58:
 					up = pow(beat / 0.58, 0.75)
@@ -3006,7 +3297,8 @@ func _grow() -> bool:
 	# Every task starts worth exactly as much as every other one, unless this
 	# elf has been here before, in which case it arrives as whatever it made
 	# itself into.
-	for t in [Task.GATHER, Task.CRAFT, Task.HAUL, Task.DELIVER, Task.FIT]:
+	for t in [Task.GATHER, Task.CRAFT, Task.HAUL, Task.DELIVER, Task.FIT,
+			Task.EAT, Task.COOK]:
 		e.affinity[t] = 1.0
 	var kept: Variant = _resident_affinity.get(str(seed_value), null)
 	if kept is Dictionary:
@@ -3254,6 +3546,11 @@ func _build_terrain() -> void:
 	node.material_override = _land.material(_wear)
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(node)
+
+
+func _build_feast() -> void:
+	_feast = Feast.new(_land, _island)
+	add_child(_feast)
 
 
 func _build_water() -> void:

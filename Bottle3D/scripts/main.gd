@@ -215,6 +215,8 @@ var _arg_yaw := NAN
 var _arg_zoom := NAN
 var _arg_pitch := NAN
 var _arg_pan := Vector2(NAN, NAN)
+var _arg_feed := NAN
+var _arg_feast := false
 var _capturing := false
 var _elapsed: float = 0.0
 
@@ -318,11 +320,11 @@ func _enter(region: int) -> void:
 	add_child(_world)
 	_world.build()
 
-	# The bottle is never empty. Somebody is in the region the moment it opens,
-	# so the first thing seen is the place itself and not a black screen to be
-	# earned.
+	# The bottle is never empty.
+	# These two arrive without calling `advance`, because it now owns every
+	# app-open clock and an invisible bootstrap must not earn time toward food.
 	for _i in ElfWorld.STARTING_OBJECTS:
-		_world.advance(999.0)
+		_world._grow()
 
 	_country.show_from(_island)
 
@@ -339,6 +341,11 @@ func _enter(region: int) -> void:
 		_zoom_to = 1.0
 	if _force_rest >= 0.0:
 		_world.force_rest(_force_rest)
+	if not is_nan(_arg_feed):
+		_world.force_feed(_arg_feed)
+	if _arg_feast:
+		_world.force_feed(1.0)
+		_world.call_feast()
 
 	_menu.hide_all()
 	_drift = 6.0
@@ -501,14 +508,21 @@ func _finish_press(at: Vector2) -> void:
 		_menu.tapped(at)
 		return
 
-	# Out on the map, a tap is somewhere to go. Tried before the corner control,
-	# because a region under the thumb is the more specific thing.
-	if _map > 0.35 and _tap_region(at):
-		return
-
 	# Bottom left corner: which way a one-finger drag turns.
 	if at.x < 620.0 and at.y > 1000.0:
 		_pan_mode = not _pan_mode
+		return
+
+	# A complete coastline makes the whole region the target.
+	# This stays inside the close view because a map tap already has a place
+	# travel meaning, and a food event must never steal that gesture.
+	if _map < 0.35 and _world != null and _world.feed_ready():
+		if _world.call_feast():
+			return
+
+	# Out on the map, a tap is somewhere to go.
+	if _map > 0.35 and _tap_region(at):
+		return
 
 
 ## The region under a tap, from where it actually is on screen rather than from
@@ -1190,6 +1204,14 @@ func _read_capture_args() -> void:
 			var parts := arg.trim_prefix("--pan=").split(",", false)
 			if parts.size() == 2:
 				_arg_pan = Vector2(float(parts[0]), float(parts[1]))
+		elif arg.begins_with("--feed="):
+			# The coastline takes two hours in real play.
+			# Captures need to inspect its whole loop in seconds, not hours.
+			_arg_feed = clampf(float(arg.trim_prefix("--feed=")), 0.0, 1.0)
+		elif arg == "--feast":
+			# Starts a complete feed at launch, so the rain and meal can be
+			# checked without synthesising a screen tap in headless captures.
+			_arg_feast = true
 		elif arg.begins_with("--fire="):
 			# Sends the lantern to a region at launch, so eighty seconds of
 			# somebody walking can be looked at without tapping anything.

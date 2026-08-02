@@ -16,7 +16,7 @@ extends SceneTree
 ## is no camera angle from which that is obvious.
 
 const NAMES := ["none", "gather", "craft", "haul", "deliver", "fit", "look",
-	"rest", "idle", "own", "play", "carry fire"]
+	"rest", "idle", "own", "play", "carry fire", "eat", "cook"]
 
 
 func _process(_delta: float) -> bool:
