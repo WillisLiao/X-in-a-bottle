@@ -71,6 +71,7 @@ var camera: Camera3D
 
 func build(assigned_team: Team, local_camera: bool, render_visuals: bool = true, authoritative_collision: bool = true) -> void:
 	team = assigned_team
+	add_to_group("riftline_duelists")
 	_local_camera = local_camera
 	_render_visuals = render_visuals
 	_authoritative_collision = authoritative_collision
@@ -238,7 +239,7 @@ func set_match_active(active: bool) -> void:
 		reload_remaining = 0.0
 		_pending_jump = false
 
-func make_input_frame(sequence: int, move_input: Vector2, aiming: bool, firing: bool, wants_jump: bool, crouch_edge: bool, prone_edge: bool, weapon_switch_edge: bool, reload_edge: bool) -> Dictionary:
+func make_input_frame(sequence: int, move_input: Vector2, aiming: bool, firing: bool, wants_jump: bool, crouch_edge: bool, prone_edge: bool, weapon_switch_edge: bool, reload_edge: bool, pass_seed_edge: bool = false) -> Dictionary:
 	return {
 		"sequence": sequence,
 		"move_x": clampf(move_input.x, -1.0, 1.0),
@@ -252,7 +253,11 @@ func make_input_frame(sequence: int, move_input: Vector2, aiming: bool, firing: 
 		"prone": prone_edge,
 		"weapon_switch": weapon_switch_edge,
 		"reload": reload_edge,
+		"pass_seed": pass_seed_edge,
 	}
+
+func aim_direction() -> Vector3:
+	return -head.global_transform.basis.z if head != null else -global_transform.basis.z
 
 func authoritative_state(server_tick: int, last_input_sequence: int) -> Dictionary:
 	return {

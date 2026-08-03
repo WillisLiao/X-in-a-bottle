@@ -59,6 +59,7 @@ var _practice_drill := "solo"
 var _practice_panel_active := false
 var _capture_fixture_only := false
 var _arena_preview := ""
+var _relay_preview := ""
 var _feedback_preview := ""
 var _feedback_preview_elapsed := 0.0
 var _arena_perf_sample := false
@@ -71,6 +72,7 @@ var _weapon_preview := ""
 var _ballistics_preview := ""
 var _touch_preview := ""
 var _rift_link_preview := ""
+var _relay_cue_shown := false
 var _presentation_effects: Node3D
 var _seen_projectile_fires: Dictionary = {}
 var _seen_projectile_impacts: Dictionary = {}
@@ -102,7 +104,7 @@ func _ready() -> void:
 		_enter_lan_runtime(true, false)
 	else:
 		_build_environment()
-		_capture_fixture_only = not _squad_preview.is_empty() or not _arena_preview.is_empty() or not _feedback_preview.is_empty() or not _rift_link_preview.is_empty() or not _practice_preview.is_empty()
+		_capture_fixture_only = not _squad_preview.is_empty() or not _arena_preview.is_empty() or not _feedback_preview.is_empty() or not _rift_link_preview.is_empty() or not _practice_preview.is_empty() or not _relay_preview.is_empty()
 		var show_practice := not command_line_lan and _should_show_practice_panel()
 		_build_hud()
 		_build_first_match_coach()
@@ -128,6 +130,8 @@ func _ready() -> void:
 						hud.set_touch_preview(_touch_preview)
 				if not _arena_preview.is_empty():
 					_apply_arena_preview()
+				if not _relay_preview.is_empty():
+					_apply_relay_preview()
 				if not _tactics_preview.is_empty():
 					_apply_tactics_preview()
 				if not _capture_fixture_only:
@@ -158,6 +162,7 @@ func _physics_process(delta: float) -> void:
 	if hud.take_rematch():
 		director.take_rematch()
 	var wants_reload := hud.take_reload() or Input.is_action_just_pressed("reload")
+	var wants_seed_pass := hud.take_seed_pass()
 	var look_delta := hud.take_look_delta()
 	_local_duelist.apply_look(look_delta)
 	if hud.take_reset_training() and coach != null and not _lan_active:
@@ -171,6 +176,7 @@ func _physics_process(delta: float) -> void:
 		hud.take_crouch()
 		hud.take_prone()
 		hud.take_weapon_switch()
+		hud.take_seed_pass()
 		_local_duelist.set_combat_pose(false, delta)
 		_local_duelist.drive(Vector2.ZERO, false, false, delta)
 		hud.show_ammo(_local_duelist.magazine_rounds, _local_duelist.reserve_ammo, _local_duelist.reload_remaining)
@@ -190,6 +196,8 @@ func _physics_process(delta: float) -> void:
 		_local_duelist.switch_weapon()
 	if wants_reload:
 		_local_duelist.reload_weapon()
+	if wants_seed_pass:
+		director.request_seed_pass(_local_duelist, _local_duelist.aim_direction())
 	_local_duelist.set_combat_pose(hud.aim_held, delta)
 	_local_duelist.drive(movement, hud.fire_held or Input.is_action_pressed("fire"), hud.take_jump() or Input.is_action_just_pressed("jump"), delta)
 	_tick_authority_ballistics(delta)
@@ -522,7 +530,7 @@ func _should_show_practice_panel() -> bool:
 		return true
 	if not _capture_path.is_empty() or _offline_squad_size > 1:
 		return false
-	return _squad_preview.is_empty() and _arena_preview.is_empty() and _feedback_preview.is_empty() and _rift_link_preview.is_empty() and _objective_preview.is_empty() and _weapon_preview.is_empty() and _ballistics_preview.is_empty() and _touch_preview.is_empty()
+	return _squad_preview.is_empty() and _arena_preview.is_empty() and _feedback_preview.is_empty() and _rift_link_preview.is_empty() and _objective_preview.is_empty() and _weapon_preview.is_empty() and _ballistics_preview.is_empty() and _touch_preview.is_empty() and _relay_preview.is_empty()
 
 func _load_practice_drill() -> String:
 	var config := ConfigFile.new()
@@ -604,6 +612,7 @@ func _on_score_changed(sun: int, void_score: int) -> void:
 func _on_objective_changed(state: Dictionary) -> void:
 	if hud != null:
 		hud.set_objective_state(state)
+	_update_seed_relay_control(state)
 
 func _on_objective_event(event_type: String, state: Dictionary) -> void:
 	if event_type == "objective_delivered":
@@ -612,8 +621,11 @@ func _on_objective_event(event_type: String, state: Dictionary) -> void:
 			coach.observe_delivery()
 	if hud != null:
 		hud.show_objective_event(event_type, state)
+	if event_type == "objective_claimed" and not _lan_active and _offline_squad_size > 1 and not _relay_cue_shown and str(state.get("carrier_id", "")) == _local_actor_id:
+		_relay_cue_shown = true
+		hud.show_practice_cue("SEND THE SEED TO A CLEAR CREW MATE")
 	if combat_feedback != null:
-		var local_event := str(state.get("carrier_id", "")) == _local_actor_id or event_type == "objective_delivered" and int(state.get("scoring_team", -1)) == int(_local_team)
+		var local_event := str(state.get("carrier_id", "")) == _local_actor_id or str(state.get("source_actor_id", "")) == _local_actor_id or event_type == "objective_delivered" and int(state.get("scoring_team", -1)) == int(_local_team)
 		combat_feedback.objective_event(event_type, state, local_event)
 	if event_type == "objective_delivered" and _presentation_enabled:
 		var gate_position: Vector3 = state.get("gate_position", Vector3.ZERO)
@@ -960,8 +972,11 @@ func _on_network_event(event: Dictionary, sender_id: int) -> void:
 			_apply_client_spawn(str(event.get("actor_id", "")), event.get("position", null), float(event.get("yaw", 0.0)))
 		"roster":
 			_sync_roster_records(event.get("records", []))
-		"objective_claimed", "objective_dropped", "objective_returned", "objective_delivered":
-			_on_objective_event(str(event.get("type", "")), event.get("state", {}))
+		"objective_claimed", "objective_dropped", "objective_returned", "objective_delivered", "objective_relay_launched", "objective_relay_caught", "objective_relay_disrupted":
+			var objective_event_state: Dictionary = event.get("state", {})
+			if director != null and director.seed != null and not director.seed.accepts_presentation_state(objective_event_state):
+				return
+			_on_objective_event(str(event.get("type", "")), objective_event_state)
 
 func _enter_lan_runtime(host: bool, from_player_flow: bool) -> void:
 	if _lan_active:
@@ -1179,11 +1194,13 @@ func _tick_lan_duel(delta: float) -> void:
 		_local_duelist.apply_look(Vector2(gyroscope.y, -gyroscope.x) * 2.4)
 	var live := director != null and director.is_live() if _lan_host else _lan_phase == LinebreakMatch.Phase.LIVE
 	var wants_reload := hud.take_reload() or Input.is_action_just_pressed("reload")
+	var wants_seed_pass := hud.take_seed_pass()
 	if not live or not hud.can_drive_combat():
 		hud.take_jump()
 		hud.take_crouch()
 		hud.take_prone()
 		hud.take_weapon_switch()
+		hud.take_seed_pass()
 		_local_duelist.set_combat_pose(false, delta)
 		_local_duelist.apply_input_frame({}, delta, false)
 	else:
@@ -1199,10 +1216,15 @@ func _tick_lan_duel(delta: float) -> void:
 			hud.take_prone(),
 			hud.take_weapon_switch(),
 			wants_reload)
+		frame["pass_seed"] = wants_seed_pass
+		frame["protocol"] = RiftlineNetwork.PROTOCOL_VERSION
 		_local_input_sequence += 1
 		_local_duelist.set_combat_pose(bool(frame.aim), delta)
 		if _lan_host:
 			_local_duelist.apply_input_frame(frame, delta, true)
+			var local_pass_requests: Array[Dictionary] = []
+			if bool(frame.get("pass_seed", false)):
+				local_pass_requests.append({"actor": _local_duelist, "direction": _local_duelist.aim_direction()})
 			for actor_id in _authoritative_duelists.keys():
 				if str(actor_id) == _local_actor_id:
 					continue
@@ -1211,8 +1233,12 @@ func _tick_lan_duel(delta: float) -> void:
 					continue
 				for edge in _edge_queues.get(actor_id, []):
 					target.apply_discrete_input(edge)
+					if bool(edge.get("pass_seed", false)):
+						local_pass_requests.append({"actor": target})
 				_edge_queues[actor_id] = []
 				target.apply_continuous_input(_continuous_inputs.get(actor_id, {}), delta, true)
+			for pass_request in local_pass_requests:
+				director.request_seed_pass(pass_request.actor, pass_request.actor.aim_direction())
 		else:
 			_local_duelist.apply_input_frame(frame, delta, false)
 			if _local_duelist.weapon == Duelist.Weapon.PULSE and bool(frame.fire):
@@ -1266,6 +1292,7 @@ func _tick_dedicated_server(delta: float) -> void:
 		return
 	_tick_lobby_arming(delta)
 	var applied: Dictionary = {}
+	var pass_requests: Array[Dictionary] = []
 	for actor_id in _authoritative_duelists.keys():
 		var target: Duelist = _authoritative_duelists[actor_id]
 		if target == null:
@@ -1277,12 +1304,16 @@ func _tick_dedicated_server(delta: float) -> void:
 		if director.is_live():
 			for edge in edges:
 				target.apply_discrete_input(edge)
+				if bool(edge.get("pass_seed", false)):
+					pass_requests.append({"actor": target})
 			target.apply_continuous_input(_continuous_inputs.get(actor_id, {}), delta, true)
 		else:
 			target.apply_continuous_input({}, delta, false)
 	for actor_id in _authoritative_duelists.keys():
 		if not applied.has(actor_id):
 			(_authoritative_duelists[actor_id] as Duelist).apply_continuous_input({}, delta, false)
+	for pass_request in pass_requests:
+		director.request_seed_pass(pass_request.actor, pass_request.actor.aim_direction())
 	_tick_authority_ballistics(delta)
 	_lan_tick += 1
 	_snapshot_remaining -= delta
@@ -1419,6 +1450,7 @@ func _sync_objective_presentation() -> void:
 	if hud != null:
 		hud.set_objective_state(state)
 		_update_carrier_navigation(state)
+		_update_seed_relay_control(state)
 	if coach != null and not _lan_active:
 		coach.observe_objective(state)
 
@@ -1474,6 +1506,22 @@ func _update_carrier_navigation(state: Dictionary) -> void:
 		direction = Vector2.RIGHT if local_gate.x >= 0.0 else Vector2.LEFT
 	hud.set_carrier_navigation(true, direction)
 
+func _update_seed_relay_control(state: Dictionary) -> void:
+	if hud == null or _local_duelist == null or director == null or not director.is_live():
+		if hud != null:
+			hud.set_seed_relay_available(false)
+		return
+	if int(state.get("state", int(RiftSeed.State.HOME))) != int(RiftSeed.State.CARRIED) or str(state.get("carrier_id", "")) != _local_duelist.actor_id:
+		hud.set_seed_relay_available(false)
+		return
+	var has_teammate := false
+	var actors := _all_replica_actors() if _lan_active and not _lan_host else _all_authority_actors()
+	for actor in actors:
+		if actor != _local_duelist and actor.team == _local_duelist.team and not actor.eliminated:
+			has_teammate = true
+			break
+	hud.set_seed_relay_available(has_teammate)
+
 func _sync_squad_hud() -> void:
 	if hud == null:
 		return
@@ -1504,6 +1552,7 @@ func _discrete_input(frame: Dictionary) -> Dictionary:
 		"prone": bool(frame.get("prone", false)),
 		"weapon_switch": bool(frame.get("weapon_switch", false)),
 		"reload": bool(frame.get("reload", false)),
+		"pass_seed": bool(frame.get("pass_seed", false)),
 	}
 
 func _play_shooter_fire(team: Duelist.Team, fired_weapon: Duelist.Weapon) -> void:
@@ -1803,6 +1852,9 @@ func _read_capture_arguments() -> void:
 			_touch_preview = argument.trim_prefix("--touch-preview=")
 		elif argument.begins_with("--rift-link-preview="):
 			_rift_link_preview = argument.trim_prefix("--rift-link-preview=")
+		elif argument.begins_with("--relay-preview="):
+			_relay_preview = argument.trim_prefix("--relay-preview=")
+			_offline_squad_size = 5 if _relay_preview in ["bot-relay", "full-crew"] else 3
 	if _capture_settings and hud != null:
 		hud.open_settings()
 	if _capture_hud_layout and hud != null:
@@ -1870,6 +1922,59 @@ func _apply_arena_preview() -> void:
 	_local_duelist.camera.look_at(look_target)
 	for actor in _all_authority_actors():
 		actor.set_physics_process(false)
+
+func _apply_relay_preview() -> void:
+	if _relay_preview.is_empty() or director == null or _local_duelist == null or arena_map == null:
+		return
+	director.set_physics_process(false)
+	hud.set_match_phase(LinebreakMatch.Phase.LIVE)
+	hud.set_combat_input_enabled(false)
+	_local_duelist.camera.cull_mask = 1
+	_local_duelist.camera.global_position = Vector3(0.0, 21.0, 29.0)
+	_local_duelist.camera.look_at(Vector3(0.0, 0.8, 0.0))
+	var sun_carrier := _local_duelist
+	sun_carrier.position = Vector3(-8.0, 0.1, 0.0)
+	var sun_receiver := _actor_for_team(Duelist.Team.SUN)
+	if sun_receiver == sun_carrier:
+		for actor in _all_authority_actors():
+			if actor != sun_carrier and actor.team == Duelist.Team.SUN:
+				sun_receiver = actor
+				break
+	if sun_receiver != null:
+		sun_receiver.position = Vector3(4.0, 0.1, 0.0)
+	for actor in _all_authority_actors():
+		actor.set_physics_process(false)
+	var preview_state: Dictionary = {
+		"state": int(RiftSeed.State.CARRIED),
+		"position": sun_carrier.global_position + Vector3.UP * RiftSeed.CARRIER_HEIGHT,
+		"carrier_id": sun_carrier.actor_id,
+		"carrier_team": int(Duelist.Team.SUN),
+		"lifecycle_token": 1,
+	}
+	match _relay_preview:
+		"trajectory":
+			preview_state = {"state": int(RiftSeed.State.IN_FLIGHT), "position": Vector3(-2.0, 3.3, 0.0), "velocity": Vector3(18.0, 2.2, 0.0), "carrier_id": "", "carrier_team": -1, "pass_team": int(Duelist.Team.SUN), "source_actor_id": sun_carrier.actor_id, "flight_remaining": 0.5, "flight_token": 1, "lifecycle_token": 2}
+		"catch":
+			preview_state = {"state": int(RiftSeed.State.CARRIED), "position": sun_receiver.global_position + Vector3.UP * RiftSeed.CARRIER_HEIGHT, "carrier_id": sun_receiver.actor_id, "carrier_team": int(Duelist.Team.SUN), "source_actor_id": sun_carrier.actor_id, "flight_token": 1, "lifecycle_token": 3}
+		"blocked":
+			preview_state = {"state": int(RiftSeed.State.DROPPED), "position": Vector3(0.0, RiftSeed.HOME_HEIGHT, 0.0), "carrier_id": "", "carrier_team": -1, "source_actor_id": sun_carrier.actor_id, "flight_token": 1, "lifecycle_token": 3, "reason": "blocked"}
+		"drop":
+			preview_state = {"state": int(RiftSeed.State.DROPPED), "position": Vector3(2.0, RiftSeed.HOME_HEIGHT, 0.0), "carrier_id": "", "carrier_team": -1, "lifecycle_token": 3}
+		"bot-relay":
+			preview_state = {"state": int(RiftSeed.State.IN_FLIGHT), "position": Vector3(-2.0, 3.2, 0.0), "velocity": Vector3(16.0, 2.0, 0.0), "carrier_id": "", "carrier_team": -1, "pass_team": int(Duelist.Team.SUN), "source_actor_id": sun_carrier.actor_id, "flight_remaining": 0.54, "flight_token": 2, "lifecycle_token": 4}
+		"full-crew":
+			preview_state = {"state": int(RiftSeed.State.CARRIED), "position": sun_carrier.global_position + Vector3.UP * RiftSeed.CARRIER_HEIGHT, "carrier_id": sun_carrier.actor_id, "carrier_team": int(Duelist.Team.SUN), "lifecycle_token": 1}
+		"control":
+			pass
+	director.seed.apply_presentation_state(preview_state, Callable(director, "_lookup_duelist"))
+	hud.set_objective_state(preview_state)
+	hud.set_seed_relay_available(_relay_preview == "control" or _relay_preview == "full-crew")
+	if _relay_preview in ["trajectory", "bot-relay"]:
+		hud.show_objective_event("objective_relay_launched", preview_state)
+	elif _relay_preview == "catch":
+		hud.show_objective_event("objective_relay_caught", preview_state)
+	elif _relay_preview == "blocked":
+		hud.show_objective_event("objective_relay_disrupted", preview_state)
 
 func _apply_tactics_preview() -> void:
 	if _tactics_preview.is_empty() or _local_duelist == null or arena_map == null:

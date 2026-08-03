@@ -12,6 +12,7 @@ const INTENT_RETURN := "hold_return"
 const INTENT_INTERCEPT := "intercept_sighting"
 const INTENT_RECOVER := "recover_seed"
 const INTENT_RESET := "reset_center"
+const INTENT_RELAY_SUPPORT := "relay_support"
 
 var _facts: Dictionary = {}
 var _sightings: Dictionary = {}
@@ -108,7 +109,12 @@ func _plan_crew(orders: Dictionary, team: Duelist.Team, living: Array[Dictionary
 	else:
 		var carrier_is_human := bool(friendly_carrier.get("human", false))
 		if not carrier_is_human:
-			assigned[_actor_id(friendly_carrier)] = _order(INTENT_CARRY, _anchor("gate_escort", team), "center", elapsed)
+			var relay_target := _relay_target(living, friendly_carrier, objective)
+			if not relay_target.is_empty():
+				assigned[_actor_id(friendly_carrier)] = _order(INTENT_RELAY_SUPPORT, relay_target.get("position", Vector3.ZERO), "relay", elapsed)
+				assigned[_actor_id(friendly_carrier)]["target_id"] = _actor_id(relay_target)
+			else:
+				assigned[_actor_id(friendly_carrier)] = _order(INTENT_CARRY, _anchor("gate_escort", team), "center", elapsed)
 		var first_bot := bots[0]
 		if _actor_id(first_bot) == _actor_id(friendly_carrier) and bots.size() > 1:
 			first_bot = bots[1]
@@ -171,6 +177,26 @@ func _next_unassigned(members: Array[Dictionary], assigned: Dictionary) -> Dicti
 		if not assigned.has(_actor_id(member)):
 			return member
 	return {}
+
+func _relay_target(living: Array[Dictionary], carrier: Dictionary, objective: Dictionary) -> Dictionary:
+	if not bool(objective.get("relay_available", false)):
+		return {}
+	var gate_position: Vector3 = objective.get("gate_position", Vector3.ZERO)
+	var carrier_position: Vector3 = carrier.get("position", Vector3.ZERO)
+	var candidates: Array[Dictionary] = []
+	for member in living:
+		if _actor_id(member) == _actor_id(carrier) or bool(member.get("carrying", false)):
+			continue
+		var position: Vector3 = member.get("position", Vector3.ZERO)
+		if position.distance_to(carrier_position) > RiftSeed.RELAY_RANGE:
+			continue
+		if not bool(member.get("direct_los", false)):
+			continue
+		if position.distance_squared_to(gate_position) >= carrier_position.distance_squared_to(gate_position):
+			continue
+		candidates.append(member)
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return _actor_id(a) < _actor_id(b))
+	return candidates[0] if not candidates.is_empty() else {}
 
 func _actor_id(member: Dictionary) -> String:
 	return str(member.get("actor_id", ""))

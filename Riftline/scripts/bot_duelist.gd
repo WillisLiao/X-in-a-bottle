@@ -64,6 +64,20 @@ func clear_tactical_order() -> void:
 func has_direct_line_of_sight_to(candidate: Duelist) -> bool:
 	return is_instance_valid(candidate) and _has_line_of_sight_to(candidate)
 
+func seed_relay_aim_direction() -> Vector3:
+	if not is_carrying_seed() or _tactical_order.get("intent", "") != RiftlineSquadTactics.INTENT_RELAY_SUPPORT:
+		return Vector3.ZERO
+	var target_id := str(_tactical_order.get("target_id", ""))
+	for candidate in _friendlies:
+		if candidate.actor_id != target_id or candidate.eliminated or not candidate.match_active:
+			continue
+		if global_position.distance_to(candidate.global_position) > RiftSeed.RELAY_RANGE or not has_direct_line_of_sight_to(candidate):
+			return Vector3.ZERO
+		if candidate.global_position.distance_squared_to(_enemy_gate) >= global_position.distance_squared_to(_enemy_gate):
+			return Vector3.ZERO
+		return (candidate.head.global_position - head.global_position).normalized()
+	return Vector3.ZERO
+
 func _ready() -> void:
 	_random.randomize()
 

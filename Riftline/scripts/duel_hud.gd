@@ -7,10 +7,10 @@ signal feedback_preferences_changed(effects_enabled: bool, haptics_enabled: bool
 const CONFIG_PATH := "user://riftline_controls.cfg"
 const LAYOUT_SECTION := "hud_layout_v1"
 const FEEDBACK_SECTION := "feedback_v1"
-const LAYOUT_VERSION := 2
+const LAYOUT_VERSION := 3
 const SNAP_POINTS := 8.0
 const DRAG_THRESHOLD := 10.0
-const MOVABLE_KEYS := ["move", "left_fire", "right_fire", "ads", "jump", "crouch", "prone", "swap"]
+const MOVABLE_KEYS := ["move", "left_fire", "right_fire", "ads", "jump", "crouch", "prone", "swap", "seed_pass"]
 
 var movement := Vector2.ZERO
 var fire_held := false
@@ -31,7 +31,7 @@ var camera_sensitivity := 1.0
 var ads_sensitivity := 0.72
 var gyro_enabled := false
 var effects_enabled := true
-var haptics_enabled := true
+var haptics_enabled := false
 var _stick_mode := MobileTouchRouter.StickMode.FLOATING
 var _touch_router := MobileTouchRouter.new()
 var _stick_visual_opacity := 0.0
@@ -42,12 +42,12 @@ var _coach_display_cue: Dictionary = {}
 static func save_feedback_preferences(config: ConfigFile, next_effects_enabled: bool, next_haptics_enabled: bool) -> void:
 	config.set_value(FEEDBACK_SECTION, "version", 1)
 	config.set_value(FEEDBACK_SECTION, "effects", next_effects_enabled)
-	config.set_value(FEEDBACK_SECTION, "haptics", next_haptics_enabled)
+	config.set_value(FEEDBACK_SECTION, "haptics", false)
 
 static func load_feedback_preferences(config: ConfigFile, default_effects_enabled: bool = true, default_haptics_enabled: bool = true) -> Dictionary:
 	return {
 		"effects_enabled": bool(config.get_value(FEEDBACK_SECTION, "effects", default_effects_enabled)),
-		"haptics_enabled": bool(config.get_value(FEEDBACK_SECTION, "haptics", default_haptics_enabled)),
+		"haptics_enabled": false,
 	}
 var _coach_visual_opacity := 0.0
 var _coach_visual_target := 0.0
@@ -60,6 +60,7 @@ var _crouch_requested := false
 var _prone_requested := false
 var _weapon_switch_requested := false
 var _reload_requested := false
+var _seed_pass_requested := false
 var _left_fire_touch := -1
 var _right_fire_touch := -1
 var _aim_touch := -1
@@ -67,6 +68,7 @@ var _jump_touch := -1
 var _crouch_touch := -1
 var _prone_touch := -1
 var _switch_touch := -1
+var _seed_pass_touch := -1
 var _sun_score := 0
 var _void_score := 0
 var _roster_state: Array[Dictionary] = []
@@ -100,6 +102,7 @@ var _connection_flow_active := false
 var _connection_message := ""
 var _connection_message_remaining := 0.0
 var _reset_training_requested := false
+var _seed_relay_available := false
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -163,6 +166,11 @@ func take_reset_training() -> bool:
 	_reset_training_requested = false
 	return requested
 
+func take_seed_pass() -> bool:
+	var requested := _seed_pass_requested
+	_seed_pass_requested = false
+	return requested
+
 func set_coach_cue(cue: Dictionary) -> void:
 	_coach_cue = cue.duplicate(true)
 	if _coach_cue.is_empty():
@@ -221,6 +229,12 @@ func set_objective_state(state: Dictionary) -> void:
 		_objective_state = state.duplicate(true)
 	queue_redraw()
 
+func set_seed_relay_available(available: bool) -> void:
+	_seed_relay_available = available
+	if not available and _seed_pass_touch >= 0:
+		_seed_pass_touch = -1
+	queue_redraw()
+
 func set_carrier_navigation(active: bool, direction: Vector2 = Vector2.RIGHT) -> void:
 	_carrier_chevron_active = active
 	if direction.length_squared() > 0.01:
@@ -240,6 +254,12 @@ func show_objective_event(event_type: String, _state: Dictionary) -> void:
 			_objective_message = "SEED RETURNS"
 		"objective_delivered":
 			_objective_message = "LINE BREACHED"
+		"objective_relay_launched":
+			_objective_message = "SEED SENT"
+		"objective_relay_caught":
+			_objective_message = "SEED RECEIVED"
+		"objective_relay_disrupted":
+			_objective_message = "SEED BROKEN"
 			_score_pulse = 1.0
 			_score_pulse_team = int(_state.get("scoring_team", -1))
 		_:
@@ -375,6 +395,9 @@ func _gui_input(event: InputEvent) -> void:
 			if event.pressed and _pressed_circle(event.position, _reload_center(), _reload_radius() + 12.0):
 				_reload_requested = true
 				fire_held = false
+			elif event.pressed and _seed_relay_available and _pressed_circle(event.position, _control_center("seed_pass"), _control_radius("seed_pass") + 12.0):
+				_seed_pass_requested = true
+				fire_held = false
 			else:
 				fire_held = event.pressed
 	elif event is InputEventMouseMotion:
@@ -424,6 +447,10 @@ func _handle_touch(index: int, point: Vector2, pressed: bool) -> void:
 		_switch_touch = index
 		_weapon_switch_requested = true
 		return
+	if key == "seed_pass" and _seed_relay_available:
+		_seed_pass_touch = index
+		_seed_pass_requested = true
+		return
 	if not _safe_rect().has_point(point):
 		return
 	_touch_router.configure(_stick_mode, _control_center("move"), _stick_radius())
@@ -459,6 +486,8 @@ func _release_touch(index: int) -> void:
 		_prone_touch = -1
 	if index == _switch_touch:
 		_switch_touch = -1
+	if index == _seed_pass_touch:
+		_seed_pass_touch = -1
 
 func _release_all_touch_ownership() -> void:
 	_touch_router.reset()
@@ -469,6 +498,7 @@ func _release_all_touch_ownership() -> void:
 	_crouch_touch = -1
 	_prone_touch = -1
 	_switch_touch = -1
+	_seed_pass_touch = -1
 	_editor_touch = -1
 	movement = Vector2.ZERO
 	fire_held = false
@@ -479,6 +509,7 @@ func _release_all_touch_ownership() -> void:
 	_prone_requested = false
 	_weapon_switch_requested = false
 	_reload_requested = false
+	_seed_pass_requested = false
 	_stick_visual_target = 0.0
 
 func _draw() -> void:
@@ -540,6 +571,8 @@ func _draw_gameplay_hud() -> void:
 	_draw_button("crouch", friendly, _stance == Duelist.Stance.CROUCH)
 	_draw_button("prone", friendly, _stance == Duelist.Stance.PRONE)
 	_draw_button("swap", Color("c292ff"), _switch_touch >= 0)
+	if _seed_relay_available:
+		_draw_button("seed_pass", friendly, _seed_pass_touch >= 0)
 	if _weapon == Duelist.Weapon.PULSE:
 		_draw_button_fixed(_reload_center(), _reload_radius(), Color("e6a25b"), reload_remaining > 0.0, "reload")
 	_draw_weapon_indicator(friendly)
@@ -608,6 +641,11 @@ func _draw_objective_strip(safe: Rect2, friendly: Color, enemy: Color) -> void:
 	if state == RiftSeed.State.DROPPED:
 		objective_accent = Color("fff0b0")
 	_draw_seed_glyph(center, objective_accent, state == RiftSeed.State.CARRIED)
+	if state == RiftSeed.State.IN_FLIGHT:
+		var relay_pulse := 0.45 + sin(Time.get_ticks_msec() * 0.01) * 0.25
+		draw_line(center + Vector2(-10, 0), center + Vector2(10, 0), Color(objective_accent, relay_pulse), 2.0)
+		draw_line(center + Vector2(5, -5), center + Vector2(10, 0), Color(objective_accent, relay_pulse), 2.0)
+		draw_line(center + Vector2(5, 5), center + Vector2(10, 0), Color(objective_accent, relay_pulse), 2.0)
 	if objective_feedback_pulse > 0.0:
 		var feedback_color := _team_color(objective_feedback_team) if objective_feedback_team >= 0 else Color("fff0b0")
 		draw_arc(center, 10.0 + (1.0 - objective_feedback_pulse) * 18.0, 0.0, TAU, 24, Color(feedback_color, objective_feedback_pulse * 0.9), 2.5)
@@ -711,8 +749,26 @@ func _draw_control_glyph(center: Vector2, radius: float, color: Color, key: Stri
 			draw_line(center + Vector2(radius * 0.3, -5), center + Vector2(radius * 0.14, -radius * 0.18), glyph_color, weight)
 			draw_line(center + Vector2(radius * 0.34, 5), center + Vector2(-radius * 0.3, 5), glyph_color, weight)
 			draw_line(center + Vector2(-radius * 0.3, 5), center + Vector2(-radius * 0.14, radius * 0.18), glyph_color, weight)
+		"seed_pass":
+			var diamond := PackedVector2Array([center + Vector2(0, -radius * 0.25), center + Vector2(radius * 0.2, 0), center + Vector2(0, radius * 0.25), center + Vector2(-radius * 0.2, 0)])
+			draw_polyline(diamond, glyph_color, weight)
+			draw_line(center + Vector2(radius * 0.05, 0), center + Vector2(radius * 0.42, 0), glyph_color, weight)
+			draw_line(center + Vector2(radius * 0.27, -radius * 0.16), center + Vector2(radius * 0.42, 0), glyph_color, weight)
+			draw_line(center + Vector2(radius * 0.27, radius * 0.16), center + Vector2(radius * 0.42, 0), glyph_color, weight)
 		"reload":
-			_draw_reload_sweep(center, radius * 0.58, glyph_color)
+			if active and reload_indicator_animates():
+				_draw_reload_sweep(center, radius * 0.58, glyph_color)
+			else:
+				_draw_reload_icon(center, radius * 0.58, glyph_color)
+
+func reload_indicator_animates() -> bool:
+	return reload_remaining > 0.0
+
+func _draw_reload_icon(center: Vector2, radius: float, color: Color) -> void:
+	draw_arc(center, radius, -PI * 0.76, PI * 0.72, 16, color, 2.4)
+	var tip := center + Vector2(radius * 0.62, -radius * 0.3)
+	draw_line(tip, tip + Vector2(-radius * 0.02, radius * 0.28), color, 2.4)
+	draw_line(tip, tip + Vector2(-radius * 0.27, radius * 0.04), color, 2.4)
 
 func _draw_weapon_indicator(color: Color) -> void:
 	var safe := _safe_rect()
@@ -872,11 +928,6 @@ func _handle_settings_touch(point: Vector2, pressed: bool) -> void:
 		_save_control_settings()
 		feedback_preferences_changed.emit(effects_enabled, haptics_enabled)
 		return
-	if _haptics_rect(panel).has_point(point):
-		haptics_enabled = not haptics_enabled
-		_save_control_settings()
-		feedback_preferences_changed.emit(effects_enabled, haptics_enabled)
-		return
 	if _stick_mode_rect(panel).has_point(point):
 		_stick_mode = MobileTouchRouter.StickMode.FIXED if _stick_mode == MobileTouchRouter.StickMode.FLOATING else MobileTouchRouter.StickMode.FLOATING
 		_touch_router.configure(_stick_mode, _control_center("move"), _stick_radius())
@@ -910,7 +961,6 @@ func _draw_settings_panel(friendly: Color, enemy: Color) -> void:
 	_draw_setting_chip(Rect2(panel.position + Vector2(184, 168), Vector2(142, 44)), "GYRO %s" % ("ON" if gyro_enabled else "OFF"), Color("c292ff"), gyro_enabled)
 	_draw_setting_chip(Rect2(panel.position + Vector2(344, 168), Vector2(142, 44)), "QUICK SWAP", Color("c292ff"), true)
 	_draw_setting_chip(_effects_rect(panel), "EFFECTS %s" % ("ON" if effects_enabled else "OFF"), friendly, effects_enabled)
-	_draw_setting_chip(_haptics_rect(panel), "HAPTICS %s" % ("ON" if haptics_enabled else "OFF"), Color("c292ff"), haptics_enabled)
 	_draw_setting_chip(_stick_mode_rect(panel), "STICK %s" % ("FLOAT" if _stick_mode == MobileTouchRouter.StickMode.FLOATING else "FIXED"), friendly, _stick_mode == MobileTouchRouter.StickMode.FLOATING)
 	_draw_setting_chip(_hud_layout_rect(panel), "HUD LAYOUT", enemy, true)
 	_draw_setting_chip(_reset_training_rect(panel), "RESET TRAINING", Color("e57c70"), false)
@@ -1130,6 +1180,7 @@ func _control_specs() -> Dictionary:
 		"crouch": {"radius": 37.0, "label": "C"},
 		"prone": {"radius": 37.0, "label": "P"},
 		"swap": {"radius": 37.0, "label": "SWAP"},
+		"seed_pass": {"radius": 44.0, "label": "SEND"},
 	}
 
 func _default_layout() -> Dictionary:
@@ -1144,7 +1195,8 @@ func _two_thumb_layout() -> Dictionary:
 		"jump": _layout_entry(Vector2(0.90, 0.59), 1.0, 0.78),
 		"crouch": _layout_entry(Vector2(0.76, 0.80), 1.0, 0.78),
 		"prone": _layout_entry(Vector2(0.64, 0.80), 1.0, 0.78),
-		"swap": _layout_entry(Vector2(0.70, 0.57), 1.0, 0.78),
+			"swap": _layout_entry(Vector2(0.70, 0.57), 1.0, 0.78),
+			"seed_pass": _layout_entry(Vector2(0.87, 0.37), 1.0, 0.82),
 	}
 
 func _four_finger_layout() -> Dictionary:
@@ -1156,7 +1208,8 @@ func _four_finger_layout() -> Dictionary:
 		"jump": _layout_entry(Vector2(0.90, 0.59), 1.0, 0.82),
 		"crouch": _layout_entry(Vector2(0.70, 0.79), 1.0, 0.78),
 		"prone": _layout_entry(Vector2(0.58, 0.79), 1.0, 0.78),
-		"swap": _layout_entry(Vector2(0.64, 0.56), 1.0, 0.78),
+			"swap": _layout_entry(Vector2(0.64, 0.56), 1.0, 0.78),
+			"seed_pass": _layout_entry(Vector2(0.86, 0.37), 1.0, 0.82),
 	}
 
 func _layout_entry(center: Vector2, scale: float, opacity: float) -> Dictionary:
@@ -1186,7 +1239,7 @@ func _action_key_at(point: Vector2) -> String:
 	var closest := ""
 	var closest_distance := INF
 	for key in MOVABLE_KEYS:
-		if key == "move":
+		if key == "move" or key == "seed_pass" and not _seed_relay_available:
 			continue
 		var hit_radius := maxf(_control_radius(key), 22.0) + 8.0
 		var distance := point.distance_to(_control_center(key))
@@ -1247,14 +1300,14 @@ func _load_control_settings() -> void:
 	_aim_toggle = bool(config.get_value("controls", "aim_toggle", _aim_toggle))
 	var feedback_preferences := load_feedback_preferences(config, effects_enabled, haptics_enabled)
 	effects_enabled = bool(feedback_preferences.effects_enabled)
-	haptics_enabled = bool(feedback_preferences.haptics_enabled)
+	haptics_enabled = false
 	var saved_stick_mode := str(config.get_value("controls", "stick_mode", "floating")).to_lower()
 	_stick_mode = MobileTouchRouter.StickMode.FIXED if saved_stick_mode == "fixed" else MobileTouchRouter.StickMode.FLOATING
 	var has_saved_layout := config.has_section(LAYOUT_SECTION)
 	var saved_layout_version := int(config.get_value(LAYOUT_SECTION, "version", 1))
 	var migrate_legacy_default := has_saved_layout and saved_layout_version < LAYOUT_VERSION and _saved_layout_matches(_legacy_default_layout(), config)
 	for key in MOVABLE_KEYS:
-		var fallback: Dictionary = _default_layout()[key] if migrate_legacy_default or not has_saved_layout else _legacy_default_layout()[key]
+		var fallback: Dictionary = _default_layout()[key] if migrate_legacy_default or not has_saved_layout else _legacy_default_layout().get(key, _default_layout()[key])
 		var center_x := _config_float(config, LAYOUT_SECTION, "%s_center_x" % key, fallback.center.x, 0.0, 1.0)
 		var center_y := _config_float(config, LAYOUT_SECTION, "%s_center_y" % key, fallback.center.y, 0.0, 1.0)
 		var scale := _config_float(config, LAYOUT_SECTION, "%s_scale" % key, fallback.scale, 0.7, 1.35)
@@ -1276,6 +1329,7 @@ func _legacy_default_layout() -> Dictionary:
 		"crouch": _layout_entry(Vector2(0.67, 0.79), 1.0, 0.78),
 		"prone": _layout_entry(Vector2(0.56, 0.79), 1.0, 0.78),
 		"swap": _layout_entry(Vector2(0.67, 0.53), 1.0, 0.78),
+		"seed_pass": _layout_entry(Vector2(0.87, 0.37), 1.0, 0.82),
 	}
 
 func _saved_layout_matches(expected: Dictionary, config: ConfigFile) -> bool:

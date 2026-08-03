@@ -52,6 +52,9 @@ func configure(center: Vector3, gate_positions: Dictionary, presentation_enabled
 	seed.dropped.connect(_on_seed_dropped)
 	seed.returned_to_center.connect(_on_seed_returned)
 	seed.delivered.connect(_on_seed_delivered)
+	seed.relay_launched.connect(_on_seed_relay_launched)
+	seed.relay_caught.connect(_on_seed_relay_caught)
+	seed.relay_disrupted.connect(_on_seed_relay_disrupted)
 
 func add_spawn(team: Duelist.Team, point: Vector3) -> void:
 	spawn_points[team].append(point)
@@ -146,15 +149,26 @@ func apply_replica_state(snapshot: Dictionary) -> void:
 	scores[Duelist.Team.VOID] = clampi(int(snapshot.get("void_score", 0)), 0, SCORE_TO_WIN)
 	if seed != null:
 		var objective: Dictionary = snapshot.get("objective", {})
-		seed.apply_presentation_state(objective, Callable(self, "_lookup_duelist"))
-		_update_carrier_flags(objective)
-		objective_changed.emit(objective)
+		if seed.apply_presentation_state(objective, Callable(self, "_lookup_duelist")):
+			_update_carrier_flags(objective)
+			objective_changed.emit(objective)
 	if phase_changed_locally:
 		_set_phase(phase)
 	score_changed.emit(scores[Duelist.Team.SUN], scores[Duelist.Team.VOID])
 
 func objective_state() -> Dictionary:
 	return seed.authoritative_state() if seed != null else {}
+
+func request_seed_pass(carrier: Duelist, aim_direction: Vector3) -> bool:
+	if not _started or phase != Phase.LIVE or seed == null:
+		return false
+	if not _is_registered(carrier) or carrier == null or carrier.eliminated or not carrier.match_active:
+		return false
+	if seed.state != RiftSeed.State.CARRIED or seed.carrier_id() != carrier.actor_id or not carrier.is_carrying_seed():
+		return false
+	if _living_teammate_count(carrier) <= 0 or not _is_finite_vector(aim_direction) or aim_direction.length_squared() < 0.0001:
+		return false
+	return seed.launch_relay(carrier, aim_direction)
 
 func _physics_process(delta: float) -> void:
 	if not _started or seed == null:
@@ -168,6 +182,7 @@ func _physics_process(delta: float) -> void:
 		if _intermission_remaining <= 0.0:
 			_start_opening()
 	elif phase == Phase.LIVE:
+		_request_bot_relay()
 		seed.tick_authority(delta, _all_duelists())
 		_tactical_elapsed += delta
 		_sync_bot_context()
@@ -265,6 +280,46 @@ func _on_seed_delivered(carrier: Duelist, scoring_team: Duelist.Team, gate_posit
 	objective_changed.emit(seed.authoritative_state())
 	_intermission_remaining = INTERMISSION_SECONDS
 
+func _on_seed_relay_launched(state: Dictionary) -> void:
+	_tactical_refresh = true
+	objective_changed.emit(state)
+	objective_event.emit("objective_relay_launched", state)
+	_sync_bot_context()
+
+func _on_seed_relay_caught(state: Dictionary) -> void:
+	_tactical_refresh = true
+	objective_changed.emit(state)
+	objective_event.emit("objective_relay_caught", state)
+	_sync_bot_context()
+
+func _on_seed_relay_disrupted(state: Dictionary) -> void:
+	_tactical_refresh = true
+	objective_changed.emit(state)
+	objective_event.emit("objective_relay_disrupted", state)
+	_sync_bot_context()
+
+func _request_bot_relay() -> void:
+	if seed == null or seed.state != RiftSeed.State.CARRIED:
+		return
+	var carriers := _all_duelists()
+	carriers.sort_custom(func(a: Duelist, b: Duelist) -> bool: return a.actor_id < b.actor_id)
+	for candidate in carriers:
+		if not candidate is BotDuelist or not candidate.is_carrying_seed():
+			continue
+		var aim := (candidate as BotDuelist).seed_relay_aim_direction()
+		if aim.length_squared() > 0.0001 and request_seed_pass(candidate, aim):
+			return
+
+func _living_teammate_count(carrier: Duelist) -> int:
+	var count := 0
+	for candidate in _all_duelists():
+		if candidate != carrier and candidate.team == carrier.team and not candidate.eliminated and candidate.match_active:
+			count += 1
+	return count
+
+func _is_finite_vector(value: Vector3) -> bool:
+	return is_finite(value.x) and is_finite(value.y) and is_finite(value.z)
+
 func _clear_tactical_memory() -> void:
 	_tactical_elapsed = 0.0
 	_tactical_refresh = true
@@ -353,7 +408,13 @@ func _sync_bot_context() -> void:
 				"carrying": candidate.carrying_seed,
 			})
 		var sightings: Array[Dictionary] = _carrier_sightings(team, state)
-		var orders := planner.update(team, members, _tactical_state_for_team(state, team), sightings, Time.get_ticks_msec() / 1000.0)
+		var tactical_state := _tactical_state_for_team(state, team)
+		var relay_carrier := _lookup_duelist(str(state.get("carrier_id", "")))
+		if relay_carrier is BotDuelist and relay_carrier.team == team:
+			for member in members:
+				var relay_target := _lookup_duelist(str(member.get("actor_id", "")))
+				member["direct_los"] = relay_target != null and (relay_carrier as BotDuelist).has_direct_line_of_sight_to(relay_target)
+		var orders := planner.update(team, members, tactical_state, sightings, Time.get_ticks_msec() / 1000.0)
 		for candidate in rosters[team]:
 			if candidate is not BotDuelist:
 				continue
@@ -368,6 +429,9 @@ func _tactical_state_for_team(state: Dictionary, team: Duelist.Team) -> Dictiona
 	var carrier_team := int(state.get("carrier_team", -1))
 	if carrier_team >= 0 and carrier_team != int(team):
 		visible["position"] = Vector3.ZERO
+	var enemy_team := Duelist.Team.VOID if team == Duelist.Team.SUN else Duelist.Team.SUN
+	visible["gate_position"] = _gate_positions.get(enemy_team, Vector3.ZERO)
+	visible["relay_available"] = seed != null and seed.state == RiftSeed.State.CARRIED
 	return visible
 
 func _carrier_sightings(team: Duelist.Team, state: Dictionary) -> Array[Dictionary]:

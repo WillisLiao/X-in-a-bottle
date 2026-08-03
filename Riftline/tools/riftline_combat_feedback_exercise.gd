@@ -33,7 +33,7 @@ func _initialize() -> void:
 	DuelHud.save_feedback_preferences(preferences, false, true)
 	var reloaded_preferences := DuelHud.load_feedback_preferences(preferences, true, false)
 	assert(not reloaded_preferences.effects_enabled)
-	assert(reloaded_preferences.haptics_enabled)
+	assert(not reloaded_preferences.haptics_enabled)
 
 	var local := _make_duelist(root, Duelist.Team.SUN, "local")
 	var enemy := _make_duelist(root, Duelist.Team.VOID, "enemy")

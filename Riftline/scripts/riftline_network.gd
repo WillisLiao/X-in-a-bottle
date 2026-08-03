@@ -17,7 +17,7 @@ signal lobby_live_received(state: Dictionary)
 signal lobby_abandoned_received(state: Dictionary)
 
 const PROJECT_ID := "riftline-lan"
-const PROTOCOL_VERSION := 4
+const PROTOCOL_VERSION := 5
 const APP_HOST_DUEL_REMOTE_SLOTS := 1
 const APP_HOST_SQUAD_REMOTE_SLOTS := 9
 const DEDICATED_REMOTE_SLOTS := 10
@@ -381,6 +381,10 @@ func _rpc_input(frame: Dictionary) -> void:
 	var sender := multiplayer.get_remote_sender_id()
 	if sender <= 0:
 		return
+	if int(frame.get("protocol", -1)) != PROTOCOL_VERSION:
+		_peer.disconnect_peer(sender, true)
+		session_status.emit("RIFT VERSION MISMATCH")
+		return
 	var validated := _validate_input(sender, frame)
 	if validated.is_empty():
 		return
@@ -415,6 +419,10 @@ func _rpc_event(event: Dictionary) -> void:
 		var public_records: Array[Dictionary] = _validated_public_records(event.get("records", []))
 		roster_received.emit(public_records)
 	elif event_type == "session":
+		if int(event.get("protocol", -1)) != PROTOCOL_VERSION:
+			session_status.emit("RIFT VERSION MISMATCH")
+			stop()
+			return
 		var descriptor := _descriptor_from_packet(event)
 		session_descriptor = descriptor
 		arena_id = int(descriptor.get("map_id", int(arena_id))) as RiftlineMap.Id
@@ -515,6 +523,8 @@ func _start_dedicated_server() -> Error:
 	return OK
 
 func _validate_input(peer_id: int, frame: Dictionary) -> Dictionary:
+	if int(frame.get("protocol", -1)) != PROTOCOL_VERSION:
+		return {}
 	if not frame.has("sequence") or typeof(frame.sequence) != TYPE_INT:
 		return {}
 	for key in ["move_x", "move_y", "yaw", "pitch"]:
@@ -528,10 +538,11 @@ func _validate_input(peer_id: int, frame: Dictionary) -> Dictionary:
 	var pitch := clampf(float(frame.pitch), -1.05, 0.9)
 	if _last_input_view.has(peer_id) and absf(angle_difference(float(_last_input_view[peer_id]), yaw)) > MAX_VIEW_TURN_PER_FRAME:
 		return {}
-	for key in ["aim", "fire", "jump", "crouch", "prone", "weapon_switch", "reload"]:
+	for key in ["aim", "fire", "jump", "crouch", "prone", "weapon_switch", "reload", "pass_seed"]:
 		if not frame.has(key) or typeof(frame[key]) != TYPE_BOOL:
 			return {}
 	return {
+		"protocol": PROTOCOL_VERSION,
 		"sequence": int(frame.sequence),
 		"move_x": clampf(move_x, -1.0, 1.0),
 		"move_y": clampf(move_y, -1.0, 1.0),
@@ -544,6 +555,7 @@ func _validate_input(peer_id: int, frame: Dictionary) -> Dictionary:
 		"prone": bool(frame.prone),
 		"weapon_switch": bool(frame.weapon_switch),
 		"reload": bool(frame.reload),
+		"pass_seed": bool(frame.pass_seed),
 	}
 
 func _is_finite_number(value: Variant) -> bool:

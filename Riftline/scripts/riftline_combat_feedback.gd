@@ -4,7 +4,7 @@ extends Node3D
 ## Presentation-only bridge for accepted combat and objective facts.
 ##
 ## This node deliberately knows nothing about authority, input, damage, or match
-## rules.  It owns bounded audio voices, device-safe haptics, and the small HUD
+## rules.  It owns bounded audio voices and the small HUD
 ## signals that make an accepted fact easier to read.
 
 signal damage_feedback(direction: Vector2, intensity: float, enemy_team: int)
@@ -17,7 +17,7 @@ const LOCAL_VOICE_COUNT := 4
 const EVENT_CACHE_LIMIT := 256
 
 var effects_enabled := true
-var haptics_enabled := true
+var haptics_enabled := false
 
 var _presentation_enabled := false
 var _local_actor_id := ""
@@ -29,10 +29,6 @@ var _local_streams: Dictionary = {}
 var _seen_events: Dictionary = {}
 var _voice_cursor := 0
 var _local_voice_cursor := 0
-var _last_fire_haptic_msec := -10000
-var _last_hit_haptic_msec := -10000
-var _last_damage_haptic_msec := -10000
-var _last_objective_haptic_msec := -10000
 var _last_damage_feedback_msec := -10000
 var _configured := false
 var _local_health := Duelist.HEALTH
@@ -53,9 +49,9 @@ func configure(presentation_enabled: bool, local_actor_id: String, listener: Cam
 	_build_audio_bank()
 	_build_player_pools()
 
-func set_preferences(next_effects_enabled: bool, next_haptics_enabled: bool) -> void:
+func set_preferences(next_effects_enabled: bool, _next_haptics_enabled: bool) -> void:
 	effects_enabled = next_effects_enabled
-	haptics_enabled = next_haptics_enabled
+	haptics_enabled = false
 	if not effects_enabled:
 		stop_all()
 
@@ -65,7 +61,6 @@ func weapon_fired(actor_id: String, weapon: Duelist.Weapon, origin: Vector3, loc
 	var event_name := "carbine_fire" if weapon == Duelist.Weapon.PULSE else "scatter_fire"
 	if local:
 		_play_local(event_name)
-		_request_haptic("fire")
 	else:
 		_play_world(event_name, origin, 1)
 
@@ -85,7 +80,6 @@ func projectile_impacted(fact: Dictionary, local_position: Vector3) -> void:
 	if hit_duelist and shooter_id == _local_actor_id and not target_id.is_empty() and target_id != _local_actor_id:
 		_play_local("hit_confirm")
 		hit_confirm_feedback.emit()
-		_request_haptic("hit")
 	if hit_duelist and target_id == _local_actor_id:
 		var source_position: Variant = fact.get("source_position", null)
 		var intensity := clampf(float(fact.get("damage", Duelist.HEALTH * 0.23)) / Duelist.HEALTH * 2.2, 0.2, 1.0)
@@ -100,13 +94,11 @@ func scatter_fired(actor_id: String, origin: Vector3, end: Vector3, team: Duelis
 	_remember_event(event_key)
 	if local:
 		_play_local("scatter_fire")
-		_request_haptic("fire")
 	else:
 		_play_world("scatter_fire", origin, 1)
 	if local and hit_target:
 		_play_local("hit_confirm")
 		hit_confirm_feedback.emit()
-		_request_haptic("hit")
 	if hit_target and target_id == _local_actor_id:
 		_emit_damage(_screen_direction(source_position, local_position) if source_position is Vector3 else Vector2.ZERO, 0.65, int(team))
 
@@ -143,6 +135,9 @@ func objective_event(event_type: String, state: Dictionary, local: bool) -> void
 		"objective_dropped": "seed_dropped",
 		"objective_returned": "seed_returned",
 		"objective_delivered": "seed_delivered",
+		"objective_relay_launched": "seed_relay_launched",
+		"objective_relay_caught": "seed_relay_caught",
+		"objective_relay_disrupted": "seed_relay_disrupted",
 	}.get(event_type, ""))
 	if sound_name.is_empty():
 		return
@@ -151,12 +146,6 @@ func objective_event(event_type: String, state: Dictionary, local: bool) -> void
 		_play_local(sound_name)
 	else:
 		_play_world(sound_name, position, 4 if event_type == "objective_delivered" else 3)
-	if event_type in ["objective_claimed", "objective_returned"]:
-		if local:
-			_request_haptic("objective_soft")
-	elif event_type == "objective_delivered":
-		if local:
-			_request_haptic("objective_delivery")
 	objective_feedback.emit(event_type, int(state.get("scoring_team", -1)))
 
 func set_local_health(value: float) -> void:
@@ -196,6 +185,9 @@ func _build_audio_bank() -> void:
 		"seed_dropped": _make_clip(0.13, 620.0, 250.0, 0.52, 67),
 		"seed_returned": _make_clip(0.22, 280.0, 780.0, 0.5, 79),
 		"seed_delivered": _make_clip(0.34, 310.0, 1180.0, 0.62, 97),
+		"seed_relay_launched": _make_clip(0.12, 760.0, 430.0, 0.36, 109),
+		"seed_relay_caught": _make_clip(0.16, 430.0, 980.0, 0.4, 127),
+		"seed_relay_disrupted": _make_clip(0.14, 150.0, 70.0, 0.42, 137),
 	}
 	_local_streams = {
 		"carbine_fire": _make_clip(0.095, 230.0, 1050.0, 0.72, 101),
@@ -210,6 +202,9 @@ func _build_audio_bank() -> void:
 		"seed_dropped": _make_clip(0.12, 540.0, 220.0, 0.38, 211),
 		"seed_returned": _make_clip(0.19, 300.0, 820.0, 0.4, 227),
 		"seed_delivered": _make_clip(0.29, 330.0, 1340.0, 0.54, 239),
+		"seed_relay_launched": _make_clip(0.1, 880.0, 520.0, 0.3, 251),
+		"seed_relay_caught": _make_clip(0.14, 500.0, 1080.0, 0.34, 263),
+		"seed_relay_disrupted": _make_clip(0.12, 130.0, 58.0, 0.36, 277),
 	}
 
 func _build_player_pools() -> void:
@@ -285,49 +280,6 @@ func _emit_damage(direction: Vector2, intensity: float, enemy_team: int) -> void
 	_last_damage_feedback_msec = now
 	damage_feedback.emit(direction, clampf(intensity, 0.0, 1.0), enemy_team)
 	_play_local("damage")
-	_request_haptic("damage")
-
-func _request_haptic(kind: String) -> void:
-	if not haptics_enabled or not _can_haptic():
-		return
-	var now := Time.get_ticks_msec()
-	var last := _last_fire_haptic_msec
-	var cooldown := 105
-	var duration := 18
-	var amplitude := 0.22
-	match kind:
-		"hit":
-			last = _last_hit_haptic_msec
-			cooldown = 90
-			duration = 24
-			amplitude = 0.34
-		"damage":
-			last = _last_damage_haptic_msec
-			cooldown = 180
-			duration = 38
-			amplitude = 0.48
-		"objective_soft":
-			last = _last_objective_haptic_msec
-			cooldown = 260
-			duration = 16
-			amplitude = 0.2
-		"objective_delivery":
-			last = _last_objective_haptic_msec
-			cooldown = 300
-			duration = 48
-			amplitude = 0.58
-	if now - last < cooldown:
-		return
-	match kind:
-		"fire": _last_fire_haptic_msec = now
-		"hit": _last_hit_haptic_msec = now
-		"damage": _last_damage_haptic_msec = now
-		_: _last_objective_haptic_msec = now
-	Input.vibrate_handheld(duration, amplitude)
-
-func _can_haptic() -> bool:
-	return not _is_headless() and (OS.has_feature("mobile") or DisplayServer.is_touchscreen_available())
-
 func _is_headless() -> bool:
 	return DisplayServer.get_name().to_lower() == "headless"
 
