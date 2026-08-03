@@ -58,7 +58,7 @@ func set_preferences(next_effects_enabled: bool, _next_haptics_enabled: bool) ->
 func weapon_fired(actor_id: String, weapon: Duelist.Weapon, origin: Vector3, local: bool) -> void:
 	if not _presentation_enabled:
 		return
-	var event_name := "carbine_fire" if weapon == Duelist.Weapon.PULSE else "scatter_fire"
+	var event_name := "carbine_fire" if weapon == Duelist.Weapon.PULSE else "knife_fire"
 	if local:
 		_play_local(event_name)
 	else:
@@ -85,17 +85,17 @@ func projectile_impacted(fact: Dictionary, local_position: Vector3) -> void:
 		var intensity := clampf(float(fact.get("damage", Duelist.HEALTH * 0.23)) / Duelist.HEALTH * 2.2, 0.2, 1.0)
 		_emit_damage(_screen_direction(source_position, local_position) if source_position is Vector3 else Vector2.ZERO, intensity, team)
 
-func scatter_fired(actor_id: String, origin: Vector3, end: Vector3, team: Duelist.Team, weapon: Duelist.Weapon, local: bool, hit_target: bool, target_id: String = "", source_position: Variant = null, event_id: String = "", local_position: Vector3 = Vector3.ZERO) -> void:
+func knife_struck(actor_id: String, origin: Vector3, end: Vector3, team: Duelist.Team, local: bool, hit_target: bool, target_id: String = "", source_position: Variant = null, event_id: String = "", local_position: Vector3 = Vector3.ZERO) -> void:
 	if not _presentation_enabled:
 		return
-	var event_key := "scatter:%s" % event_id if not event_id.is_empty() else "scatter:%s:%s:%s" % [actor_id, origin, end]
+	var event_key := "knife:%s" % event_id if not event_id.is_empty() else "knife:%s:%s:%s" % [actor_id, origin, end]
 	if _seen_events.has(event_key):
 		return
 	_remember_event(event_key)
 	if local:
-		_play_local("scatter_fire")
+		_play_local("knife_fire")
 	else:
-		_play_world("scatter_fire", origin, 1)
+		_play_world("knife_fire", origin, 1)
 	if local and hit_target:
 		_play_local("hit_confirm")
 		hit_confirm_feedback.emit()
@@ -179,7 +179,7 @@ func diagnostics() -> Dictionary:
 func _build_audio_bank() -> void:
 	_world_streams = {
 		"carbine_fire": _make_clip(0.105, 190.0, 900.0, 0.85, 17),
-		"scatter_fire": _make_clip(0.19, 92.0, 340.0, 0.78, 29),
+		"knife_fire": _make_clip(0.11, 190.0, 520.0, 0.58, 29),
 		"carbine_impact": _make_clip(0.055, 1250.0, 720.0, 0.44, 41),
 		"seed_claimed": _make_clip(0.18, 360.0, 860.0, 0.48, 53),
 		"seed_dropped": _make_clip(0.13, 620.0, 250.0, 0.52, 67),
@@ -191,7 +191,7 @@ func _build_audio_bank() -> void:
 	}
 	_local_streams = {
 		"carbine_fire": _make_clip(0.095, 230.0, 1050.0, 0.72, 101),
-		"scatter_fire": _make_clip(0.18, 105.0, 390.0, 0.7, 113),
+		"knife_fire": _make_clip(0.1, 220.0, 620.0, 0.62, 113),
 		"carbine_impact": _make_clip(0.045, 1480.0, 880.0, 0.3, 127),
 		"hit_confirm": _make_clip(0.06, 1660.0, 1040.0, 0.22, 139),
 		"damage": _make_clip(0.12, 82.0, 62.0, 0.46, 151),

@@ -1,6 +1,8 @@
 class_name RiftlineSquadTactics
 extends RefCounted
 
+const CREW_IDENTITY := preload("res://scripts/riftline_crew_identity.gd")
+
 ## Authority-only, value-based crew planning for offline Linebreak drills.
 ## This module deliberately knows nothing about nodes, physics, or the scene tree.
 
@@ -101,11 +103,15 @@ func _plan_crew(orders: Dictionary, team: Duelist.Team, living: Array[Dictionary
 
 	if friendly_carrier.is_empty():
 		var intent := INTENT_RECOVER if state == int(RiftSeed.State.DROPPED) else INTENT_RUN
-		assigned[_actor_id(bots[0])] = _order(intent, _anchor("neutral_seed", team), "center", elapsed)
-		if bots.size() > 1:
-			assigned[_actor_id(bots[1])] = _order(INTENT_SCREEN, _lane_post(_lane_for_index(0, team), team, 0), _lane_for_index(0, team), elapsed)
-		if bots.size() > 2:
-			assigned[_actor_id(bots[2])] = _order(INTENT_RETURN, _anchor("center_return", team), "center", elapsed)
+		var runner := _best_available_bot(bots, assigned, intent)
+		if not runner.is_empty():
+			assigned[_actor_id(runner)] = _order(intent, _anchor("neutral_seed", team), "center", elapsed)
+		var screen_bot := _best_available_bot(bots, assigned, INTENT_SCREEN)
+		if not screen_bot.is_empty():
+			assigned[_actor_id(screen_bot)] = _order(INTENT_SCREEN, _lane_post(_lane_for_index(0, team), team, 0), _lane_for_index(0, team), elapsed)
+		var return_bot := _best_available_bot(bots, assigned, INTENT_RETURN)
+		if not return_bot.is_empty():
+			assigned[_actor_id(return_bot)] = _order(INTENT_RETURN, _anchor("center_return", team), "center", elapsed)
 	else:
 		var carrier_is_human := bool(friendly_carrier.get("human", false))
 		if not carrier_is_human:
@@ -115,20 +121,18 @@ func _plan_crew(orders: Dictionary, team: Duelist.Team, living: Array[Dictionary
 				assigned[_actor_id(friendly_carrier)]["target_id"] = _actor_id(relay_target)
 			else:
 				assigned[_actor_id(friendly_carrier)] = _order(INTENT_CARRY, _anchor("gate_escort", team), "center", elapsed)
-		var first_bot := bots[0]
-		if _actor_id(first_bot) == _actor_id(friendly_carrier) and bots.size() > 1:
-			first_bot = bots[1]
-		if not _actor_id(first_bot).is_empty():
+		var first_bot := _best_available_bot(bots, assigned, INTENT_ESCORT)
+		if not first_bot.is_empty():
 			assigned[_actor_id(first_bot)] = _order(INTENT_ESCORT, _anchor("gate_escort", team), "escort", elapsed)
 		var second_bot := _next_unassigned(bots, assigned)
 		if not second_bot.is_empty():
 			assigned[_actor_id(second_bot)] = _order(INTENT_SCREEN, _lane_post(_lane_for_index(0, team), team, 1), _lane_for_index(0, team), elapsed)
 
 	if not enemy_sighting.is_empty():
-		var intercept_bot := _next_unassigned(bots, assigned)
+		var intercept_bot := _best_available_bot(bots, assigned, INTENT_INTERCEPT)
 		if not intercept_bot.is_empty():
 			assigned[_actor_id(intercept_bot)] = _order(INTENT_INTERCEPT, _lane_post(str(enemy_sighting.get("lane", "center")), team, 0), str(enemy_sighting.get("lane", "center")), elapsed)
-		var support_bot := _next_unassigned(bots, assigned)
+		var support_bot := _best_available_bot(bots, assigned, INTENT_SCREEN)
 		if not support_bot.is_empty():
 			assigned[_actor_id(support_bot)] = _order(INTENT_SCREEN, _lane_post(str(enemy_sighting.get("lane", "center")), team, 1), str(enemy_sighting.get("lane", "center")), elapsed)
 
@@ -177,6 +181,19 @@ func _next_unassigned(members: Array[Dictionary], assigned: Dictionary) -> Dicti
 		if not assigned.has(_actor_id(member)):
 			return member
 	return {}
+
+func _best_available_bot(members: Array[Dictionary], assigned: Dictionary, intent: String) -> Dictionary:
+	var best := {}
+	var best_score := -1
+	for member in members:
+		var actor_id := _actor_id(member)
+		if actor_id.is_empty() or assigned.has(actor_id):
+			continue
+		var score := 1 if str(CREW_IDENTITY.facts(member.get("frame_id", "vane")).get("preference", "")) == intent else 0
+		if best.is_empty() or score > best_score or (score == best_score and actor_id < _actor_id(best)):
+			best = member
+			best_score = score
+	return best
 
 func _relay_target(living: Array[Dictionary], carrier: Dictionary, objective: Dictionary) -> Dictionary:
 	if not bool(objective.get("relay_available", false)):

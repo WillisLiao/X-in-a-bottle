@@ -3,24 +3,37 @@ extends CharacterBody3D
 
 const PULP_LIT := preload("res://shaders/pulp_lit.gdshader")
 const BALLISTICS := preload("res://scripts/rift_ballistics.gd")
+const CREW_IDENTITY := preload("res://scripts/riftline_crew_identity.gd")
 
 signal defeated(victim: Duelist, killer: Duelist)
 signal fire_requested(shooter: Duelist, weapon: Weapon, origin: Vector3, direction: Vector3)
-signal scatter_shot(shooter_id: String, origin: Vector3, end: Vector3, team: Team, weapon: Weapon, hit_target: bool, target_id: String, source_position: Vector3)
+signal knife_strike(shooter_id: String, origin: Vector3, end: Vector3, team: Team, hit_target: bool, target_id: String)
 signal damaged(amount: float, remaining: float, attacker_id: String, source_position: Vector3, enemy_team: int)
 
 enum Team { SUN, VOID }
 enum Stance { STAND, CROUCH, PRONE }
-enum Weapon { PULSE, SCATTER }
+enum Weapon { PULSE, KNIFE }
 
 const HEALTH := 100.0
 const WALK_SPEED := 7.2
 const M4_MAGAZINE_SIZE := 30
 const M4_RESERVE_AMMO := 90
 const M4_RELOAD_SECONDS := 1.55
-const SCATTER_COOLDOWN := 0.72
-const SCATTER_RANGE := 17.0
-const SCATTER_DAMAGE := 13.0
+const KNIFE_COOLDOWN := 0.55
+const KNIFE_RANGE := 2.1
+const KNIFE_DAMAGE := 50.0
+const DEFAULT_HORIZONTAL_FOV := 80.0
+const MIN_HORIZONTAL_FOV := 70.0
+const MAX_HORIZONTAL_FOV := 90.0
+const ADS_HORIZONTAL_FOV_RATIO := 0.74
+const ADS_MOVEMENT_MULTIPLIER := 0.82
+const M4_HIP_STRAFE_MULTIPLIER := 0.76
+const KNIFE_HIP_FORWARD_MULTIPLIER := 1.15
+const KNIFE_HIP_STRAFE_MULTIPLIER := 0.93
+const MOBILITY_FACTS := {
+	Weapon.PULSE: {"class": "ar", "hip_forward": 1.0, "hip_strafe": 0.76, "ads_allowed": true},
+	Weapon.KNIFE: {"class": "knife", "hip_forward": 1.15, "hip_strafe": 0.93, "ads_allowed": false},
+}
 const GRAVITY := 26.0
 const JUMP_SPEED := 9.3
 const CARRY_SPEED_MULTIPLIER := 0.88
@@ -39,6 +52,9 @@ var eliminated := false
 var carrying_seed := false
 var stance: Stance = Stance.STAND
 var weapon: Weapon = Weapon.PULSE
+var crew_frame_id := "vane"
+var horizontal_fov := DEFAULT_HORIZONTAL_FOV
+var _last_camera_aspect := -1.0
 var magazine_rounds := M4_MAGAZINE_SIZE
 var reserve_ammo := M4_RESERVE_AMMO
 var reload_remaining := 0.0
@@ -53,6 +69,8 @@ var _capsule: CapsuleShape3D
 var _torso: MeshInstance3D
 var _band: MeshInstance3D
 var _body_visual_root: Node3D
+var _frame_visual_root: Node3D
+var _first_person_frame_root: Node3D
 var _body_visual_target_scale_y := 1.0
 var _weapon_root: Node3D
 var _weapon_mesh: MeshInstance3D
@@ -110,7 +128,9 @@ func build(assigned_team: Team, local_camera: bool, render_visuals: bool = true,
 
 	if local_camera and _render_visuals:
 		camera = Camera3D.new()
-		camera.fov = 78.0
+		camera.keep_aspect = Camera3D.KEEP_HEIGHT
+		_last_camera_aspect = _viewport_aspect()
+		camera.fov = _vertical_fov_for_horizontal(horizontal_fov, _last_camera_aspect)
 		# World silhouettes live on layer 1; the local view model gets its own layer so it never leaks to another client.
 		camera.cull_mask = 1 | 2
 		camera.current = true
@@ -123,6 +143,54 @@ func build(assigned_team: Team, local_camera: bool, render_visuals: bool = true,
 			_build_character_silhouette()
 			_build_world_weapon()
 		_rebuild_weapon_models()
+		_apply_crew_frame()
+
+func set_crew_frame(frame_id: String) -> void:
+	crew_frame_id = CREW_IDENTITY.canonical_id(frame_id)
+	if not _render_visuals:
+		return
+	if _local_camera and camera != null:
+		_apply_first_person_crew_frame()
+	elif _body_visual_root != null:
+		_apply_crew_frame()
+
+func set_horizontal_fov(value: float) -> void:
+	var next := clampf(value, MIN_HORIZONTAL_FOV, MAX_HORIZONTAL_FOV) if is_finite(value) else DEFAULT_HORIZONTAL_FOV
+	horizontal_fov = next
+	_update_camera_projection()
+
+func _viewport_aspect() -> float:
+	if get_viewport() == null or get_viewport().size.x <= 0 or get_viewport().size.y <= 0:
+		return 1280.0 / 588.0
+	return float(get_viewport().size.x) / float(get_viewport().size.y)
+
+static func vertical_fov_for_horizontal(horizontal_degrees: float, aspect: float) -> float:
+	var safe_horizontal := horizontal_degrees if is_finite(horizontal_degrees) else DEFAULT_HORIZONTAL_FOV
+	var safe_aspect := aspect if is_finite(aspect) and aspect > 0.01 else 1280.0 / 588.0
+	return rad_to_deg(2.0 * atan(tan(deg_to_rad(safe_horizontal) * 0.5) / safe_aspect))
+
+static func mobility_facts(value: Weapon) -> Dictionary:
+	var candidate := int(value)
+	return (MOBILITY_FACTS[candidate] as Dictionary).duplicate(true) if MOBILITY_FACTS.has(candidate) else (MOBILITY_FACTS[Weapon.PULSE] as Dictionary).duplicate(true)
+
+static func standing_speed_profile(value: Weapon, aiming: bool = false) -> Dictionary:
+	var facts := mobility_facts(value)
+	var forward := WALK_SPEED * float(facts.get("hip_forward", 1.0))
+	var lateral := forward * float(facts.get("hip_strafe", M4_HIP_STRAFE_MULTIPLIER))
+	if aiming and bool(facts.get("ads_allowed", false)):
+		forward *= ADS_MOVEMENT_MULTIPLIER
+		lateral *= ADS_MOVEMENT_MULTIPLIER
+	return {"forward": forward, "lateral": lateral}
+
+func _vertical_fov_for_horizontal(horizontal_degrees: float, aspect: float) -> float:
+	return vertical_fov_for_horizontal(horizontal_degrees, aspect)
+
+func _update_camera_projection() -> void:
+	if camera == null:
+		return
+	camera.keep_aspect = Camera3D.KEEP_HEIGHT
+	var target_horizontal := horizontal_fov * ADS_HORIZONTAL_FOV_RATIO if _aiming and weapon == Weapon.PULSE else horizontal_fov
+	camera.fov = _vertical_fov_for_horizontal(target_horizontal, _viewport_aspect())
 
 func set_actor_id(next_actor_id: String) -> void:
 	actor_id = next_actor_id
@@ -151,6 +219,11 @@ func movement_speed_multiplier() -> float:
 func _process(delta: float) -> void:
 	if not _render_visuals:
 		return
+	if _local_camera and camera != null:
+		var current_aspect := _viewport_aspect()
+		if _last_camera_aspect < 0.0 or absf(current_aspect - _last_camera_aspect) > 0.001:
+			_last_camera_aspect = current_aspect
+			_update_camera_projection()
 	_pose_distance += Vector2(velocity.x, velocity.z).length() * delta
 	_recoil_remaining = maxf(0.0, _recoil_remaining - delta)
 	_fire_flash_remaining = maxf(0.0, _fire_flash_remaining - delta)
@@ -185,8 +258,7 @@ func _process(delta: float) -> void:
 		_survey_frame.rotation.z = -gait_lag * 0.025
 	if _weapon_root != null:
 		var hip := Vector3(0.42, -0.42, -1.22)
-		var ads := Vector3(0.0, -0.06, -0.96)
-		var target := ads if _aiming and _local_camera else hip
+		var target := _ads_weapon_anchor() if _aiming and _local_camera else hip
 		if _local_camera:
 			var breathing := sin(Time.get_ticks_msec() * 0.0017) * (0.004 if _aiming else 0.009)
 			var walking := sin(_pose_distance * 1.35) if moving else 0.0
@@ -230,7 +302,7 @@ func _process(delta: float) -> void:
 		_carrier_signal_root.scale = Vector3.ONE * (1.0 + sin(Time.get_ticks_msec() * 0.006) * 0.06)
 
 func set_weapon_presentation(next_weapon: Weapon) -> void:
-	var clamped := clampi(int(next_weapon), int(Weapon.PULSE), int(Weapon.SCATTER)) as Weapon
+	var clamped := clampi(int(next_weapon), int(Weapon.PULSE), int(Weapon.KNIFE)) as Weapon
 	if weapon == clamped and _weapon_mesh != null:
 		return
 	weapon = clamped
@@ -388,7 +460,7 @@ func apply_presentation_state(state: Dictionary) -> void:
 	var next_stance := clampi(int(state.get("stance", int(stance))), int(Stance.STAND), int(Stance.PRONE))
 	if stance != next_stance:
 		_apply_stance(next_stance as Stance)
-	var next_weapon := clampi(int(state.get("weapon", int(weapon))), int(Weapon.PULSE), int(Weapon.SCATTER))
+	var next_weapon := clampi(int(state.get("weapon", int(weapon))), int(Weapon.PULSE), int(Weapon.KNIFE))
 	if weapon != next_weapon:
 		set_weapon_presentation(next_weapon as Weapon)
 	eliminated = bool(state.get("eliminated", eliminated))
@@ -441,13 +513,12 @@ func _simulate_motion(move_input: Vector2, wants_jump: bool, delta: float) -> vo
 	right.y = 0.0
 	forward = forward.normalized()
 	right = right.normalized()
-	var desired := right * move_input.x + forward * -move_input.y
-	if desired.length_squared() > 1.0:
-		desired = desired.normalized()
+	var profile := standing_speed_profile(weapon, _aiming)
+	var desired := right * move_input.x * float(profile.lateral) + forward * (-move_input.y) * float(profile.forward)
 	var stance_speed := 1.0 if stance == Stance.STAND else 0.62 if stance == Stance.CROUCH else 0.3
-	var speed := WALK_SPEED * stance_speed * movement_speed_multiplier()
-	velocity.x = move_toward(velocity.x, desired.x * speed, WALK_SPEED * 12.0 * delta)
-	velocity.z = move_toward(velocity.z, desired.z * speed, WALK_SPEED * 12.0 * delta)
+	var mobility_scale := stance_speed * movement_speed_multiplier()
+	velocity.x = move_toward(velocity.x, desired.x * mobility_scale, WALK_SPEED * 12.0 * delta)
+	velocity.z = move_toward(velocity.z, desired.z * mobility_scale, WALK_SPEED * 12.0 * delta)
 	if not is_on_floor():
 		velocity.y -= GRAVITY * delta
 	else:
@@ -485,9 +556,18 @@ func toggle_prone() -> void:
 func set_combat_pose(aiming: bool, delta: float) -> void:
 	if eliminated:
 		return
+	if weapon == Weapon.KNIFE:
+		aiming = false
 	_aiming = aiming
 	if camera != null:
-		camera.fov = lerpf(camera.fov, 56.0 if aiming else 78.0, minf(1.0, delta * 13.0))
+		var target_horizontal := horizontal_fov * ADS_HORIZONTAL_FOV_RATIO if aiming and weapon == Weapon.PULSE else horizontal_fov
+		var target_vertical := _vertical_fov_for_horizontal(target_horizontal, _viewport_aspect())
+		camera.keep_aspect = Camera3D.KEEP_HEIGHT
+		camera.fov = lerpf(camera.fov, target_vertical, minf(1.0, delta * 13.0))
+
+func _ads_weapon_anchor() -> Vector3:
+	# One calibration seam keeps the front post on the camera's center aim ray.
+	return Vector3(0.0, -0.06, -0.96)
 
 func drive(move_input: Vector2, wants_fire: bool, wants_jump: bool, delta: float) -> void:
 	if eliminated or not match_active:
@@ -505,13 +585,13 @@ func fire_forward() -> void:
 	if weapon == Weapon.PULSE and magazine_rounds <= 0:
 		reload_weapon()
 		return
-	_fire_remaining = BALLISTICS.M4_FIRE_INTERVAL if weapon == Weapon.PULSE else SCATTER_COOLDOWN
+	_fire_remaining = BALLISTICS.M4_FIRE_INTERVAL if weapon == Weapon.PULSE else KNIFE_COOLDOWN
 	var plan := _accept_shot_plan()
 	if weapon == Weapon.PULSE:
 		magazine_rounds -= 1
 		fire_requested.emit(self, weapon, plan.eye_origin, plan.direction)
 		return
-	_fire_scatter(plan.eye_origin, plan.direction)
+	_fire_knife(plan.eye_origin, plan.direction)
 
 func fire_at(target: Vector3) -> void:
 	if eliminated or not match_active or _fire_remaining > 0.0 or reload_remaining > 0.0:
@@ -519,18 +599,18 @@ func fire_at(target: Vector3) -> void:
 	if weapon == Weapon.PULSE and magazine_rounds <= 0:
 		reload_weapon()
 		return
-	_fire_remaining = BALLISTICS.M4_FIRE_INTERVAL if weapon == Weapon.PULSE else SCATTER_COOLDOWN
+	_fire_remaining = BALLISTICS.M4_FIRE_INTERVAL if weapon == Weapon.PULSE else KNIFE_COOLDOWN
 	var plan := _accept_shot_plan((target - authoritative_eye_origin()).normalized())
 	if weapon == Weapon.PULSE:
 		magazine_rounds -= 1
 		fire_requested.emit(self, weapon, plan.eye_origin, plan.direction)
 		return
-	_fire_scatter(plan.eye_origin, plan.direction)
+	_fire_knife(plan.eye_origin, plan.direction)
 
 func switch_weapon() -> void:
 	if eliminated or not match_active:
 		return
-	set_weapon_presentation(Weapon.SCATTER if weapon == Weapon.PULSE else Weapon.PULSE)
+	set_weapon_presentation(Weapon.KNIFE if weapon == Weapon.PULSE else Weapon.PULSE)
 
 func reload_weapon() -> bool:
 	if eliminated or not match_active or weapon != Weapon.PULSE or reload_remaining > 0.0:
@@ -657,17 +737,12 @@ func _local_muzzle_obstructed() -> bool:
 	query.exclude = [get_rid()]
 	return not get_world_3d().direct_space_state.intersect_shape(query, 1).is_empty()
 
-func _fire_scatter(origin: Vector3, direction: Vector3) -> void:
-	# The scatter weapon intentionally keeps its existing close-range ray behavior.
-	for spread in [Vector2(-0.07, -0.035), Vector2(-0.035, 0.05), Vector2(0.0, 0.0), Vector2(0.04, -0.045), Vector2(0.075, 0.025)]:
-		var pellet: Vector3 = (direction + head.global_transform.basis.x * spread.x + head.global_transform.basis.y * spread.y).normalized()
-		_fire_scatter_ray(origin, pellet, SCATTER_DAMAGE, SCATTER_RANGE)
-
-func _fire_scatter_ray(origin: Vector3, direction: Vector3, damage: float, range: float) -> void:
-	var query := PhysicsRayQueryParameters3D.create(origin, origin + direction * range, 1 | 2)
+func _fire_knife(origin: Vector3, direction: Vector3) -> void:
+	# One authoritative ray keeps walls, range, and first-target selection explicit.
+	var query := PhysicsRayQueryParameters3D.create(origin, origin + direction * KNIFE_RANGE, 1 | 2)
 	query.exclude = [get_rid()]
 	var hit := get_world_3d().direct_space_state.intersect_ray(query)
-	var end := origin + direction * range
+	var end := origin + direction * KNIFE_RANGE
 	var hit_target := false
 	var target_id := ""
 	if not hit.is_empty():
@@ -676,8 +751,8 @@ func _fire_scatter_ray(origin: Vector3, direction: Vector3, damage: float, range
 		if collider is Duelist and collider != self and collider.team != team:
 			hit_target = true
 			target_id = collider.actor_id
-			collider.take_damage(damage, self)
-	scatter_shot.emit(actor_id, origin, end, team, weapon, hit_target, target_id, origin)
+			collider.take_damage(KNIFE_DAMAGE, self)
+	knife_strike.emit(actor_id, origin, end, team, hit_target, target_id)
 
 func _team_color() -> Color:
 	return Color("ef6b3f") if team == Team.SUN else Color("4ba9ff")
@@ -712,6 +787,99 @@ func _build_character_silhouette() -> void:
 	else:
 		_build_storm_surveyor(cloth, dark, brass, glow)
 	_build_carrier_signal(glow)
+
+func _apply_crew_frame() -> void:
+	if _local_camera:
+		return
+	if _frame_visual_root != null:
+		_frame_visual_root.queue_free()
+	_frame_visual_root = Node3D.new()
+	_frame_visual_root.name = "CrewFrame_%s" % crew_frame_id
+	_body_visual_root.add_child(_frame_visual_root)
+	var facts := CREW_IDENTITY.facts(crew_frame_id)
+	var dark := _material(Color("182438"), 0.0)
+	var brass := _material(Color("d6ad67"), 0.0)
+	var glow := _material(_team_glow(), 0.9)
+	match crew_frame_id:
+		"vane":
+			_add_frame_part(_box(Vector3(0.07, 0.92, 0.07)), Vector3(0.23, 1.54, 0.16), brass, Vector3(0.0, 0.0, -0.18))
+			_add_frame_part(_box(Vector3(0.34, 0.05, 0.08)), Vector3(0.23, 1.91, 0.16), brass, Vector3(0.0, 0.0, -0.18))
+			_add_frame_part(_cylinder(0.13, 0.13, 0.1), Vector3(-0.42, 0.82, -0.12), dark, Vector3(PI * 0.5, 0.0, 0.0))
+			_add_frame_part(_box(Vector3(0.24, 0.18, 0.05)), Vector3(-0.39, 0.98, -0.32), brass, Vector3(-0.12, 0.0, 0.0))
+		"cradle":
+			for offset in [-0.22, 0.22]:
+				var hoop := _add_frame_part(_torus(0.2, 0.035), Vector3(offset, 1.7, 0.18), brass, Vector3(PI * 0.5, 0.0, 0.0))
+				hoop.rotation.z = -0.16 if offset < 0.0 else 0.22
+			_add_frame_part(_box(Vector3(0.36, 0.11, 0.2)), Vector3(0.15, 1.42, 0.16), dark)
+			_add_frame_part(_box(Vector3(0.08, 0.28, 0.08)), Vector3(-0.48, 0.97, -0.18), glow, Vector3(0.0, 0.0, -0.35))
+		"keel":
+			_add_frame_part(_box(Vector3(0.72, 0.72, 0.08)), Vector3(0.0, 1.17, 0.34), dark, Vector3(0.0, 0.0, 0.08))
+			_add_frame_part(_box(Vector3(0.08, 0.82, 0.08)), Vector3(0.28, 1.16, 0.39), brass, Vector3(0.0, 0.0, -0.34))
+			_add_frame_part(_box(Vector3(0.4, 0.07, 0.08)), Vector3(-0.18, 0.82, 0.32), brass)
+			_add_frame_part(_box(Vector3(0.12, 0.16, 0.12)), Vector3(-0.34, 0.98, -0.3), glow)
+		"loom":
+			_add_frame_part(_box(Vector3(0.06, 0.62, 0.06)), Vector3(-0.18, 1.62, 0.25), brass, Vector3(0.0, 0.0, -0.08))
+			_add_frame_part(_box(Vector3(0.06, 0.62, 0.06)), Vector3(0.18, 1.62, 0.25), brass, Vector3(0.0, 0.0, 0.08))
+			_add_frame_part(_box(Vector3(0.46, 0.1, 0.24)), Vector3(0.0, 1.46, 0.32), dark)
+			_add_frame_part(_box(Vector3(0.22, 0.2, 0.16)), Vector3(0.38, 0.74, -0.22), brass)
+	_add_frame_part(_box(Vector3(0.05, 0.05, 0.05)), Vector3(0.0, 1.1, -0.34), glow)
+	_frame_visual_root.set_meta("identity_name", facts.get("name", "VANE"))
+	_frame_visual_root.set_meta("identity_purpose", facts.get("purpose", "ROUTE READER"))
+
+func _apply_first_person_crew_frame() -> void:
+	if not _local_camera or camera == null:
+		return
+	if _first_person_frame_root != null:
+		_first_person_frame_root.queue_free()
+	_first_person_frame_root = Node3D.new()
+	_first_person_frame_root.name = "FirstPersonCrewFrame_%s" % crew_frame_id
+	_first_person_frame_root.position = Vector3(-0.34, -0.22, -0.72)
+	_first_person_frame_root.scale = Vector3.ONE * 0.38
+	camera.add_child(_first_person_frame_root)
+	var brass := _material(Color("d6ad67"), 0.0)
+	var glow := _material(_team_glow(), 0.9)
+	match crew_frame_id:
+		"vane":
+			_add_first_person_frame_part(_box(Vector3(0.08, 0.38, 0.06)), Vector3(0.0, 0.1, 0.0), brass, Vector3(0.0, 0.0, -0.25))
+			_add_first_person_frame_part(_box(Vector3(0.24, 0.04, 0.06)), Vector3(0.0, 0.28, 0.0), glow)
+		"cradle":
+			_add_first_person_frame_part(_torus(0.16, 0.025), Vector3(0.0, 0.08, 0.0), brass, Vector3(PI * 0.5, 0.0, 0.0))
+			_add_first_person_frame_part(_box(Vector3(0.07, 0.22, 0.07)), Vector3(0.15, -0.02, 0.0), glow)
+		"keel":
+			_add_first_person_frame_part(_box(Vector3(0.28, 0.22, 0.05)), Vector3(0.0, 0.02, 0.08), brass, Vector3(0.0, 0.0, 0.1))
+			_add_first_person_frame_part(_box(Vector3(0.04, 0.3, 0.05)), Vector3(0.12, 0.02, 0.0), glow)
+		"loom":
+			_add_first_person_frame_part(_box(Vector3(0.05, 0.36, 0.05)), Vector3(-0.1, 0.08, 0.0), brass, Vector3(0.0, 0.0, -0.12))
+			_add_first_person_frame_part(_box(Vector3(0.2, 0.04, 0.05)), Vector3(0.0, 0.24, 0.0), glow)
+	_first_person_frame_root.set_meta("identity_name", CREW_IDENTITY.facts(crew_frame_id).get("name", "VANE"))
+
+func _add_first_person_frame_part(mesh: Mesh, position: Vector3, material: Material, rotation: Vector3 = Vector3.ZERO) -> MeshInstance3D:
+	var instance := MeshInstance3D.new()
+	instance.mesh = mesh
+	instance.position = position
+	instance.rotation = rotation
+	instance.material_override = material
+	instance.layers = 2
+	_first_person_frame_root.add_child(instance)
+	return instance
+
+func _add_frame_part(mesh: Mesh, position: Vector3, material: Material, rotation: Vector3 = Vector3.ZERO) -> MeshInstance3D:
+	var instance := MeshInstance3D.new()
+	instance.mesh = mesh
+	instance.position = position
+	instance.rotation = rotation
+	instance.material_override = material
+	instance.layers = 1
+	_frame_visual_root.add_child(instance)
+	return instance
+
+func _torus(inner_radius: float, outer_radius: float) -> TorusMesh:
+	var mesh := TorusMesh.new()
+	mesh.inner_radius = inner_radius
+	mesh.outer_radius = inner_radius + outer_radius
+	mesh.rings = 14
+	mesh.ring_segments = 8
+	return mesh
 
 func _build_carrier_signal(glow: Material) -> void:
 	_carrier_signal_root = Node3D.new()
@@ -756,6 +924,7 @@ func _build_first_person_weapon() -> void:
 	_weapon_root.position = Vector3(0.42, -0.42, -1.22)
 	_weapon_root.scale = Vector3.ONE * 0.38
 	camera.add_child(_weapon_root)
+	_apply_first_person_crew_frame()
 
 func _build_world_weapon() -> void:
 	_weapon_root = Node3D.new()
@@ -775,10 +944,10 @@ func _rebuild_weapon_models() -> void:
 	_muzzle_flare = null
 	_magazine_mesh = null
 	_rail_slots.clear()
-	var ceramic := _material(Color("3f4b55") if weapon == Weapon.PULSE else Color("687386"), 0.08)
+	var ceramic := _material(Color("3f4b55") if weapon == Weapon.PULSE else Color("5b6572"), 0.08)
 	var dark := _material(Color("17263e"), 0.0)
-	var accent := _material(Color("e6a25b") if weapon == Weapon.PULSE else Color("b479ff"), 0.6)
-	var hot := _material(Color("fff0b0") if weapon == Weapon.PULSE else Color("d3b2ff"), 3.2)
+	var accent := _material(Color("e6a25b") if weapon == Weapon.PULSE else Color("d9e1ec"), 0.6)
+	var hot := _material(Color("fff0b0") if weapon == Weapon.PULSE else Color("f3f6fb"), 3.2)
 	if weapon == Weapon.PULSE:
 		# Original Rift Carbine silhouette: stock, split receiver, rail handguard, magazine, barrel, sights.
 		_weapon_mesh = _add_weapon_part(_box(Vector3(0.30, 0.20, 0.44)), Vector3(0.0, 0.0, 0.06), ceramic)
@@ -804,13 +973,17 @@ func _rebuild_weapon_models() -> void:
 		_weapon_core = _add_weapon_part(_box(Vector3(0.10, 0.08, 0.14)), Vector3(0.16, 0.08, -0.54), accent)
 		_muzzle_flare = _add_weapon_part(_box(Vector3(0.11, 0.11, 0.16)), Vector3(0.0, 0.02, -1.65), hot)
 	else:
-		_weapon_mesh = _add_weapon_part(_box(Vector3(0.27, 0.25, 0.58)), Vector3(0.0, 0.0, 0.05), ceramic)
-		_add_weapon_part(_box(Vector3(0.34, 0.12, 0.32)), Vector3(0.0, 0.0, -0.32), dark, Vector3(0.0, 0.0, 0.12))
-		_weapon_core = _add_weapon_part(_cylinder(0.045, 0.045, 0.2), Vector3(0.0, 0.0, -0.46), hot, Vector3(PI * 0.5, 0.0, 0.0))
-		for index in 5:
-			_rail_slots.append(_add_weapon_part(_cylinder(0.026, 0.026, 0.1), Vector3(-0.1 + index * 0.05, -0.15, -0.23), accent, Vector3(PI * 0.5, 0.0, 0.0)))
-		_add_weapon_part(_box(Vector3(0.07, 0.3, 0.08)), Vector3(0.14, 0.0, -0.04), accent, Vector3(0.0, 0.0, 0.32))
-		_muzzle_flare = _add_weapon_part(_box(Vector3(0.18, 0.18, 0.08)), Vector3(0.0, 0.0, -0.65), hot)
+		# Simple procedural kunai: ring pommel, wrapped handle, broad
+		# faceted blade, and a single bright center spine.
+		_weapon_mesh = _add_weapon_part(_kunai_blade_mesh(), Vector3(0.0, -0.02, -0.72), ceramic)
+		_weapon_core = _add_weapon_part(_box(Vector3(0.026, 0.72, 0.045)), Vector3(0.0, -0.28, -0.77), hot)
+		_add_weapon_part(_box(Vector3(0.16, 0.10, 0.06)), Vector3(0.0, 0.18, -0.25), dark)
+		_add_weapon_part(_cylinder(0.055, 0.055, 0.42), Vector3(0.0, 0.03, 0.05), ceramic, Vector3(PI * 0.5, 0.0, 0.0))
+		for index in 4:
+			_add_weapon_part(_torus(0.047, 0.012), Vector3(0.0, 0.03, -0.1 + index * 0.1), accent, Vector3(0.0, 0.0, 0.0))
+		_add_weapon_part(_torus(0.105, 0.035), Vector3(0.0, 0.03, 0.33), dark, Vector3(0.0, 0.0, 0.0))
+		_add_weapon_part(_torus(0.072, 0.018), Vector3(0.0, 0.03, 0.335), accent, Vector3(0.0, 0.0, 0.0))
+		_muzzle_flare = _add_weapon_part(_box(Vector3(0.035, 0.04, 0.04)), Vector3(0.0, -0.62, -0.72), hot)
 	_muzzle_flare.scale = Vector3.ONE * 0.001
 
 func _add_weapon_part(mesh: Mesh, position: Vector3, material: Material, rotation: Vector3 = Vector3.ZERO) -> MeshInstance3D:
@@ -853,6 +1026,29 @@ func _cylinder(top_radius: float, bottom_radius: float, height: float) -> Cylind
 	mesh.top_radius = top_radius
 	mesh.bottom_radius = bottom_radius
 	mesh.height = height
+	return mesh
+
+func _kunai_blade_mesh() -> ArrayMesh:
+	var mesh := ArrayMesh.new()
+	var front_z := -0.07
+	var back_z := 0.07
+	var vertices := PackedVector3Array([
+		Vector3(-0.2, 0.08, front_z), Vector3(0.0, 0.27, front_z), Vector3(0.2, 0.08, front_z), Vector3(0.0, -0.62, front_z),
+		Vector3(-0.2, 0.08, back_z), Vector3(0.0, 0.27, back_z), Vector3(0.2, 0.08, back_z), Vector3(0.0, -0.62, back_z),
+	])
+	var indices := PackedInt32Array([
+		0, 1, 2, 0, 2, 3,
+		6, 5, 4, 7, 6, 4,
+		0, 4, 5, 0, 5, 1,
+		1, 5, 6, 1, 6, 2,
+		2, 6, 7, 2, 7, 3,
+		3, 7, 4, 3, 4, 0,
+	])
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_INDEX] = indices
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
 
 func _material(color: Color, emission_energy: float) -> ShaderMaterial:

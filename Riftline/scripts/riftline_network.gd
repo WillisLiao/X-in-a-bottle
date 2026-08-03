@@ -1,6 +1,9 @@
 class_name RiftlineNetwork
 extends Node
 
+const CREW_IDENTITY := preload("res://scripts/riftline_crew_identity.gd")
+const CREW_PROFILE := preload("res://scripts/riftline_crew_profile.gd")
+
 signal session_status(status: String)
 signal host_discovered(session: Dictionary)
 signal peer_joined(peer_id: int)
@@ -15,9 +18,10 @@ signal session_descriptor_received(descriptor: Dictionary)
 signal lobby_state_received(state: Dictionary)
 signal lobby_live_received(state: Dictionary)
 signal lobby_abandoned_received(state: Dictionary)
+signal frame_selection_changed(actor_id: String, frame_id: String)
 
 const PROJECT_ID := "riftline-lan"
-const PROTOCOL_VERSION := 5
+const PROTOCOL_VERSION := 6
 const APP_HOST_DUEL_REMOTE_SLOTS := 1
 const APP_HOST_SQUAD_REMOTE_SLOTS := 9
 const DEDICATED_REMOTE_SLOTS := 10
@@ -52,6 +56,7 @@ var discovered_session: Dictionary = {}
 var session_descriptor: Dictionary = {}
 var _configuration_valid := true
 var local_actor_id := ""
+var local_frame_id := "vane"
 var _session_marker := ""
 var session_role: SessionRole = SessionRole.OFFLINE
 var local_team := -1
@@ -66,6 +71,7 @@ var _sim_last_unreliable_release := -1
 var _sim_reliable_release_after := 0.0
 var _lobby_auto_ready := false
 var _last_logged_lobby_phase := -1
+var _client_frame_synced := false
 
 func _ready() -> void:
 	_read_command_line_options()
@@ -107,9 +113,10 @@ func host_lan() -> Error:
 		session_status.emit("LINK ERROR")
 		return error
 	multiplayer.multiplayer_peer = _peer
-	var host_record := lobby.add_host()
+	var host_record := lobby.add_host(CREW_PROFILE.load_frame())
 	local_actor_id = str(host_record.get("actor_id", ""))
 	local_team = int(host_record.get("team", -1))
+	local_frame_id = str(host_record.get("frame_id", "vane"))
 	_session_marker = _new_session_marker()
 	session_descriptor = _descriptor_from_packet(_session_event())
 	_start_advertising()
@@ -146,7 +153,9 @@ func stop() -> void:
 	_configure_roster(session_role == SessionRole.DEDICATED_SERVER)
 	_configure_lobby(session_role == SessionRole.DEDICATED_SERVER)
 	local_actor_id = ""
+	local_frame_id = "vane"
 	local_team = -1
+	_client_frame_synced = false
 	_discovered_address = ""
 	_discovered_marker = ""
 	discovered_session.clear()
@@ -228,6 +237,24 @@ func submit_client_lobby_rematch_ready(ready: bool, revision: int) -> void:
 func submit_client_lobby_leave() -> void:
 	_submit_client_lobby_intent({"type": "lobby_leave"})
 
+func submit_host_frame(frame_id: String) -> bool:
+	if lobby == null or not multiplayer.is_server() or not CREW_IDENTITY.valid_id(frame_id):
+		return false
+	var canonical_frame := CREW_IDENTITY.canonical_id(frame_id)
+	var changed := lobby.set_host_frame(canonical_frame)
+	if changed:
+		local_frame_id = canonical_frame
+		frame_selection_changed.emit(local_actor_id, local_frame_id)
+		_broadcast_roster()
+		_broadcast_lobby_state()
+	return changed
+
+func submit_client_frame(frame_id: String, revision: int) -> bool:
+	if not CREW_IDENTITY.valid_id(frame_id):
+		return false
+	_submit_client_lobby_intent({"type": "frame_select", "frame_id": CREW_IDENTITY.canonical_id(frame_id), "revision": revision})
+	return true
+
 func start_command_line_mode() -> bool:
 	for argument in OS.get_cmdline_user_args():
 		if argument == "--dedicated-server":
@@ -253,6 +280,7 @@ func _join_address(address: String) -> Error:
 	var expected_team_size := team_size
 	stop()
 	session_role = SessionRole.JOINING_CLIENT
+	local_frame_id = CREW_PROFILE.load_frame()
 	if not expected_descriptor.is_empty():
 		session_descriptor = expected_descriptor
 		arena_id = expected_arena
@@ -338,7 +366,7 @@ func _on_peer_connected(peer_id: int) -> void:
 			session_status.emit("RIFT FULL")
 			return
 		_send_server_event(peer_id, _session_event())
-		_send_server_event(peer_id, {"type": "assigned_actor", "actor_id": assigned.actor_id, "team": int(assigned.team)})
+		_send_server_event(peer_id, {"type": "assigned_actor", "actor_id": assigned.actor_id, "team": int(assigned.team), "frame_id": str(assigned.get("frame_id", "vane"))})
 		_broadcast_roster()
 		_broadcast_lobby_state()
 		session_status.emit("RIVAL LINKED")
@@ -413,11 +441,15 @@ func _rpc_event(event: Dictionary) -> void:
 	if event_type == "assigned_actor":
 		local_actor_id = str(event.get("actor_id", ""))
 		local_team = int(event.get("team", -1))
+		local_frame_id = CREW_IDENTITY.canonical_id(event.get("frame_id", "vane"))
 		actor_assigned.emit(local_actor_id, local_team)
+		frame_selection_changed.emit(local_actor_id, local_frame_id)
 		team_assigned.emit(local_team)
 	elif event_type == "roster":
 		var public_records: Array[Dictionary] = _validated_public_records(event.get("records", []))
 		roster_received.emit(public_records)
+		for record in public_records:
+			frame_selection_changed.emit(str(record.get("actor_id", "")), str(record.get("frame_id", "vane")))
 	elif event_type == "session":
 		if int(event.get("protocol", -1)) != PROTOCOL_VERSION:
 			session_status.emit("RIFT VERSION MISMATCH")
@@ -431,8 +463,15 @@ func _rpc_event(event: Dictionary) -> void:
 	elif event_type == "lobby_state":
 		lobby_state = _validated_lobby_state(event.get("state", {}))
 		lobby_state_received.emit(lobby_state.duplicate(true))
-		if _lobby_auto_ready and not multiplayer.is_server() and int(lobby_state.get("phase", -1)) == RiftlineLobby.Phase.STAGING and not local_actor_id.is_empty():
-			submit_client_lobby_ready(true, int(lobby_state.get("revision", 0)))
+		if not multiplayer.is_server() and int(lobby_state.get("phase", -1)) == RiftlineLobby.Phase.STAGING and not local_actor_id.is_empty():
+			var local_record := _record_for_actor(lobby_state.get("records", []), local_actor_id)
+			if not _client_frame_synced:
+				_client_frame_synced = true
+				if str(local_record.get("frame_id", "vane")) != local_frame_id:
+					submit_client_frame(local_frame_id, int(lobby_state.get("revision", 0)))
+					return
+			if _lobby_auto_ready:
+				submit_client_lobby_ready(true, int(lobby_state.get("revision", 0)))
 	elif event_type == "lobby_live":
 		lobby_state = _validated_lobby_state(event.get("state", {}))
 		lobby_live_received.emit(lobby_state.duplicate(true))
@@ -664,7 +703,10 @@ func _send_server_event(peer_id: int, event: Dictionary) -> void:
 func _broadcast_roster() -> void:
 	if multiplayer.multiplayer_peer == null or not multiplayer.is_server():
 		return
-	_queue_or_send({"kind": "event", "event": {"type": "roster", "records": roster.public_records()}}, true)
+	var public_records := roster.public_records()
+	_queue_or_send({"kind": "event", "event": {"type": "roster", "records": public_records}}, true)
+	for record in public_records:
+		frame_selection_changed.emit(str(record.get("actor_id", "")), str(record.get("frame_id", "vane")))
 
 func _configure_roster(is_dedicated: bool) -> void:
 	roster = RiftlineRoster.new()
@@ -710,6 +752,19 @@ func _handle_lobby_intent(event: Dictionary, sender_id: int) -> bool:
 		if not removed.is_empty():
 			_broadcast_roster()
 			_broadcast_lobby_event("lobby_abandoned" if int(lobby.public_state().phase) == RiftlineLobby.Phase.ABANDONED else "lobby_state", lobby.public_state())
+		return true
+	if event_type == "frame_select":
+		if typeof(event.get("frame_id", null)) != TYPE_STRING or typeof(event.get("revision", null)) != TYPE_INT:
+			_broadcast_lobby_state()
+			return true
+		if int(event.revision) != int(lobby.public_state().revision) or not CREW_IDENTITY.valid_id(event.frame_id):
+			_broadcast_lobby_state()
+			return true
+		if lobby.request_peer_frame(sender_id, str(event.frame_id)):
+			_broadcast_roster()
+			_broadcast_lobby_state()
+		else:
+			_broadcast_lobby_state()
 		return true
 	if event_type not in ["lobby_ready", "lobby_rematch_ready"]:
 		return false
@@ -768,8 +823,16 @@ func _validated_public_records(value: Variant) -> Array[Dictionary]:
 		var team := int(candidate.get("team", -1))
 		if actor_id.is_empty() or team < Duelist.Team.SUN or team > Duelist.Team.VOID:
 			continue
-		result.append({"actor_id": actor_id, "team": team, "human": bool(candidate.get("human", false))})
+		result.append({"actor_id": actor_id, "team": team, "human": bool(candidate.get("human", false)), "frame_id": CREW_IDENTITY.canonical_id(candidate.get("frame_id", "vane"))})
 	return result
+
+func _record_for_actor(records: Variant, actor_id: String) -> Dictionary:
+	if not records is Array:
+		return {}
+	for record in records:
+		if record is Dictionary and str(record.get("actor_id", "")) == actor_id:
+			return record
+	return {}
 
 func _new_session_marker() -> String:
 	return "%s-%s" % [Time.get_ticks_msec(), randi()]

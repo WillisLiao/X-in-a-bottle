@@ -3,10 +3,13 @@ extends Control
 
 signal rift_link_requested
 signal feedback_preferences_changed(effects_enabled: bool, haptics_enabled: bool)
+signal view_fov_changed(horizontal_degrees: float)
 
 const CONFIG_PATH := "user://riftline_controls.cfg"
+const RESPONSIVE := preload("res://scripts/riftline_responsive_layout.gd")
 const LAYOUT_SECTION := "hud_layout_v1"
 const FEEDBACK_SECTION := "feedback_v1"
+const VIEW_SECTION := "display"
 const LAYOUT_VERSION := 3
 const SNAP_POINTS := 8.0
 const DRAG_THRESHOLD := 10.0
@@ -29,6 +32,7 @@ var objective_feedback_pulse := 0.0
 var objective_feedback_team := -1
 var camera_sensitivity := 1.0
 var ads_sensitivity := 0.72
+var horizontal_fov := Duelist.DEFAULT_HORIZONTAL_FOV
 var gyro_enabled := false
 var effects_enabled := true
 var haptics_enabled := false
@@ -69,6 +73,7 @@ var _crouch_touch := -1
 var _prone_touch := -1
 var _switch_touch := -1
 var _seed_pass_touch := -1
+var _settings_owner_touch := -1
 var _sun_score := 0
 var _void_score := 0
 var _roster_state: Array[Dictionary] = []
@@ -109,6 +114,20 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	_layout = _default_layout()
 	_load_control_settings()
+	_refresh_responsive_layout()
+	_touch_router.configure(_stick_mode, _control_center("move"), _stick_radius())
+	queue_redraw()
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_RESIZED:
+		_refresh_responsive_layout()
+
+func _refresh_responsive_layout() -> void:
+	if not is_inside_tree() or _layout.is_empty():
+		return
+	# Resize can remap an owned finger to a different action.  Cancel ownership
+	# without saving a transient layout so resize never leaks a combat edge.
+	_release_all_touch_ownership()
 	_touch_router.configure(_stick_mode, _control_center("move"), _stick_radius())
 	queue_redraw()
 
@@ -277,6 +296,20 @@ func set_stance(stance: Duelist.Stance) -> void:
 
 func set_weapon(weapon: Duelist.Weapon) -> void:
 	_weapon = weapon
+	if _weapon == Duelist.Weapon.KNIFE:
+		aim_held = false
+		_aim_touch = -1
+	queue_redraw()
+
+func set_view_fov(value: float, persist: bool = true) -> void:
+	var next := clampf(value, Duelist.MIN_HORIZONTAL_FOV, Duelist.MAX_HORIZONTAL_FOV) if is_finite(value) else Duelist.DEFAULT_HORIZONTAL_FOV
+	if absf(next - horizontal_fov) < 0.001:
+		return
+	horizontal_fov = next
+	if persist:
+		_save_control_settings()
+	view_fov_changed.emit(horizontal_fov)
+	queue_redraw()
 
 func show_ammo(magazine: int, reserve: int, reload_time: float) -> void:
 	if _ammo_preview_override:
@@ -379,23 +412,26 @@ func _gui_input(event: InputEvent) -> void:
 		if _layout_editor:
 			_handle_editor_touch(event.index, event.position, event.pressed)
 		elif _settings_open:
-			_handle_settings_touch(event.position, event.pressed)
+			_handle_settings_touch(event.index, event.position, event.pressed)
 		else:
 			_handle_touch(event.index, event.position, event.pressed)
 	elif event is InputEventScreenDrag:
 		if _layout_editor:
 			_handle_editor_drag(event.index, event.position)
 		elif _settings_open:
-			_handle_settings_touch(event.position, true)
+			_handle_settings_touch(event.index, event.position, true)
 		else:
 			_handle_drag(event.index, event.position, event.relative)
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if _layout_editor:
 			_handle_editor_touch(0, event.position, event.pressed)
 		elif _settings_open:
-			_handle_settings_touch(event.position, event.pressed)
+			_handle_settings_touch(0, event.position, event.pressed)
 		else:
-			if event.pressed and _pressed_circle(event.position, _reload_center(), _reload_radius() + 12.0):
+			if event.pressed and _settings_hit_rect().has_point(event.position):
+				open_settings()
+				_settings_owner_touch = 0
+			elif event.pressed and _pressed_circle(event.position, _reload_center(), _reload_radius() + 12.0):
 				_reload_requested = true
 				fire_held = false
 			elif event.pressed and _seed_relay_available and _pressed_circle(event.position, _control_center("seed_pass"), _control_radius("seed_pass") + 12.0):
@@ -413,8 +449,9 @@ func _handle_touch(index: int, point: Vector2, pressed: bool) -> void:
 	if not pressed:
 		_release_touch(index)
 		return
-	if _pressed_circle(point, _settings_center(), 30.0):
+	if _settings_hit_rect().has_point(point):
 		open_settings()
+		_settings_owner_touch = index
 		return
 	if not _combat_input_enabled:
 		return
@@ -491,6 +528,8 @@ func _release_touch(index: int) -> void:
 		_switch_touch = -1
 	if index == _seed_pass_touch:
 		_seed_pass_touch = -1
+	if index == _settings_owner_touch:
+		_settings_owner_touch = -1
 
 func _release_all_touch_ownership() -> void:
 	_touch_router.reset()
@@ -502,6 +541,7 @@ func _release_all_touch_ownership() -> void:
 	_prone_touch = -1
 	_switch_touch = -1
 	_seed_pass_touch = -1
+	_settings_owner_touch = -1
 	_editor_touch = -1
 	movement = Vector2.ZERO
 	fire_held = false
@@ -530,13 +570,16 @@ func _draw_gameplay_hud() -> void:
 	_draw_coach_cue(friendly, enemy)
 
 	# The reticle stays clean for touch aiming, with a short directional bloom that recovers quickly.
-	var bloom_radius := 14.0 + primary_fire_bloom * 3.0
-	var bloom_gap := 10.0 + primary_fire_bloom * 4.0
-	var bloom_span := 25.0 + primary_fire_bloom * 6.0
-	draw_arc(center, bloom_radius, 0.12, 1.24, 12, Color(friendly, 0.9), 2.0)
-	draw_arc(center, bloom_radius, 3.26, 4.38, 12, Color(friendly, 0.9), 2.0)
-	draw_line(center + Vector2(-bloom_span, 0), center + Vector2(-bloom_gap, 0), Color(friendly, 0.86), 2.0)
-	draw_line(center + Vector2(bloom_gap, 0), center + Vector2(bloom_span, 0), Color(friendly, 0.86), 2.0)
+	if _weapon == Duelist.Weapon.KNIFE:
+		draw_circle(center, 3.0, Color("ffffff", 0.96))
+	elif not aim_held:
+		var bloom_gap := 10.0 + primary_fire_bloom * 4.0
+		var bloom_span := 25.0 + primary_fire_bloom * 6.0
+		var reticle_color := Color("ffffff", 0.96)
+		draw_line(center + Vector2(-bloom_span, 0), center + Vector2(-bloom_gap, 0), reticle_color, 2.0)
+		draw_line(center + Vector2(bloom_gap, 0), center + Vector2(bloom_span, 0), reticle_color, 2.0)
+		draw_line(center + Vector2(0, -bloom_span), center + Vector2(0, -bloom_gap), reticle_color, 2.0)
+		draw_line(center + Vector2(0, bloom_gap), center + Vector2(0, bloom_span), reticle_color, 2.0)
 	if hit_confirm > 0.0:
 		var confirm_color := Color("fff0b0", 0.95 * hit_confirm)
 		var confirm_radius := 23.0 + (1.0 - hit_confirm) * 7.0
@@ -569,7 +612,8 @@ func _draw_gameplay_hud() -> void:
 
 	_draw_button("left_fire", friendly, _left_fire_touch >= 0)
 	_draw_button("right_fire", friendly, _right_fire_touch >= 0)
-	_draw_button("ads", enemy, aim_held)
+	if _weapon == Duelist.Weapon.PULSE:
+		_draw_button("ads", enemy, aim_held)
 	_draw_button("jump", enemy, _jump_touch >= 0)
 	_draw_button("crouch", friendly, _stance == Duelist.Stance.CROUCH)
 	_draw_button("prone", friendly, _stance == Duelist.Stance.PRONE)
@@ -584,18 +628,12 @@ func _draw_gameplay_hud() -> void:
 		_draw_button_preview("left_fire", friendly)
 		_draw_button_preview("right_fire", friendly)
 	if _touch_preview == "reloading":
-		_draw_reload_sweep(_reload_center(), _reload_radius(), Color("fff0b0"))
+		_draw_reload_sweep(_reload_center(), _reload_radius(), Color("fff0b0"), reload_progress_for(reload_remaining))
 	if _touch_preview in ["floating-left", "floating-edge"]:
 		_draw_preview_floating_stick(friendly)
 
 	var safe := _safe_rect()
-	var health_width := 210.0
-	draw_rect(Rect2(safe.position + Vector2(10, 10), Vector2(health_width, 8)), Color("03101f", 0.72))
-	var health_color := friendly
-	if health <= 30.0:
-		var low_pulse := 0.65 + sin(Time.get_ticks_msec() * 0.012) * 0.35
-		health_color = Color("ef8b78", low_pulse)
-	draw_rect(Rect2(safe.position + Vector2(10, 10), Vector2(health_width * health / 100.0, 8)), health_color)
+	_draw_vitality_strip(safe, friendly)
 	_draw_objective_strip(safe, friendly, enemy)
 	_draw_carrier_chevron(safe, friendly)
 	if _squad_readability:
@@ -624,6 +662,20 @@ func _friendly_color() -> Color:
 
 func _enemy_color() -> Color:
 	return _team_color(Duelist.Team.VOID if _roster_local_team == int(Duelist.Team.SUN) else Duelist.Team.SUN)
+
+func _draw_vitality_strip(safe: Rect2, friendly: Color) -> void:
+	var plate_size := Vector2(20.0, 10.0)
+	var gap := 5.0
+	var total_width := plate_size.x * 5.0 + gap * 4.0
+	var origin := Vector2(safe.get_center().x - total_width * 0.5, safe.end.y - 44.0)
+	var filled := clampi(ceili(health / 20.0), 0, 5)
+	var low_pulse := 0.7 + sin(Time.get_ticks_msec() * 0.012) * 0.3 if health <= 30.0 else 1.0
+	var plate_color := Color("ef8b78", low_pulse) if health <= 30.0 else Color("f5e6bd") if health <= 60.0 else friendly
+	for index in 5:
+		var rect := Rect2(origin + Vector2(index * (plate_size.x + gap), 0.0), plate_size)
+		draw_rect(rect, Color(plate_color, 0.9 if index < filled else 0.12), index < filled)
+		draw_rect(rect, Color("f1f6ff", 0.7), false, 1.2)
+
 
 func _team_color(team: int) -> Color:
 	return Color("ffad5d") if team == int(Duelist.Team.SUN) else Color("71cfff")
@@ -762,7 +814,7 @@ func _draw_control_glyph(center: Vector2, radius: float, color: Color, key: Stri
 			draw_line(center + Vector2(radius * 0.27, radius * 0.16), center + Vector2(radius * 0.42, 0), glyph_color, weight)
 		"reload":
 			if active and reload_indicator_animates():
-				_draw_reload_sweep(center, radius * 0.58, glyph_color)
+				_draw_reload_sweep(center, radius * 0.58, glyph_color, reload_progress_for(reload_remaining))
 			else:
 				_draw_reload_icon(center, radius * 0.58, glyph_color)
 		"settings":
@@ -785,23 +837,26 @@ func _draw_reload_icon(center: Vector2, radius: float, color: Color) -> void:
 
 func _draw_weapon_indicator(color: Color) -> void:
 	var safe := _safe_rect()
-	var center := Vector2(safe.end.x - 480.0, safe.end.y - 84.0)
-	draw_rect(Rect2(center - Vector2(34, 20), Vector2(68, 40)), Color("071126", 0.58), true)
-	draw_arc(center, 30.0, 0.0, TAU, 24, Color(color, 0.92), 2.0)
+	var center := Vector2(safe.end.x - 170.0, safe.end.y - 74.0)
+	_draw_loadout_plate(center - Vector2(48.0, 0.0), Duelist.Weapon.PULSE, color)
+	_draw_loadout_plate(center + Vector2(48.0, 0.0), Duelist.Weapon.KNIFE, color)
 	if _weapon == Duelist.Weapon.PULSE:
-		draw_rect(Rect2(center - Vector2(15, 4), Vector2(30, 8)), color)
-		draw_line(center + Vector2(14, -4), center + Vector2(23, -11), color, 3.0)
-		draw_line(center + Vector2(14, 4), center + Vector2(23, 11), color, 3.0)
-		draw_circle(center + Vector2(-8, 0), 3.0, Color("fff0b0"))
-		var font := ThemeDB.fallback_font
-		_draw_magazine_read(center + Vector2(0.0, -28.0), color)
+		_draw_magazine_read(center - Vector2(48.0, 0.0) + Vector2(0.0, 30.0), color)
 		if reload_remaining > 0.0:
-			draw_string(font, center + Vector2(-32.0, 43.0), "LOADING", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("fff0b0", 0.94))
-			_draw_reload_sweep(center, 30.0, Color("fff0b0"))
+			_draw_reload_sweep(center - Vector2(48.0, 0.0), 24.0, Color("fff0b0"), reload_progress_for(reload_remaining))
+
+func _draw_loadout_plate(center: Vector2, slot: Duelist.Weapon, color: Color) -> void:
+	var held := _weapon == slot
+	var plate_color := color if held else Color("9bb2d1")
+	draw_rect(Rect2(center - Vector2(32.0, 22.0), Vector2(64.0, 44.0)), Color("071126", 0.72), true)
+	draw_rect(Rect2(center - Vector2(32.0, 22.0), Vector2(64.0, 44.0)), Color(plate_color, 0.95 if held else 0.34), false, 2.0 if held else 1.0)
+	if slot == Duelist.Weapon.PULSE:
+		draw_rect(Rect2(center - Vector2(17.0, 4.0), Vector2(30.0, 8.0)), plate_color)
+		draw_line(center + Vector2(13.0, -4.0), center + Vector2(24.0, -11.0), plate_color, 2.5)
+		draw_line(center + Vector2(13.0, 4.0), center + Vector2(24.0, 11.0), plate_color, 2.5)
 	else:
-		for offset in [-10.0, -5.0, 0.0, 5.0, 10.0]:
-			draw_circle(center + Vector2(offset, 0), 3.8, Color("c292ff"))
-		draw_line(center + Vector2(15, -10), center + Vector2(15, 10), Color("d8c4ff"), 3.0)
+		draw_line(center + Vector2(-2.0, -14.0), center + Vector2(11.0, 14.0), plate_color, 3.0)
+		draw_line(center + Vector2(-11.0, 10.0), center + Vector2(0.0, 14.0), plate_color, 3.0)
 
 func _draw_magazine_read(center: Vector2, color: Color) -> void:
 	var magazine_ratio := clampf(float(magazine_rounds) / float(Duelist.M4_MAGAZINE_SIZE), 0.0, 1.0)
@@ -817,8 +872,11 @@ func _draw_magazine_read(center: Vector2, color: Color) -> void:
 		draw_rect(block, Color("fff0b0", 0.7 if index < reserve_blocks else 0.12), index < reserve_blocks)
 		draw_rect(block, Color("fff0b0", 0.42), false, 1.0)
 
-func _draw_reload_sweep(center: Vector2, radius: float, color: Color) -> void:
-	var phase := fmod(Time.get_ticks_msec() / 1000.0, 1.0)
+static func reload_progress_for(remaining: float) -> float:
+	return clampf(1.0 - remaining / Duelist.M4_RELOAD_SECONDS, 0.0, 1.0)
+
+func _draw_reload_sweep(center: Vector2, radius: float, color: Color, progress: float) -> void:
+	var phase := clampf(progress, 0.0, 1.0)
 	draw_arc(center, radius + 5.0, -PI * 0.5, -PI * 0.5 + TAU * phase, 24, Color(color, 0.92), 3.0)
 	draw_line(center + Vector2(-radius * 0.42, radius * 0.42), center + Vector2(radius * 0.42, radius * 0.42), Color(color, 0.82), 2.0)
 
@@ -910,7 +968,11 @@ func _rematch_rect() -> Rect2:
 func _pressed_circle(point: Vector2, center: Vector2, radius: float) -> bool:
 	return point.distance_squared_to(center) <= radius * radius
 
-func _handle_settings_touch(point: Vector2, pressed: bool) -> void:
+func _handle_settings_touch(index: int, point: Vector2, pressed: bool) -> void:
+	if index == _settings_owner_touch:
+		if not pressed:
+			_settings_owner_touch = -1
+		return
 	if not pressed:
 		return
 	var panel := _settings_panel()
@@ -918,8 +980,12 @@ func _handle_settings_touch(point: Vector2, pressed: bool) -> void:
 		_settings_open = false
 		_release_all_touch_ownership()
 		return
-	var camera_track := Rect2(panel.position + Vector2(154, 76), Vector2(panel.size.x - 190, 24))
-	var ads_track := Rect2(panel.position + Vector2(154, 122), Vector2(panel.size.x - 190, 24))
+	var view_track := _view_track_rect(panel)
+	if view_track.grow(14.0).has_point(point):
+		set_view_fov(_view_from_point(point.x, view_track.position.x), true)
+		return
+	var camera_track := Rect2(panel.position + Vector2(154, 108), Vector2(panel.size.x - 190, 24))
+	var ads_track := Rect2(panel.position + Vector2(154, 154), Vector2(panel.size.x - 190, 24))
 	if camera_track.grow(12.0).has_point(point):
 		camera_sensitivity = clampf((point.x - camera_track.position.x) / camera_track.size.x * 1.4 + 0.3, 0.3, 1.7)
 		_save_control_settings()
@@ -928,11 +994,11 @@ func _handle_settings_touch(point: Vector2, pressed: bool) -> void:
 		ads_sensitivity = clampf((point.x - ads_track.position.x) / ads_track.size.x * 1.4 + 0.3, 0.3, 1.7)
 		_save_control_settings()
 		return
-	if Rect2(panel.position + Vector2(24, 168), Vector2(142, 44)).has_point(point):
+	if Rect2(panel.position + Vector2(24, 188), Vector2(142, 44)).has_point(point):
 		_aim_toggle = not _aim_toggle
 		_save_control_settings()
 		return
-	if Rect2(panel.position + Vector2(184, 168), Vector2(142, 44)).has_point(point):
+	if Rect2(panel.position + Vector2(184, 188), Vector2(142, 44)).has_point(point):
 		gyro_enabled = not gyro_enabled
 		_save_control_settings()
 		return
@@ -966,13 +1032,15 @@ func _draw_settings_panel(friendly: Color, enemy: Color) -> void:
 	draw_line(panel.position, panel.position + Vector2(panel.size.x, 0), friendly, 2.0)
 	var font := ThemeDB.fallback_font
 	draw_string(font, panel.position + Vector2(24, 34), "COMBAT SETTINGS", HORIZONTAL_ALIGNMENT_LEFT, -1, 20, Color("f1f6ff"))
-	draw_string(font, panel.position + Vector2(24, 91), "CAMERA", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, enemy)
-	draw_string(font, panel.position + Vector2(24, 137), "ADS", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, enemy)
-	_draw_setting_slider(panel.position + Vector2(154, 88), panel.size.x - 190, camera_sensitivity, friendly)
-	_draw_setting_slider(panel.position + Vector2(154, 134), panel.size.x - 190, ads_sensitivity, friendly)
-	_draw_setting_chip(Rect2(panel.position + Vector2(24, 168), Vector2(142, 44)), "AIM %s" % ("TAP" if _aim_toggle else "HOLD"), friendly, _aim_toggle)
-	_draw_setting_chip(Rect2(panel.position + Vector2(184, 168), Vector2(142, 44)), "GYRO %s" % ("ON" if gyro_enabled else "OFF"), Color("c292ff"), gyro_enabled)
-	_draw_setting_chip(Rect2(panel.position + Vector2(344, 168), Vector2(142, 44)), "QUICK SWAP", Color("c292ff"), true)
+	draw_string(font, panel.position + Vector2(24, 68), "VIEW", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, enemy)
+	_draw_view_slider(_view_track_rect(panel), friendly)
+	draw_string(font, panel.position + Vector2(24, 111), "CAMERA", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, enemy)
+	draw_string(font, panel.position + Vector2(24, 157), "ADS", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, enemy)
+	_draw_setting_slider(panel.position + Vector2(154, 108), panel.size.x - 190, camera_sensitivity, friendly)
+	_draw_setting_slider(panel.position + Vector2(154, 154), panel.size.x - 190, ads_sensitivity, friendly)
+	_draw_setting_chip(Rect2(panel.position + Vector2(24, 188), Vector2(142, 44)), "AIM %s" % ("TAP" if _aim_toggle else "HOLD"), friendly, _aim_toggle)
+	_draw_setting_chip(Rect2(panel.position + Vector2(184, 188), Vector2(142, 44)), "GYRO %s" % ("ON" if gyro_enabled else "OFF"), Color("c292ff"), gyro_enabled)
+	_draw_setting_chip(Rect2(panel.position + Vector2(344, 188), Vector2(142, 44)), "QUICK SWAP", Color("c292ff"), true)
 	_draw_setting_chip(_effects_rect(panel), "EFFECTS %s" % ("ON" if effects_enabled else "OFF"), friendly, effects_enabled)
 	_draw_setting_chip(_stick_mode_rect(panel), "STICK %s" % ("FLOAT" if _stick_mode == MobileTouchRouter.StickMode.FLOATING else "FIXED"), friendly, _stick_mode == MobileTouchRouter.StickMode.FLOATING)
 	_draw_setting_chip(_hud_layout_rect(panel), "HUD LAYOUT", enemy, true)
@@ -985,6 +1053,24 @@ func _draw_setting_slider(position: Vector2, width: float, value: float, color: 
 	var normalized := (value - 0.3) / 1.4
 	draw_line(position, position + Vector2(width * normalized, 0), color, 5.0)
 	draw_circle(position + Vector2(width * normalized, 0), 9.0, color)
+
+func _view_track_rect(panel: Rect2) -> Rect2:
+	return Rect2(panel.position + Vector2(154, 65), Vector2(panel.size.x - 190, 24))
+
+func _view_from_point(point_x: float, track_x: float) -> float:
+	return clampf(Duelist.MIN_HORIZONTAL_FOV + ((point_x - track_x) / maxf(1.0, _view_track_rect(_settings_panel()).size.x)) * (Duelist.MAX_HORIZONTAL_FOV - Duelist.MIN_HORIZONTAL_FOV), Duelist.MIN_HORIZONTAL_FOV, Duelist.MAX_HORIZONTAL_FOV)
+
+func _draw_view_slider(rect: Rect2, color: Color) -> void:
+	var normalized := inverse_lerp(Duelist.MIN_HORIZONTAL_FOV, Duelist.MAX_HORIZONTAL_FOV, horizontal_fov)
+	draw_line(rect.position + Vector2(0, rect.size.y * 0.5), rect.end - Vector2(0, rect.size.y * 0.5), Color("233b64"), 5.0)
+	draw_line(rect.position + Vector2(0, rect.size.y * 0.5), rect.position + Vector2(rect.size.x * normalized, rect.size.y * 0.5), color, 5.0)
+	draw_circle(rect.position + Vector2(rect.size.x * normalized, rect.size.y * 0.5), 9.0, color)
+	var font := ThemeDB.fallback_font
+	for mark in [{"x": 0.0, "label": "TIGHT"}, {"x": 0.5, "label": "STANDARD"}, {"x": 1.0, "label": "WIDE"}]:
+		var x := rect.position.x + rect.size.x * float(mark.x)
+		var label := str(mark.label)
+		var width := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x
+		draw_string(font, Vector2(x - width * 0.5, rect.position.y + 22), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("92a7c7"))
 
 func _draw_setting_chip(rect: Rect2, text: String, color: Color, active: bool) -> void:
 	draw_rect(rect, Color(color, 0.18 if active else 0.07), true)
@@ -1142,39 +1228,39 @@ func _editor_button_rect(button: String) -> Rect2:
 	return Rect2(x, y, width, 44.0)
 
 func _settings_panel() -> Rect2:
-	return Rect2(size * 0.5 - Vector2(260, 220), Vector2(520, 440))
+	var safe := _safe_rect()
+	var width := clampf(safe.size.x * 0.72, 520.0, 760.0)
+	var height := clampf(safe.size.y * 0.82, 500.0, 620.0)
+	return Rect2(safe.get_center() - Vector2(width, height) * 0.5, Vector2(width, height))
 
 func _rift_link_rect(panel: Rect2) -> Rect2:
-	return Rect2(panel.position + Vector2(244, 330), Vector2(180, 44))
+	return Rect2(panel.position + Vector2(244, 362), Vector2(180, 44))
 
 func _stick_mode_rect(panel: Rect2) -> Rect2:
-	return Rect2(panel.position + Vector2(24, 276), Vector2(142, 44))
+	return Rect2(panel.position + Vector2(184, 250), Vector2(142, 44))
 
 func _hud_layout_rect(panel: Rect2) -> Rect2:
-	return Rect2(panel.position + Vector2(184, 276), Vector2(210, 44))
+	return Rect2(panel.position + Vector2(24, 306), Vector2(210, 44))
 
 func _reset_training_rect(panel: Rect2) -> Rect2:
-	return Rect2(panel.position + Vector2(24, 330), Vector2(210, 44))
+	return Rect2(panel.position + Vector2(24, 362), Vector2(210, 44))
 
 func _effects_rect(panel: Rect2) -> Rect2:
-	return Rect2(panel.position + Vector2(24, 222), Vector2(142, 44))
+	return Rect2(panel.position + Vector2(24, 250), Vector2(142, 44))
 
 func _haptics_rect(panel: Rect2) -> Rect2:
-	return Rect2(panel.position + Vector2(184, 222), Vector2(142, 44))
+	return Rect2(panel.position + Vector2(184, 250), Vector2(142, 44))
 
 func _safe_rect() -> Rect2:
-	var fallback := Rect2(24.0, 24.0, maxf(1.0, size.x - 48.0), maxf(1.0, size.y - 48.0))
-	var display_safe := DisplayServer.get_display_safe_area()
-	if display_safe.size.x <= 0 or display_safe.size.y <= 0:
-		return fallback
-	var candidate := Rect2(Vector2(display_safe.position), Vector2(display_safe.size))
-	if candidate.position.x >= -1.0 and candidate.position.y >= -1.0 and candidate.end.x <= size.x + 1.0 and candidate.end.y <= size.y + 1.0:
-		return candidate
-	return fallback
+	return RESPONSIVE.safe_rect(self)
 
 func _settings_center() -> Vector2:
 	var safe := _safe_rect()
-	return Vector2(safe.end.x - 42.0, safe.position.y + 42.0)
+	return Vector2(safe.end.x - 38.0, safe.position.y + 38.0)
+
+func _settings_hit_rect() -> Rect2:
+	var center := _settings_center()
+	return Rect2(center - Vector2(26.0, 26.0), Vector2(52.0, 52.0)).intersection(_safe_rect())
 
 func _reload_center() -> Vector2:
 	var safe := _safe_rect()
@@ -1309,6 +1395,7 @@ func _load_control_settings() -> void:
 		return
 	camera_sensitivity = _config_float(config, "sensitivity", "camera", camera_sensitivity, 0.3, 1.7)
 	ads_sensitivity = _config_float(config, "sensitivity", "ads", ads_sensitivity, 0.3, 1.7)
+	horizontal_fov = _config_float(config, VIEW_SECTION, "horizontal_fov", Duelist.DEFAULT_HORIZONTAL_FOV, Duelist.MIN_HORIZONTAL_FOV, Duelist.MAX_HORIZONTAL_FOV)
 	gyro_enabled = bool(config.get_value("controls", "gyro", gyro_enabled))
 	_aim_toggle = bool(config.get_value("controls", "aim_toggle", _aim_toggle))
 	var feedback_preferences := load_feedback_preferences(config, effects_enabled, haptics_enabled)
@@ -1372,6 +1459,8 @@ func _save_control_settings() -> void:
 	config.load(CONFIG_PATH)
 	config.set_value("sensitivity", "camera", camera_sensitivity)
 	config.set_value("sensitivity", "ads", ads_sensitivity)
+	config.set_value(VIEW_SECTION, "version", 1)
+	config.set_value(VIEW_SECTION, "horizontal_fov", horizontal_fov)
 	config.set_value("controls", "gyro", gyro_enabled)
 	config.set_value("controls", "aim_toggle", _aim_toggle)
 	config.set_value("controls", "stick_mode", "fixed" if _stick_mode == MobileTouchRouter.StickMode.FIXED else "floating")

@@ -66,8 +66,8 @@ func _initialize() -> void:
 	assert(is_equal_approx(local.health, initial_health))
 	assert(enemy.health == Duelist.HEALTH)
 	feedback._last_damage_feedback_msec = -10000
-	feedback.scatter_fired("enemy", Vector3(2.0, 1.0, 0.0), Vector3.ZERO, Duelist.Team.VOID, Duelist.Weapon.SCATTER, false, true, "local", Vector3(2.0, 1.0, 0.0), "scatter:1", local.global_position)
-	feedback.scatter_fired("enemy", Vector3(2.0, 1.0, 0.0), Vector3.ZERO, Duelist.Team.VOID, Duelist.Weapon.SCATTER, false, true, "local", Vector3(2.0, 1.0, 0.0), "scatter:1", local.global_position)
+	feedback.knife_struck("enemy", Vector3(2.0, 1.0, 0.0), Vector3.ZERO, Duelist.Team.VOID, false, true, "local", Vector3(2.0, 1.0, 0.0), "knife:1", local.global_position)
+	feedback.knife_struck("enemy", Vector3(2.0, 1.0, 0.0), Vector3.ZERO, Duelist.Team.VOID, false, true, "local", Vector3(2.0, 1.0, 0.0), "knife:1", local.global_position)
 	assert(damage_count[0] == 2)
 
 	# Reusing the event path remains a no-op in headless mode and never allocates voices.

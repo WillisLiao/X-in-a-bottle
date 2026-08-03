@@ -108,5 +108,36 @@ func _initialize() -> void:
 	assert(not hud._saved_layout_matches(legacy, config))
 	hud.free()
 
+	var settings_hud := DuelHud.new()
+	get_root().add_child(settings_hud)
+	settings_hud.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	settings_hud.size = Vector2(1280.0, 588.0)
+	await process_frame
+	var settings_touch := InputEventScreenTouch.new()
+	settings_touch.index = 11
+	settings_touch.position = settings_hud._settings_center()
+	settings_touch.pressed = true
+	settings_hud._gui_input(settings_touch)
+	assert(settings_hud._settings_open)
+	assert(settings_hud._settings_owner_touch == 11)
+	var owner_drag := InputEventScreenDrag.new()
+	owner_drag.index = 11
+	owner_drag.position = settings_hud._settings_center() + Vector2(20.0, 20.0)
+	settings_hud._gui_input(owner_drag)
+	assert(settings_hud._settings_open)
+	var owner_release := InputEventScreenTouch.new()
+	owner_release.index = 11
+	owner_release.position = owner_drag.position
+	owner_release.pressed = false
+	settings_hud._gui_input(owner_release)
+	assert(settings_hud._settings_open)
+	var outside_touch := InputEventScreenTouch.new()
+	outside_touch.index = 12
+	outside_touch.position = Vector2(20.0, 20.0)
+	outside_touch.pressed = true
+	settings_hud._gui_input(outside_touch)
+	assert(not settings_hud._settings_open)
+	settings_hud.free()
+
 	print("Riftline mobile touch exercise: PASS")
 	quit()

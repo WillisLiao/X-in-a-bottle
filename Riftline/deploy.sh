@@ -8,7 +8,7 @@ GODOT="/Applications/Godot.app/Contents/MacOS/Godot"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Keep Xcode's optimized assets outside res:// so a later Godot import never
 # mistakes Apple's CgBI PNGs for game assets.
-OUT="${TMPDIR:-/tmp}/riftline-ios"
+OUT="${TMPDIR:-/tmp}/whypeekin-ios"
 TEAM="45MSS5RXML"
 BUNDLE="com.lull.riftline"
 DEVICE="${1:-}"
@@ -27,15 +27,25 @@ fi
 
 rm -rf "$OUT"
 mkdir -p "$OUT"
-"$GODOT" --headless --path "$HERE" --export-debug "iOS" "$OUT/Riftline.xcodeproj"
+"$GODOT" --headless --path "$HERE" --export-debug "iOS" "$OUT/WhoYouPeekin.xcodeproj"
 
-xcodebuild -project "$OUT/Riftline.xcodeproj" -scheme Riftline \
+XCODE_PROJECT="$OUT/WhoYouPeekin.xcodeproj"
+SCHEME=$(find "$XCODE_PROJECT/xcshareddata/xcschemes" -maxdepth 1 -name '*.xcscheme' -print -quit 2>/dev/null | sed 's#.*/##; s#\.xcscheme$##')
+if [[ -z "$SCHEME" ]]; then
+  SCHEME=$(xcodebuild -list -project "$XCODE_PROJECT" 2>/dev/null | awk '/Schemes:/{getline; gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit}')
+fi
+if [[ -z "$SCHEME" ]]; then
+  echo "Could not discover the generated Xcode scheme." >&2
+  exit 1
+fi
+
+xcodebuild -project "$XCODE_PROJECT" -scheme "$SCHEME" \
   -sdk iphoneos -destination "platform=iOS,id=$DEVICE" \
   -configuration Debug -allowProvisioningUpdates \
   DEVELOPMENT_TEAM="$TEAM" PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE" \
   build
 
-APP=$(find ~/Library/Developer/Xcode/DerivedData -name "Riftline.app" \
+APP=$(find ~/Library/Developer/Xcode/DerivedData -name "${SCHEME}.app" \
   -path "*/Build/Products/Debug-iphoneos/*" -not -path "*Index.noindex*" \
   -newermt "-5 minutes" 2>/dev/null | head -1)
 
@@ -47,5 +57,5 @@ fi
 xcrun devicectl device install app --device "$DEVICE" "$APP"
 if ! xcrun devicectl device process launch --device "$DEVICE" "$BUNDLE"; then
   # Wireless installs remain valid when iOS locks before the final launch.
-  echo "Riftline installed. Unlock the iPhone and open Riftline from the Home Screen." >&2
+  echo "WhoYouPeekin installed. Unlock the iPhone and open WhoYouPeekin from the Home Screen." >&2
 fi
