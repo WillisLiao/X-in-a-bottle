@@ -1,6 +1,7 @@
 class_name DuelHud
 extends Control
 
+signal rift_link_requested
 
 const CONFIG_PATH := "user://riftline_controls.cfg"
 const LAYOUT_SECTION := "hud_layout_v1"
@@ -51,6 +52,9 @@ var _match_result_visible := false
 var _match_result_victory := false
 var _rematch_requested := false
 var _match_phase: MatchDirector.Phase = MatchDirector.Phase.OPENING
+var _connection_flow_active := false
+var _connection_message := ""
+var _connection_message_remaining := 0.0
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -61,6 +65,9 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	damage_flash = maxf(0.0, damage_flash - delta * 2.8)
+	_connection_message_remaining = maxf(0.0, _connection_message_remaining - delta)
+	if _connection_message_remaining <= 0.0:
+		_connection_message = ""
 	queue_redraw()
 
 func take_look_delta() -> Vector2:
@@ -118,8 +125,19 @@ func set_combat_input_enabled(enabled: bool) -> void:
 		_release_all_touch_ownership()
 	queue_redraw()
 
+func set_connection_flow_active(active: bool) -> void:
+	_connection_flow_active = active
+	if active:
+		_release_all_touch_ownership()
+	queue_redraw()
+
+func show_connection_message(message: String) -> void:
+	_connection_message = message
+	_connection_message_remaining = 2.8
+	queue_redraw()
+
 func can_drive_combat() -> bool:
-	return _combat_input_enabled and not _settings_open and not _layout_editor and not _match_result_visible
+	return _combat_input_enabled and not _connection_flow_active and not _settings_open and not _layout_editor and not _match_result_visible
 
 func set_match_phase(phase: MatchDirector.Phase) -> void:
 	_match_phase = phase
@@ -145,6 +163,8 @@ func show_damage(current_health: float) -> void:
 	damage_flash = 1.0
 
 func _gui_input(event: InputEvent) -> void:
+	if _connection_flow_active:
+		return
 	if _match_result_visible:
 		if event is InputEventScreenTouch and event.pressed and _rematch_rect().grow(12.0).has_point(event.position):
 			_rematch_requested = true
@@ -334,6 +354,12 @@ func _draw_gameplay_hud() -> void:
 		_draw_round_beat("READY", "HOLD THE LINE", friendly)
 	elif _match_phase == MatchDirector.Phase.INTERMISSION:
 		_draw_round_beat("LINES RESETTING", "FIND THE NEXT PEEK", enemy)
+	if not _connection_message.is_empty():
+		var message_rect := Rect2(Vector2(size.x * 0.5 - 170.0, _safe_rect().position.y + 52.0), Vector2(340.0, 46.0))
+		draw_rect(message_rect, Color("0b1730", 0.94))
+		draw_line(message_rect.position, message_rect.position + Vector2(message_rect.size.x, 0), enemy, 2.0)
+		var font := ThemeDB.fallback_font
+		draw_string(font, message_rect.get_center() + Vector2(-font.get_string_size(_connection_message, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x * 0.5, 5), _connection_message, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("f1f6ff"))
 
 func _draw_button(key: String, color: Color, active: bool) -> void:
 	var spec: Dictionary = _control_specs()[key]
@@ -435,6 +461,11 @@ func _handle_settings_touch(point: Vector2, pressed: bool) -> void:
 		return
 	if Rect2(panel.position + Vector2(24, 222), Vector2(210, 44)).has_point(point):
 		open_hud_layout()
+		return
+	if _rift_link_rect(panel).has_point(point):
+		_settings_open = false
+		_release_all_touch_ownership()
+		rift_link_requested.emit()
 
 func _draw_settings_panel(friendly: Color, enemy: Color) -> void:
 	var panel := _settings_panel()
@@ -451,6 +482,7 @@ func _draw_settings_panel(friendly: Color, enemy: Color) -> void:
 	_draw_setting_chip(Rect2(panel.position + Vector2(184, 168), Vector2(142, 44)), "GYRO %s" % ("ON" if gyro_enabled else "OFF"), Color("c292ff"), gyro_enabled)
 	_draw_setting_chip(Rect2(panel.position + Vector2(344, 168), Vector2(142, 44)), "QUICK SWAP", Color("c292ff"), true)
 	_draw_setting_chip(Rect2(panel.position + Vector2(24, 222), Vector2(210, 44)), "HUD LAYOUT", enemy, true)
+	_draw_setting_chip(_rift_link_rect(panel), "RIFT LINK", Color("71cfff"), false)
 	draw_string(font, panel.position + Vector2(24, panel.size.y - 22), "Tap outside to return", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("92a7c7"))
 
 func _draw_setting_slider(position: Vector2, width: float, value: float, color: Color) -> void:
@@ -616,6 +648,9 @@ func _editor_button_rect(button: String) -> Rect2:
 
 func _settings_panel() -> Rect2:
 	return Rect2(size * 0.5 - Vector2(260, 170), Vector2(520, 340))
+
+func _rift_link_rect(panel: Rect2) -> Rect2:
+	return Rect2(panel.position + Vector2(244, 222), Vector2(180, 44))
 
 func _safe_rect() -> Rect2:
 	var fallback := Rect2(24.0, 24.0, maxf(1.0, size.x - 48.0), maxf(1.0, size.y - 48.0))

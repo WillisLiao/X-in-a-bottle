@@ -107,6 +107,135 @@ func set_match_active(active: bool) -> void:
 		velocity.z = 0.0
 		_fire_remaining = 0.0
 
+func make_input_frame(sequence: int, move_input: Vector2, aiming: bool, firing: bool, wants_jump: bool, crouch_edge: bool, prone_edge: bool, weapon_switch_edge: bool) -> Dictionary:
+	return {
+		"sequence": sequence,
+		"move_x": clampf(move_input.x, -1.0, 1.0),
+		"move_y": clampf(move_input.y, -1.0, 1.0),
+		"yaw": rotation.y,
+		"pitch": head.rotation.x if head != null else 0.0,
+		"aim": aiming,
+		"fire": firing,
+		"jump": wants_jump,
+		"crouch": crouch_edge,
+		"prone": prone_edge,
+		"weapon_switch": weapon_switch_edge,
+	}
+
+func authoritative_state(server_tick: int, last_input_sequence: int) -> Dictionary:
+	return {
+		"tick": server_tick,
+		"last_input": last_input_sequence,
+		"position": global_position,
+		"velocity": velocity,
+		"yaw": rotation.y,
+		"pitch": head.rotation.x if head != null else 0.0,
+		"health": health,
+		"stance": int(stance),
+		"weapon": int(weapon),
+		"eliminated": eliminated,
+	}
+
+func apply_input_frame(frame: Dictionary, delta: float, simulate_combat: bool) -> void:
+	if frame.is_empty():
+		_simulate_motion(Vector2.ZERO, false, delta)
+		return
+	if eliminated or not match_active:
+		_simulate_motion(Vector2.ZERO, false, delta)
+		return
+	# Absolute look values make a frame replayable after a correction and remove peer-specific mouse deltas.
+	rotation.y = float(frame.get("yaw", rotation.y))
+	if head != null:
+		head.rotation.x = clampf(float(frame.get("pitch", head.rotation.x)), -1.05, 0.9)
+	if bool(frame.get("crouch", false)):
+		toggle_crouch()
+	if bool(frame.get("prone", false)):
+		toggle_prone()
+	if bool(frame.get("weapon_switch", false)):
+		switch_weapon()
+	_simulate_motion(Vector2(float(frame.get("move_x", 0.0)), float(frame.get("move_y", 0.0))), bool(frame.get("jump", false)), delta)
+	if bool(frame.get("fire", false)):
+		if simulate_combat:
+			fire_forward()
+
+func apply_presentation_state(state: Dictionary) -> void:
+	if state.is_empty():
+		return
+	# Presentation state is deliberately side-effect free: it cannot raycast, damage, score, or change phase.
+	global_position = state.get("position", global_position)
+	velocity = state.get("velocity", Vector3.ZERO)
+	rotation.y = float(state.get("yaw", rotation.y))
+	if head != null:
+		head.rotation.x = clampf(float(state.get("pitch", head.rotation.x)), -1.05, 0.9)
+	health = clampf(float(state.get("health", health)), 0.0, HEALTH)
+	var next_stance := clampi(int(state.get("stance", int(stance))), int(Stance.STAND), int(Stance.PRONE))
+	if stance != next_stance:
+		_apply_stance(next_stance as Stance)
+	var next_weapon := clampi(int(state.get("weapon", int(weapon))), int(Weapon.PULSE), int(Weapon.SCATTER))
+	if weapon != next_weapon:
+		weapon = next_weapon as Weapon
+		_update_weapon_mesh()
+	eliminated = bool(state.get("eliminated", eliminated))
+	visible = not eliminated
+	collision_layer = 0 if eliminated else 2
+
+func reconcile_from_authority(state: Dictionary, unacknowledged_frames: Array, delta: float) -> void:
+	if state.is_empty():
+		return
+	var server_position: Vector3 = state.get("position", global_position)
+	var position_error := global_position.distance_to(server_position)
+	var server_yaw := float(state.get("yaw", rotation.y))
+	var yaw_error := absf(angle_difference(rotation.y, server_yaw))
+	# Small errors are hidden by a short blend; large errors need an immediate authoritative reset.
+	var corrected := state.duplicate(true)
+	if position_error <= 0.8 and yaw_error <= 0.22:
+		corrected["position"] = global_position.lerp(server_position, clampf(delta * 10.0, 0.0, 1.0))
+		corrected["yaw"] = lerp_angle(rotation.y, server_yaw, clampf(delta * 10.0, 0.0, 1.0))
+	apply_presentation_state(corrected)
+	for frame in unacknowledged_frames:
+		if frame is Dictionary:
+			_apply_replay_frame(frame, delta)
+
+func _apply_replay_frame(frame: Dictionary, delta: float) -> void:
+	if eliminated or not match_active:
+		return
+	rotation.y = float(frame.get("yaw", rotation.y))
+	if head != null:
+		head.rotation.x = clampf(float(frame.get("pitch", head.rotation.x)), -1.05, 0.9)
+	if bool(frame.get("crouch", false)):
+		toggle_crouch()
+	if bool(frame.get("prone", false)):
+		toggle_prone()
+	if bool(frame.get("weapon_switch", false)):
+		# Replaying a correction must not invoke any combat effect.
+		weapon = Weapon.SCATTER if weapon == Weapon.PULSE else Weapon.PULSE
+		_update_weapon_mesh()
+	_simulate_motion(Vector2(float(frame.get("move_x", 0.0)), float(frame.get("move_y", 0.0))), bool(frame.get("jump", false)), delta)
+
+func _simulate_motion(move_input: Vector2, wants_jump: bool, delta: float) -> void:
+	_fire_remaining = maxf(0.0, _fire_remaining - delta)
+	if eliminated or not match_active:
+		velocity.x = 0.0
+		velocity.z = 0.0
+		return
+	var forward := -global_transform.basis.z
+	var right := global_transform.basis.x
+	forward.y = 0.0
+	right.y = 0.0
+	forward = forward.normalized()
+	right = right.normalized()
+	var desired := right * move_input.x + forward * -move_input.y
+	if desired.length_squared() > 1.0:
+		desired = desired.normalized()
+	var stance_speed := 1.0 if stance == Stance.STAND else 0.62 if stance == Stance.CROUCH else 0.3
+	velocity.x = move_toward(velocity.x, desired.x * WALK_SPEED * stance_speed, WALK_SPEED * 12.0 * delta)
+	velocity.z = move_toward(velocity.z, desired.z * WALK_SPEED * stance_speed, WALK_SPEED * 12.0 * delta)
+	if not is_on_floor():
+		velocity.y -= GRAVITY * delta
+	else:
+		velocity.y = JUMP_SPEED if wants_jump and stance != Stance.PRONE else -0.1
+	move_and_slide()
+
 func set_stance(next_stance: Stance) -> void:
 	if eliminated or not match_active or stance == next_stance:
 		return
@@ -148,27 +277,7 @@ func drive(move_input: Vector2, wants_fire: bool, wants_jump: bool, delta: float
 		velocity.x = 0.0
 		velocity.z = 0.0
 		return
-	_fire_remaining = maxf(0.0, _fire_remaining - delta)
-
-	var forward := -global_transform.basis.z
-	var right := global_transform.basis.x
-	forward.y = 0.0
-	right.y = 0.0
-	forward = forward.normalized()
-	right = right.normalized()
-	var desired := (right * move_input.x + forward * -move_input.y)
-	if desired.length_squared() > 1.0:
-		desired = desired.normalized()
-
-	var stance_speed := 1.0 if stance == Stance.STAND else 0.62 if stance == Stance.CROUCH else 0.3
-	velocity.x = move_toward(velocity.x, desired.x * WALK_SPEED * stance_speed, WALK_SPEED * 12.0 * delta)
-	velocity.z = move_toward(velocity.z, desired.z * WALK_SPEED * stance_speed, WALK_SPEED * 12.0 * delta)
-
-	if not is_on_floor():
-		velocity.y -= GRAVITY * delta
-	else:
-		velocity.y = JUMP_SPEED if wants_jump and stance != Stance.PRONE else -0.1
-	move_and_slide()
+	_simulate_motion(move_input, wants_jump, delta)
 
 	if wants_fire:
 		fire_forward()
@@ -198,6 +307,11 @@ func switch_weapon() -> void:
 	if eliminated or not match_active:
 		return
 	weapon = Weapon.SCATTER if weapon == Weapon.PULSE else Weapon.PULSE
+	_update_weapon_mesh()
+
+func _update_weapon_mesh() -> void:
+	if _weapon_mesh == null:
+		return
 	var color := Color("ffc05b") if weapon == Weapon.PULSE else Color("b479ff")
 	_weapon_mesh.material_override = _material(color, 0.65)
 
