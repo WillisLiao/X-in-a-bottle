@@ -47,6 +47,8 @@ func _initialize() -> void:
 	root.add_child(rendered)
 	rendered.configure(RiftlineMap.Id.CONCOURSE, true)
 	assert(_contains_mesh(rendered))
+	for landmark_name in ["SunDock", "VoidDock", "RelayBasin", "Windwalk", "ServiceRun", "StormHorizon"]:
+		assert(_find_named_node(rendered, landmark_name) != null)
 
 	assert(RiftlineNetwork.default_arena_for_team_size(1) == RiftlineMap.Id.DUEL_YARD)
 	assert(RiftlineNetwork.default_arena_for_team_size(3) == RiftlineMap.Id.CONCOURSE)
@@ -78,3 +80,12 @@ func _contains_mesh(node: Node) -> bool:
 		if _contains_mesh(child):
 			return true
 	return false
+
+func _find_named_node(node: Node, wanted_name: String) -> Node:
+	for child in node.get_children():
+		if child.name == wanted_name:
+			return child
+		var nested := _find_named_node(child, wanted_name)
+		if nested != null:
+			return nested
+	return null

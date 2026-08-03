@@ -15,8 +15,10 @@ void vertex() {
 }
 
 void fragment() {
-	// Low-frequency variation keeps broad surfaces from reading as sterile flat game-engine color.
-	float brush = sin(world_position.x * brush_scale) * sin(world_position.z * brush_scale * 1.37) * 0.045;
+	// Broad irregular variation keeps large surfaces tactile without a repeated checker field.
+	float broad_x = sin(world_position.x * brush_scale * 0.16 + world_position.z * 0.045);
+	float broad_z = cos(world_position.z * brush_scale * 0.11 - world_position.x * 0.035);
+	float brush = (broad_x * 0.65 + broad_z * 0.35) * 0.035;
 	ALBEDO = clamp(base_tint.rgb + vec3(brush), vec3(0.0), vec3(1.0));
 	ROUGHNESS = 0.82;
 	float rim = pow(1.0 - clamp(dot(normalize(NORMAL), normalize(VIEW)), 0.0, 1.0), 2.4);

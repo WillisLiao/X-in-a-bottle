@@ -50,8 +50,17 @@ func apply_preview(preview: String) -> void:
 func _gui_input(event: InputEvent) -> void:
 	if not visible:
 		return
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-		var point: Vector2 = event.position
+	var pressed := false
+	var point := Vector2.ZERO
+	if event is InputEventMouseButton:
+		pressed = event.button_index == MOUSE_BUTTON_LEFT and event.pressed
+		point = event.position
+	elif event is InputEventScreenTouch:
+		# iOS touch-to-mouse emulation is disabled so movement gestures cannot
+		# accidentally fire.  Handle the native tap event at the same seam.
+		pressed = event.pressed
+		point = event.position
+	if pressed:
 		for key in _button_rects.keys():
 			if _button_rects[key].has_point(point):
 				_accept(str(key))

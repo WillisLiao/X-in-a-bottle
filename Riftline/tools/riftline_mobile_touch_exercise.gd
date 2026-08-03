@@ -1,9 +1,50 @@
 extends SceneTree
 
+var _requested_drill := ""
+
 func _assert_vector_near(actual: Vector2, expected: Vector2, tolerance: float = 0.001) -> void:
 	assert(actual.distance_to(expected) <= tolerance)
 
+func _capture_drill(drill: String) -> void:
+	_requested_drill = drill
+
 func _initialize() -> void:
+	# The practice panel is the first touch surface on iOS.  Exercise the real
+	# Control input seam so a phone ScreenTouch cannot regress to the desktop
+	# mouse-only path.
+	var practice_panel := RiftlinePracticePanel.new()
+	get_root().add_child(practice_panel)
+	practice_panel.size = Vector2(1280.0, 588.0)
+	practice_panel.drill_requested.connect(_capture_drill)
+	practice_panel.show_entry("solo")
+	await process_frame
+	var enter_touch := InputEventScreenTouch.new()
+	enter_touch.index = 1
+	enter_touch.position = practice_panel._button_rects["enter"].get_center()
+	enter_touch.pressed = true
+	practice_panel._gui_input(enter_touch)
+	assert(_requested_drill == "solo")
+	assert(not practice_panel.visible)
+
+	_requested_drill = ""
+	practice_panel.show_entry("solo")
+	await process_frame
+	var choose_touch := InputEventScreenTouch.new()
+	choose_touch.index = 2
+	choose_touch.position = practice_panel._button_rects["choose"].get_center()
+	choose_touch.pressed = true
+	practice_panel._gui_input(choose_touch)
+	assert(practice_panel._board)
+	await process_frame
+	var wing_touch := InputEventScreenTouch.new()
+	wing_touch.index = 3
+	wing_touch.position = practice_panel._button_rects["wing"].get_center()
+	wing_touch.pressed = true
+	practice_panel._gui_input(wing_touch)
+	assert(_requested_drill == "wing")
+	assert(not practice_panel.visible)
+	practice_panel.free()
+
 	var router := MobileTouchRouter.new()
 	var safe := Rect2(20.0, 30.0, 980.0, 500.0)
 	var left := Rect2(safe.position, Vector2(safe.size.x * 0.5, safe.size.y))

@@ -104,9 +104,13 @@ func _ready() -> void:
 		_enter_lan_runtime(true, false)
 	else:
 		_build_environment()
-		_capture_fixture_only = not _squad_preview.is_empty() or not _arena_preview.is_empty() or not _feedback_preview.is_empty() or not _rift_link_preview.is_empty() or not _practice_preview.is_empty() or not _relay_preview.is_empty()
+		_capture_fixture_only = _capture_settings or _capture_hud_layout or not _squad_preview.is_empty() or not _arena_preview.is_empty() or not _feedback_preview.is_empty() or not _rift_link_preview.is_empty() or not _practice_preview.is_empty() or not _relay_preview.is_empty()
 		var show_practice := not command_line_lan and _should_show_practice_panel()
 		_build_hud()
+		if _capture_settings:
+			hud.open_settings()
+		elif _capture_hud_layout:
+			hud.open_hud_layout()
 		_build_first_match_coach()
 		_build_rift_link()
 		if show_practice:
@@ -220,10 +224,10 @@ func _unhandled_input(event: InputEvent) -> void:
 func _build_environment() -> void:
 	var environment := Environment.new()
 	environment.background_mode = Environment.BG_COLOR
-	environment.background_color = Color("102346")
+	environment.background_color = Color("0d1b30")
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	environment.ambient_light_color = Color("8ea8cf")
-	environment.ambient_light_energy = 0.48
+	environment.ambient_light_color = Color("8ea5b3")
+	environment.ambient_light_energy = 0.56
 	environment.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	var world_environment := WorldEnvironment.new()
 	world_environment.environment = environment
@@ -231,23 +235,23 @@ func _build_environment() -> void:
 
 	var key := DirectionalLight3D.new()
 	key.rotation_degrees = Vector3(-56, -28, 0)
-	key.light_color = Color("ffe0b5")
-	key.light_energy = 1.35
+	key.light_color = Color("ffe0bd")
+	key.light_energy = 1.18
 	key.shadow_enabled = true
 	add_child(key)
 
 	var rim := OmniLight3D.new()
 	rim.position = Vector3(10, 5, -4)
-	rim.light_color = Color("ec6a4c")
-	rim.light_energy = 2.2
-	rim.omni_range = 17.0
+	rim.light_color = Color("c8795e")
+	rim.light_energy = 1.25
+	rim.omni_range = 22.0
 	add_child(rim)
 
 	var fill := OmniLight3D.new()
 	fill.position = Vector3(-10, 5, 4)
-	fill.light_color = Color("72b9ea")
-	fill.light_energy = 2.0
-	fill.omni_range = 17.0
+	fill.light_color = Color("78a9c7")
+	fill.light_energy = 1.15
+	fill.omni_range = 24.0
 	add_child(fill)
 
 func _build_arena() -> void:
@@ -1832,6 +1836,8 @@ func _read_capture_arguments() -> void:
 			_squad_preview = "tactics"
 		elif argument.begins_with("--arena-preview="):
 			_arena_preview = argument.trim_prefix("--arena-preview=")
+			if _arena_preview in ["sun-dock", "relay-basin", "windwalk", "service-run", "void-dock", "carrier-gate", "first-person", "overview", "sun-bay", "void-bay"] and _offline_squad_size < 3:
+				_offline_squad_size = 3
 		elif argument.begins_with("--feedback-preview="):
 			_feedback_preview = argument.trim_prefix("--feedback-preview=")
 			if _feedback_preview == "squad-motion":
@@ -1889,6 +1895,14 @@ func _apply_arena_preview() -> void:
 	var camera_position := Vector3(0.0, 31.0, 27.0)
 	var look_target := Vector3.ZERO
 	match _arena_preview:
+		"overview":
+			camera_position = Vector3(0.0, 31.0, 27.0)
+			look_target = Vector3(0.0, 0.0, 0.0)
+		"first-person":
+			camera_position = Vector3(0.0, 1.65, 18.0)
+			look_target = Vector3(0.0, 1.45, 0.0)
+			_local_duelist.position = Vector3(0.0, 0.1, 18.0)
+			_local_duelist.rotation.y = -PI * 0.5
 		"windwalk":
 			camera_position = Vector3(-18.0, 10.0, 40.0)
 			look_target = Vector3(-8.0, 0.5, 24.0)
@@ -1898,10 +1912,10 @@ func _apply_arena_preview() -> void:
 		"service-run":
 			camera_position = Vector3(18.0, 10.0, -40.0)
 			look_target = Vector3(8.0, 0.6, -24.0)
-		"sun-bay":
+		"sun-dock", "sun-bay":
 			camera_position = Vector3(-51.0, 5.5, 10.0)
 			look_target = Vector3(-43.0, 1.2, 0.0)
-		"void-bay":
+		"void-dock", "void-bay":
 			camera_position = Vector3(51.0, 5.5, -10.0)
 			look_target = Vector3(43.0, 1.2, 0.0)
 		"carrier-gate":

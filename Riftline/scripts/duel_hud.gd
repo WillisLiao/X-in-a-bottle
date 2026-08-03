@@ -576,7 +576,7 @@ func _draw_gameplay_hud() -> void:
 	if _weapon == Duelist.Weapon.PULSE:
 		_draw_button_fixed(_reload_center(), _reload_radius(), Color("e6a25b"), reload_remaining > 0.0, "reload")
 	_draw_weapon_indicator(friendly)
-	_draw_button_fixed(_settings_center(), 24.0, enemy, _settings_open, "SET")
+	_draw_button_fixed(_settings_center(), 24.0, enemy, _settings_open, "settings")
 	if _touch_preview in ["two-thumb", "four-finger"]:
 		_draw_button_preview("left_fire", friendly)
 		_draw_button_preview("right_fire", friendly)
@@ -711,9 +711,11 @@ func _draw_button(key: String, color: Color, active: bool) -> void:
 	_draw_button_fixed(_control_center(key), _control_radius(key), color, active, key, _control_opacity(key))
 
 func _draw_button_fixed(center: Vector2, radius: float, color: Color, active: bool, label: String, opacity: float = 1.0) -> void:
-	draw_circle(center, radius, Color("071126", 0.58 * opacity))
-	draw_arc(center, radius, 0.0, TAU, 32, Color(color, (0.95 if active else 0.6) * opacity), 2.5 if active else 1.8)
-	if _control_specs().has(label) or label == "reload":
+	var fill_alpha := 0.56 if active else 0.20
+	var outline_alpha := 0.95 if active else 0.34
+	draw_circle(center, radius, Color("071126", fill_alpha * opacity))
+	draw_arc(center, radius, 0.0, TAU, 32, Color(color, outline_alpha * opacity), 2.5 if active else 1.35)
+	if _control_specs().has(label) or label == "reload" or label == "settings":
 		_draw_control_glyph(center, radius, color, label, active, opacity)
 		return
 	var font := ThemeDB.fallback_font
@@ -722,8 +724,8 @@ func _draw_button_fixed(center: Vector2, radius: float, color: Color, active: bo
 	draw_string(font, center + Vector2(-text_width * 0.5, font_size * 0.36), label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(color, 0.98 * opacity))
 
 func _draw_control_glyph(center: Vector2, radius: float, color: Color, key: String, active: bool, opacity: float) -> void:
-	var glyph_color := Color(color, (0.98 if active else 0.86) * opacity)
-	var weight := 3.0 if active else 2.2
+	var glyph_color := Color(color, (0.98 if active else 0.58) * opacity)
+	var weight := 3.0 if active else 1.8
 	match key:
 		"left_fire", "right_fire":
 			draw_circle(center, radius * 0.18, glyph_color)
@@ -760,6 +762,14 @@ func _draw_control_glyph(center: Vector2, radius: float, color: Color, key: Stri
 				_draw_reload_sweep(center, radius * 0.58, glyph_color)
 			else:
 				_draw_reload_icon(center, radius * 0.58, glyph_color)
+		"settings":
+			for index in 8:
+				var angle := TAU * float(index) / 8.0
+				var spoke_start := center + Vector2.from_angle(angle) * radius * 0.24
+				var spoke_end := center + Vector2.from_angle(angle) * radius * 0.50
+				draw_line(spoke_start, spoke_end, glyph_color, weight)
+			draw_circle(center, radius * 0.28, glyph_color, false, weight)
+			draw_circle(center, radius * 0.10, Color("071126", 0.72 * opacity))
 
 func reload_indicator_animates() -> bool:
 	return reload_remaining > 0.0
