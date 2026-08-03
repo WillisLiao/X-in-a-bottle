@@ -9,10 +9,14 @@ signal input_received(peer_id: int, frame: Dictionary)
 signal snapshot_received(snapshot: Dictionary)
 signal reliable_event_received(event: Dictionary, sender_id: int)
 signal team_assigned(team: int)
+signal actor_assigned(actor_id: String, team: int)
+signal roster_received(records: Array[Dictionary])
 
 const PROJECT_ID := "riftline-lan"
-const PROTOCOL_VERSION := 1
-const MAX_PEERS := 2
+const PROTOCOL_VERSION := 2
+const APP_HOST_DUEL_REMOTE_SLOTS := 1
+const APP_HOST_SQUAD_REMOTE_SLOTS := 9
+const DEDICATED_REMOTE_SLOTS := 10
 const ENET_PORT := 34711
 const DISCOVERY_PORT := 34712
 const INPUT_CHANNEL := 1
@@ -34,7 +38,10 @@ var _discovered_address := ""
 var _discovered_marker := ""
 var _last_input_sequence: Dictionary = {}
 var _last_input_view: Dictionary = {}
-var _peer_team: Dictionary = {}
+var roster: RiftlineRoster
+var team_size := 1
+var _configuration_valid := true
+var local_actor_id := ""
 var _session_marker := ""
 var session_role: SessionRole = SessionRole.OFFLINE
 var local_team := -1
@@ -50,6 +57,8 @@ var _sim_reliable_release_after := 0.0
 
 func _ready() -> void:
 	_read_command_line_options()
+	roster = RiftlineRoster.new()
+	roster.configure(team_size, session_role == SessionRole.DEDICATED_SERVER, false)
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	multiplayer.connected_to_server.connect(_on_connected_to_server)
@@ -69,14 +78,22 @@ func _process(delta: float) -> void:
 
 func host_lan() -> Error:
 	stop()
+	if not _configuration_valid:
+		session_status.emit("LINK ERROR")
+		return ERR_INVALID_PARAMETER
 	session_role = SessionRole.APP_HOST
+	_configure_roster(false)
+	var remote_slots := APP_HOST_SQUAD_REMOTE_SLOTS if team_size > 1 else APP_HOST_DUEL_REMOTE_SLOTS
 	_peer = ENetMultiplayerPeer.new()
-	var error := _peer.create_server(ENET_PORT, MAX_PEERS)
+	var error := _peer.create_server(ENET_PORT, remote_slots)
 	if error != OK:
 		_peer = null
 		session_status.emit("LINK ERROR")
 		return error
 	multiplayer.multiplayer_peer = _peer
+	var host_record := roster.add_host()
+	local_actor_id = str(host_record.get("actor_id", ""))
+	local_team = int(host_record.get("team", -1))
 	_session_marker = _new_session_marker()
 	_start_advertising()
 	session_status.emit("WAITING FOR RIVAL")
@@ -107,7 +124,8 @@ func stop() -> void:
 	_peer = null
 	_last_input_sequence.clear()
 	_last_input_view.clear()
-	_peer_team.clear()
+	_configure_roster(session_role == SessionRole.DEDICATED_SERVER)
+	local_actor_id = ""
 	local_team = -1
 	_discovered_address = ""
 	_discovered_marker = ""
@@ -195,6 +213,7 @@ func _advertise_session() -> void:
 		"version": PROTOCOL_VERSION,
 		"marker": _session_marker,
 		"kind": "dedicated" if session_role == SessionRole.DEDICATED_SERVER else "app_host",
+		"mode": "squad" if team_size > 1 else "duel",
 		"issued": Time.get_ticks_msec(),
 	}
 	_discovery_socket.put_packet(JSON.stringify(packet).to_utf8_buffer())
@@ -218,16 +237,18 @@ func _poll_discovery() -> void:
 			continue
 		_discovered_marker = marker
 		_discovered_address = _discovery_socket.get_packet_ip()
-		host_discovered.emit({"marker": marker, "address": _discovered_address, "label": "RIFT FOUND"})
+		host_discovered.emit({"marker": marker, "address": _discovered_address, "mode": str(packet.get("mode", "duel")), "label": "RIFT FOUND"})
 		session_status.emit("RIFT FOUND")
 
 func _on_peer_connected(peer_id: int) -> void:
 	if multiplayer.is_server():
-		var assigned := _assign_peer(peer_id)
-		if assigned < 0:
+		var assigned := roster.assign_peer(peer_id)
+		if assigned.is_empty():
 			_peer.disconnect_peer(peer_id, true)
 			session_status.emit("RIFT FULL")
 			return
+		_send_server_event(peer_id, {"type": "assigned_actor", "actor_id": assigned.actor_id, "team": int(assigned.team)})
+		_broadcast_roster()
 		_stop_discovery()
 		session_status.emit("RIVAL LINKED")
 	peer_joined.emit(peer_id)
@@ -235,7 +256,9 @@ func _on_peer_connected(peer_id: int) -> void:
 func _on_peer_disconnected(peer_id: int) -> void:
 	_last_input_sequence.erase(peer_id)
 	_last_input_view.erase(peer_id)
-	_peer_team.erase(peer_id)
+	if multiplayer.is_server():
+		roster.remove_peer(peer_id)
+		_broadcast_roster()
 	peer_left.emit(peer_id)
 	session_status.emit("LINK LOST")
 
@@ -284,9 +307,15 @@ func _rpc_event(event: Dictionary) -> void:
 	if multiplayer.is_server():
 		return
 	reliable_event_received.emit(event, 1)
-	if str(event.get("type", "")) == "assigned_team":
+	var event_type := str(event.get("type", ""))
+	if event_type == "assigned_actor":
+		local_actor_id = str(event.get("actor_id", ""))
 		local_team = int(event.get("team", -1))
+		actor_assigned.emit(local_actor_id, local_team)
 		team_assigned.emit(local_team)
+	elif event_type == "roster":
+		var public_records: Array[Dictionary] = _validated_public_records(event.get("records", []))
+		roster_received.emit(public_records)
 
 @rpc("any_peer", "reliable")
 func _rpc_client_event(event: Dictionary) -> void:
@@ -296,7 +325,14 @@ func _rpc_client_event(event: Dictionary) -> void:
 	reliable_event_received.emit(event, sender)
 
 func peer_team(peer_id: int) -> int:
-	return int(_peer_team.get(peer_id, -1))
+	if roster == null:
+		return -1
+	return int(roster.actor_for_peer(peer_id).get("team", -1))
+
+func peer_actor_id(peer_id: int) -> String:
+	if roster == null:
+		return ""
+	return str(roster.actor_for_peer(peer_id).get("actor_id", ""))
 
 func is_authority_server() -> bool:
 	return multiplayer.multiplayer_peer != null and multiplayer.is_server()
@@ -306,9 +342,13 @@ func is_dedicated_server() -> bool:
 
 func _start_dedicated_server() -> Error:
 	stop()
+	if not _configuration_valid:
+		session_status.emit("LINK ERROR")
+		return ERR_INVALID_PARAMETER
 	session_role = SessionRole.DEDICATED_SERVER
+	_configure_roster(true)
 	_peer = ENetMultiplayerPeer.new()
-	var error := _peer.create_server(ENET_PORT, MAX_PEERS)
+	var error := _peer.create_server(ENET_PORT, DEDICATED_REMOTE_SLOTS)
 	if error != OK:
 		_peer = null
 		session_status.emit("LINK ERROR")
@@ -318,23 +358,6 @@ func _start_dedicated_server() -> Error:
 	_start_advertising()
 	print("Riftline dedicated authority listening on LAN")
 	return OK
-
-func _assign_peer(peer_id: int) -> int:
-	if _peer_team.has(peer_id):
-		return int(_peer_team[peer_id])
-	var max_players := 2 if session_role == SessionRole.DEDICATED_SERVER else 1
-	if _peer_team.size() >= max_players:
-		return -1
-	var assigned := DuelistTeamVoid
-	if session_role == SessionRole.DEDICATED_SERVER:
-		assigned = DuelistTeamSun if not _peer_team.values().has(DuelistTeamSun) else DuelistTeamVoid
-	_peer_team[peer_id] = assigned
-	_send_server_event(peer_id, {"type": "assigned_team", "team": assigned})
-	print("Riftline peer assigned %s" % ("Sun" if assigned == DuelistTeamSun else "Void"))
-	return assigned
-
-const DuelistTeamSun := 0
-const DuelistTeamVoid := 1
 
 func _validate_input(peer_id: int, frame: Dictionary) -> Dictionary:
 	if not frame.has("sequence") or typeof(frame.sequence) != TYPE_INT:
@@ -379,6 +402,16 @@ func _read_command_line_options() -> void:
 			session_role = SessionRole.APP_HOST
 		elif argument.begins_with("--lan-join="):
 			session_role = SessionRole.JOINING_CLIENT
+		elif argument.begins_with("--team-size="):
+			var raw_size := argument.trim_prefix("--team-size=")
+			if not raw_size.is_valid_int():
+				_configuration_valid = false
+				continue
+			var requested_size := raw_size.to_int()
+			if requested_size < RiftlineRoster.MIN_TEAM_SIZE or requested_size > RiftlineRoster.MAX_TEAM_SIZE:
+				_configuration_valid = false
+				continue
+			team_size = requested_size
 		elif argument.begins_with("--net-sim-latency-ms="):
 			_sim_latency = maxf(0.0, argument.trim_prefix("--net-sim-latency-ms=").to_float() / 1000.0)
 		elif argument.begins_with("--net-sim-jitter-ms="):
@@ -446,6 +479,31 @@ func _send_server_event(peer_id: int, event: Dictionary) -> void:
 	if multiplayer.multiplayer_peer == null or not multiplayer.is_server():
 		return
 	_queue_or_send({"kind": "event_to_peer", "peer_id": peer_id, "event": event}, true)
+
+func _broadcast_roster() -> void:
+	if multiplayer.multiplayer_peer == null or not multiplayer.is_server():
+		return
+	_queue_or_send({"kind": "event", "event": {"type": "roster", "records": roster.public_records()}}, true)
+
+func _configure_roster(is_dedicated: bool) -> void:
+	roster = RiftlineRoster.new()
+	roster.configure(team_size, is_dedicated, false)
+
+func _validated_public_records(value: Variant) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	if not value is Array:
+		return result
+	for candidate in value:
+		if not candidate is Dictionary:
+			continue
+		if candidate.has("peer_id") or candidate.has("address") or candidate.has("hostname"):
+			continue
+		var actor_id := str(candidate.get("actor_id", ""))
+		var team := int(candidate.get("team", -1))
+		if actor_id.is_empty() or team < Duelist.Team.SUN or team > Duelist.Team.VOID:
+			continue
+		result.append({"actor_id": actor_id, "team": team, "human": bool(candidate.get("human", false))})
+	return result
 
 func _new_session_marker() -> String:
 	return "%s-%s" % [Time.get_ticks_msec(), randi()]
