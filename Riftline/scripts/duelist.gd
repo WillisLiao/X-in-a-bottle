@@ -19,10 +19,13 @@ const FIRE_RANGE := 48.0
 const FIRE_DAMAGE := 23.0
 const GRAVITY := 26.0
 const JUMP_SPEED := 9.3
+const CARRY_SPEED_MULTIPLIER := 0.88
 
 var team: Team = Team.SUN
+var actor_id := ""
 var health := HEALTH
 var eliminated := false
+var carrying_seed := false
 var stance: Stance = Stance.STAND
 var weapon: Weapon = Weapon.PULSE
 var match_active := false
@@ -92,6 +95,18 @@ func build(assigned_team: Team, local_camera: bool, render_visuals: bool = true,
 			_build_character_silhouette()
 			_build_world_weapon()
 		_rebuild_weapon_models()
+
+func set_actor_id(next_actor_id: String) -> void:
+	actor_id = next_actor_id
+
+func set_carrying_seed(carrying: bool) -> void:
+	carrying_seed = carrying and not eliminated
+
+func is_carrying_seed() -> bool:
+	return carrying_seed and not eliminated
+
+func movement_speed_multiplier() -> float:
+	return CARRY_SPEED_MULTIPLIER if is_carrying_seed() else 1.0
 
 func _process(delta: float) -> void:
 	if not _render_visuals:
@@ -214,6 +229,7 @@ func authoritative_state(server_tick: int, last_input_sequence: int) -> Dictiona
 		"stance": int(stance),
 		"weapon": int(weapon),
 		"eliminated": eliminated,
+		"carrying_seed": is_carrying_seed(),
 	}
 
 func apply_input_frame(frame: Dictionary, delta: float, simulate_combat: bool) -> void:
@@ -272,6 +288,7 @@ func apply_presentation_state(state: Dictionary) -> void:
 	if weapon != next_weapon:
 		set_weapon_presentation(next_weapon as Weapon)
 	eliminated = bool(state.get("eliminated", eliminated))
+	set_carrying_seed(bool(state.get("carrying_seed", carrying_seed)))
 	visible = not eliminated
 	collision_layer = 0 if eliminated or not _authoritative_collision else 2
 
@@ -315,8 +332,9 @@ func _simulate_motion(move_input: Vector2, wants_jump: bool, delta: float) -> vo
 	if desired.length_squared() > 1.0:
 		desired = desired.normalized()
 	var stance_speed := 1.0 if stance == Stance.STAND else 0.62 if stance == Stance.CROUCH else 0.3
-	velocity.x = move_toward(velocity.x, desired.x * WALK_SPEED * stance_speed, WALK_SPEED * 12.0 * delta)
-	velocity.z = move_toward(velocity.z, desired.z * WALK_SPEED * stance_speed, WALK_SPEED * 12.0 * delta)
+	var speed := WALK_SPEED * stance_speed * movement_speed_multiplier()
+	velocity.x = move_toward(velocity.x, desired.x * speed, WALK_SPEED * 12.0 * delta)
+	velocity.z = move_toward(velocity.z, desired.z * speed, WALK_SPEED * 12.0 * delta)
 	if not is_on_floor():
 		velocity.y -= GRAVITY * delta
 	else:
@@ -412,6 +430,7 @@ func respawn_at(point: Vector3) -> void:
 	velocity = Vector3.ZERO
 	health = HEALTH
 	eliminated = false
+	carrying_seed = false
 	visible = true
 	collision_layer = 2
 	_aiming = false

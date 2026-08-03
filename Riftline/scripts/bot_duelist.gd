@@ -12,6 +12,14 @@ var _last_target_velocity := Vector3.ZERO
 var _aim_offset := Vector3.ZERO
 var _move_goal := Vector2.ZERO
 var _random := RandomNumberGenerator.new()
+var _linebreak_seed_state: Dictionary = {}
+var _friendly_gate := Vector3.ZERO
+var _enemy_gate := Vector3.ZERO
+
+func set_linebreak_context(seed_state: Dictionary, friendly_gate: Vector3, enemy_gate: Vector3) -> void:
+	_linebreak_seed_state = seed_state.duplicate(true)
+	_friendly_gate = friendly_gate
+	_enemy_gate = enemy_gate
 
 func _ready() -> void:
 	_random.randomize()
@@ -57,7 +65,8 @@ func _physics_process(delta: float) -> void:
 		_reaction_remaining = 0.0
 		_tracking_remaining = 0.0
 	if _decision_remaining <= 0.0:
-		_decide_movement(distance, has_los)
+		if not _decide_linebreak_movement(distance, has_los):
+			_decide_movement(distance, has_los)
 		_decision_remaining = 0.16
 	set_combat_pose(_target_locked and _tracking_remaining <= 0.0, delta)
 	drive(_move_goal, false, false, delta)
@@ -71,6 +80,32 @@ func _physics_process(delta: float) -> void:
 	fire_at(target.global_position + Vector3.UP * 0.98 + _aim_offset)
 	_shot_cadence_remaining = 0.18
 	_tracking_remaining = 0.1
+
+func _decide_linebreak_movement(distance: float, has_los: bool) -> bool:
+	if _linebreak_seed_state.is_empty():
+		return false
+	var seed_state := int(_linebreak_seed_state.get("state", int(RiftSeed.State.HOME)))
+	var carrier_id := str(_linebreak_seed_state.get("carrier_id", ""))
+	if is_carrying_seed():
+		_move_goal = _world_move_goal(_enemy_gate)
+		return true
+	if not carrier_id.is_empty() and target != null and carrier_id == target.actor_id:
+		_move_goal = _world_move_goal(target.global_position)
+		return true
+	if seed_state == RiftSeed.State.HOME or seed_state == RiftSeed.State.DROPPED:
+		var seed_position: Vector3 = _linebreak_seed_state.get("position", global_position)
+		if not has_los or distance > 9.0:
+			_move_goal = _world_move_goal(seed_position)
+			return true
+	return false
+
+func _world_move_goal(goal: Vector3) -> Vector2:
+	var direction := goal - global_position
+	direction.y = 0.0
+	if direction.length_squared() < 0.4:
+		return Vector2.ZERO
+	var local_direction := global_transform.basis.inverse() * direction.normalized()
+	return Vector2(local_direction.x, local_direction.z)
 
 func _update_target_lock(delta: float) -> void:
 	var current_velocity := target.velocity

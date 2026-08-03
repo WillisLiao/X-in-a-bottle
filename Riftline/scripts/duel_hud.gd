@@ -36,6 +36,11 @@ var _switch_touch := -1
 var _left_position := Vector2.ZERO
 var _sun_score := 0
 var _void_score := 0
+var _objective_state: Dictionary = {"state": int(RiftSeed.State.HOME), "carrier_id": "", "carrier_team": -1}
+var _objective_message := ""
+var _objective_message_remaining := 0.0
+var _score_pulse := 0.0
+var _score_pulse_team := -1
 var _stance := Duelist.Stance.STAND
 var _weapon := Duelist.Weapon.PULSE
 var _settings_open := false
@@ -52,7 +57,7 @@ var _combat_input_enabled := true
 var _match_result_visible := false
 var _match_result_victory := false
 var _rematch_requested := false
-var _match_phase: MatchDirector.Phase = MatchDirector.Phase.OPENING
+var _match_phase: LinebreakMatch.Phase = LinebreakMatch.Phase.OPENING
 var _connection_flow_active := false
 var _connection_message := ""
 var _connection_message_remaining := 0.0
@@ -67,6 +72,10 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	damage_flash = maxf(0.0, damage_flash - delta * 2.8)
 	hit_confirm = maxf(0.0, hit_confirm - delta * 6.5)
+	_objective_message_remaining = maxf(0.0, _objective_message_remaining - delta)
+	_score_pulse = maxf(0.0, _score_pulse - delta * 2.8)
+	if _objective_message_remaining <= 0.0:
+		_objective_message = ""
 	_connection_message_remaining = maxf(0.0, _connection_message_remaining - delta)
 	if _connection_message_remaining <= 0.0:
 		_connection_message = ""
@@ -98,8 +107,33 @@ func take_weapon_switch() -> bool:
 	return requested
 
 func set_score(sun: int, void_score: int) -> void:
-	_sun_score = clampi(sun, 0, 5)
-	_void_score = clampi(void_score, 0, 5)
+	_sun_score = clampi(sun, 0, 3)
+	_void_score = clampi(void_score, 0, 3)
+	queue_redraw()
+
+func set_objective_state(state: Dictionary) -> void:
+	if state.has("objective") and state.get("objective") is Dictionary:
+		_objective_state = state.get("objective")
+	else:
+		_objective_state = state.duplicate(true)
+	queue_redraw()
+
+func show_objective_event(event_type: String, _state: Dictionary) -> void:
+	match event_type:
+		"objective_claimed":
+			_objective_message = "SEED CLAIMED"
+		"objective_dropped":
+			_objective_message = "SEED DROPPED"
+		"objective_returned":
+			_objective_message = "SEED RETURNS"
+		"objective_delivered":
+			_objective_message = "LINE BREACHED"
+			_score_pulse = 1.0
+			_score_pulse_team = int(_state.get("scoring_team", -1))
+		_:
+			return
+	_objective_message_remaining = 1.4
+	queue_redraw()
 
 func set_stance(stance: Duelist.Stance) -> void:
 	_stance = stance
@@ -141,9 +175,9 @@ func show_connection_message(message: String) -> void:
 func can_drive_combat() -> bool:
 	return _combat_input_enabled and not _connection_flow_active and not _settings_open and not _layout_editor and not _match_result_visible
 
-func set_match_phase(phase: MatchDirector.Phase) -> void:
+func set_match_phase(phase: LinebreakMatch.Phase) -> void:
 	_match_phase = phase
-	if phase != MatchDirector.Phase.FINISHED:
+	if phase != LinebreakMatch.Phase.FINISHED:
 		_match_result_visible = false
 		_rematch_requested = false
 	queue_redraw()
@@ -356,24 +390,52 @@ func _draw_gameplay_hud() -> void:
 	var health_width := 210.0
 	draw_rect(Rect2(safe.position + Vector2(10, 10), Vector2(health_width, 8)), Color("03101f", 0.72))
 	draw_rect(Rect2(safe.position + Vector2(10, 10), Vector2(health_width * health / 100.0, 8)), Color(friendly, 0.92))
-	for score in _sun_score:
-		draw_circle(Vector2(size.x * 0.5 - 19.0 - score * 13.0, safe.position.y + 18), 4.0, friendly)
-	for score in _void_score:
-		draw_circle(Vector2(size.x * 0.5 + 19.0 + score * 13.0, safe.position.y + 18), 4.0, enemy)
+	_draw_objective_strip(safe, friendly, enemy)
 	if damage_flash > 0.0:
 		draw_rect(Rect2(Vector2.ZERO, size), Color(1.0, 0.18, 0.1, damage_flash * 0.16), false, 22.0)
 	if _match_result_visible:
 		_draw_match_result()
-	elif _match_phase == MatchDirector.Phase.OPENING:
-		_draw_round_beat("READY", "HOLD THE LINE", friendly)
-	elif _match_phase == MatchDirector.Phase.INTERMISSION:
-		_draw_round_beat("LINES RESETTING", "FIND THE NEXT PEEK", enemy)
+	elif _match_phase == LinebreakMatch.Phase.OPENING:
+		_draw_round_beat("BREAK THE LINE", "TAKE THE SEED THROUGH THEIR RIFT", friendly)
+	elif _match_phase == LinebreakMatch.Phase.INTERMISSION:
+		_draw_round_beat("LINE BREACHED", "THE SEED RETURNS TO CENTER", enemy)
 	if not _connection_message.is_empty():
 		var message_rect := Rect2(Vector2(size.x * 0.5 - 170.0, _safe_rect().position.y + 52.0), Vector2(340.0, 46.0))
 		draw_rect(message_rect, Color("0b1730", 0.94))
 		draw_line(message_rect.position, message_rect.position + Vector2(message_rect.size.x, 0), enemy, 2.0)
 		var font := ThemeDB.fallback_font
 		draw_string(font, message_rect.get_center() + Vector2(-font.get_string_size(_connection_message, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x * 0.5, 5), _connection_message, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("f1f6ff"))
+	if not _objective_message.is_empty():
+		var objective_rect := Rect2(Vector2(size.x * 0.5 - 110.0, safe.position.y + 52.0), Vector2(220.0, 32.0))
+		draw_rect(objective_rect, Color("071126", 0.82))
+		draw_line(objective_rect.position, objective_rect.position + Vector2(objective_rect.size.x, 0), friendly, 1.5)
+		var objective_font := ThemeDB.fallback_font
+		var objective_width := objective_font.get_string_size(_objective_message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
+		draw_string(objective_font, objective_rect.get_center() + Vector2(-objective_width * 0.5, 4), _objective_message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f1f6ff"))
+
+func _draw_objective_strip(safe: Rect2, friendly: Color, enemy: Color) -> void:
+	var center := Vector2(size.x * 0.5, safe.position.y + 18.0)
+	for index in 3:
+		_draw_seed_glyph(center + Vector2(-42.0 - index * 16.0, 0.0), friendly, index < _sun_score)
+		_draw_seed_glyph(center + Vector2(42.0 + index * 16.0, 0.0), enemy, index < _void_score)
+	if _score_pulse > 0.0 and _score_pulse_team >= 0:
+		var score := _sun_score if _score_pulse_team == int(Duelist.Team.SUN) else _void_score
+		if score > 0:
+			var score_center := center + Vector2(-42.0 - (score - 1) * 16.0, 0.0) if _score_pulse_team == int(Duelist.Team.SUN) else center + Vector2(42.0 + (score - 1) * 16.0, 0.0)
+			draw_arc(score_center, 8.0 + (1.0 - _score_pulse) * 9.0, 0.0, TAU, 24, Color("fff4c7", _score_pulse * 0.85), 2.0)
+	var state := int(_objective_state.get("state", int(RiftSeed.State.HOME)))
+	var objective_accent := friendly if int(_objective_state.get("carrier_team", -1)) == int(Duelist.Team.SUN) else enemy
+	if state == RiftSeed.State.DROPPED:
+		objective_accent = Color("fff0b0")
+	_draw_seed_glyph(center, objective_accent, state == RiftSeed.State.CARRIED)
+
+func _draw_seed_glyph(center: Vector2, color: Color, filled: bool) -> void:
+	var diamond := PackedVector2Array([center + Vector2(0, -6), center + Vector2(6, 0), center + Vector2(0, 6), center + Vector2(-6, 0)])
+	if filled:
+		draw_colored_polygon(diamond, Color(color, 0.82))
+	else:
+		draw_polyline(diamond, Color(color, 0.55), 1.5)
+	draw_line(center + Vector2(-2, 0), center + Vector2(2, 0), Color("fff4c7", 0.85 if filled else 0.34), 1.2)
 
 func _draw_button(key: String, color: Color, active: bool) -> void:
 	var spec: Dictionary = _control_specs()[key]
