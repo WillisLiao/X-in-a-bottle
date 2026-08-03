@@ -38,6 +38,17 @@ var _stick_visual_opacity := 0.0
 var _stick_visual_target := 0.0
 var _coach_cue: Dictionary = {}
 var _coach_display_cue: Dictionary = {}
+
+static func save_feedback_preferences(config: ConfigFile, next_effects_enabled: bool, next_haptics_enabled: bool) -> void:
+	config.set_value(FEEDBACK_SECTION, "version", 1)
+	config.set_value(FEEDBACK_SECTION, "effects", next_effects_enabled)
+	config.set_value(FEEDBACK_SECTION, "haptics", next_haptics_enabled)
+
+static func load_feedback_preferences(config: ConfigFile, default_effects_enabled: bool = true, default_haptics_enabled: bool = true) -> Dictionary:
+	return {
+		"effects_enabled": bool(config.get_value(FEEDBACK_SECTION, "effects", default_effects_enabled)),
+		"haptics_enabled": bool(config.get_value(FEEDBACK_SECTION, "haptics", default_haptics_enabled)),
+	}
 var _coach_visual_opacity := 0.0
 var _coach_visual_target := 0.0
 var _touch_preview := ""
@@ -1229,8 +1240,9 @@ func _load_control_settings() -> void:
 	ads_sensitivity = _config_float(config, "sensitivity", "ads", ads_sensitivity, 0.3, 1.7)
 	gyro_enabled = bool(config.get_value("controls", "gyro", gyro_enabled))
 	_aim_toggle = bool(config.get_value("controls", "aim_toggle", _aim_toggle))
-	effects_enabled = bool(config.get_value(FEEDBACK_SECTION, "effects", effects_enabled))
-	haptics_enabled = bool(config.get_value(FEEDBACK_SECTION, "haptics", haptics_enabled))
+	var feedback_preferences := load_feedback_preferences(config, effects_enabled, haptics_enabled)
+	effects_enabled = bool(feedback_preferences.effects_enabled)
+	haptics_enabled = bool(feedback_preferences.haptics_enabled)
 	var saved_stick_mode := str(config.get_value("controls", "stick_mode", "floating")).to_lower()
 	_stick_mode = MobileTouchRouter.StickMode.FIXED if saved_stick_mode == "fixed" else MobileTouchRouter.StickMode.FLOATING
 	var has_saved_layout := config.has_section(LAYOUT_SECTION)
@@ -1291,9 +1303,7 @@ func _save_control_settings() -> void:
 	config.set_value("controls", "gyro", gyro_enabled)
 	config.set_value("controls", "aim_toggle", _aim_toggle)
 	config.set_value("controls", "stick_mode", "fixed" if _stick_mode == MobileTouchRouter.StickMode.FIXED else "floating")
-	config.set_value(FEEDBACK_SECTION, "version", 1)
-	config.set_value(FEEDBACK_SECTION, "effects", effects_enabled)
-	config.set_value(FEEDBACK_SECTION, "haptics", haptics_enabled)
+	save_feedback_preferences(config, effects_enabled, haptics_enabled)
 	config.set_value(LAYOUT_SECTION, "version", LAYOUT_VERSION)
 	for key in MOVABLE_KEYS:
 		var data: Dictionary = _layout[key]

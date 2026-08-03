@@ -68,6 +68,8 @@ var _last_projectile_fire_id := -1
 var _last_projectile_impact_id := -1
 var _pending_local_primary_predictions := 0
 var _reload_was_active := false
+var _reload_stage_played := false
+var _scatter_event_sequence := 0
 var _projectile_presentation_pool: Node3D
 var _tracer_pool: Array[MeshInstance3D] = []
 var _impact_pool: Array[Node3D] = []
@@ -476,11 +478,12 @@ func _build_rift_link() -> void:
 	rift_link.cancel_requested.connect(_on_rift_link_cancelled)
 	rift_link.retry_requested.connect(_on_join_retry_requested)
 
-func _on_player_damaged(_amount: float, remaining: float) -> void:
+func _on_player_damaged(_amount: float, remaining: float, attacker_id: String, source_position: Vector3, enemy_team: int) -> void:
 	if hud != null:
 		hud.show_damage(remaining)
 	if combat_feedback != null:
 		combat_feedback.set_local_health(remaining)
+		combat_feedback.local_damage_received(source_position if not attacker_id.is_empty() else null, enemy_team, _local_duelist.global_position if _local_duelist != null else Vector3.ZERO)
 
 func _on_feedback_damage(direction: Vector2, intensity: float, enemy_team: int) -> void:
 	if hud != null:
@@ -599,7 +602,11 @@ func _sync_reload_feedback() -> void:
 		return
 	var active := _local_duelist.reload_remaining > 0.0
 	if active and not _reload_was_active:
+		_reload_stage_played = false
 		combat_feedback.reload_started(true)
+	elif active and not _reload_stage_played and _local_duelist.reload_remaining <= Duelist.M4_RELOAD_SECONDS * 0.5:
+		_reload_stage_played = true
+		combat_feedback.reload_stage(true)
 	elif _reload_was_active and not active:
 		combat_feedback.reload_completed(true)
 	_reload_was_active = active
@@ -648,13 +655,15 @@ func _trim_projectile_cache(cache: Dictionary) -> void:
 	while cache.size() > 128:
 		cache.erase(cache.keys()[0])
 
-func _on_scatter_shot(shooter_id: String, origin: Vector3, end: Vector3, team: Duelist.Team, fired_weapon: Duelist.Weapon, hit_target: bool) -> void:
+func _on_scatter_shot(shooter_id: String, origin: Vector3, end: Vector3, team: Duelist.Team, fired_weapon: Duelist.Weapon, hit_target: bool, target_id: String, source_position: Vector3) -> void:
+	_scatter_event_sequence += 1
+	var event_id := "%s:%d" % [shooter_id, _scatter_event_sequence]
 	if _presentation_enabled:
 		_show_scatter_shot(shooter_id, origin, end, team, fired_weapon, hit_target)
 		if combat_feedback != null:
-			combat_feedback.scatter_fired(shooter_id, origin, end, fired_weapon, shooter_id == _local_actor_id, hit_target)
+			combat_feedback.scatter_fired(shooter_id, origin, end, team, fired_weapon, shooter_id == _local_actor_id, hit_target, target_id, source_position, event_id, _local_duelist.global_position if _local_duelist != null else Vector3.ZERO)
 	if _lan_host:
-		network.publish_event({"type": "shot", "shooter_id": shooter_id, "origin": origin, "end": end, "team": int(team), "weapon": int(fired_weapon), "hit": hit_target})
+		network.publish_event({"type": "shot", "shooter_id": shooter_id, "origin": origin, "end": end, "team": int(team), "weapon": int(fired_weapon), "hit": hit_target, "target_id": target_id, "source_position": source_position, "event_id": event_id})
 
 func _show_scatter_shot(shooter_id: String, origin: Vector3, end: Vector3, team: Duelist.Team, fired_weapon: Duelist.Weapon, hit_target: bool) -> void:
 	if not _presentation_enabled:
@@ -837,9 +846,12 @@ func _on_network_event(event: Dictionary, sender_id: int) -> void:
 			var shot_team := int(event.get("team", int(Duelist.Team.SUN))) as Duelist.Team
 			var shot_weapon := int(event.get("weapon", int(Duelist.Weapon.SCATTER))) as Duelist.Weapon
 			var shot_hit := bool(event.get("hit", false))
+			var shot_target_id := str(event.get("target_id", ""))
+			var shot_source_position: Variant = event.get("source_position", null)
+			var shot_event_id := str(event.get("event_id", ""))
 			_show_scatter_shot(shot_id, shot_origin, shot_end, shot_team, shot_weapon, shot_hit)
 			if combat_feedback != null:
-				combat_feedback.scatter_fired(shot_id, shot_origin, shot_end, shot_weapon, shot_id == _local_actor_id, shot_hit)
+				combat_feedback.scatter_fired(shot_id, shot_origin, shot_end, shot_team, shot_weapon, shot_id == _local_actor_id, shot_hit, shot_target_id, shot_source_position, shot_event_id, _local_duelist.global_position if _local_duelist != null else Vector3.ZERO)
 		"spawn":
 			_apply_client_spawn(str(event.get("actor_id", "")), event.get("position", null), float(event.get("yaw", 0.0)))
 		"roster":

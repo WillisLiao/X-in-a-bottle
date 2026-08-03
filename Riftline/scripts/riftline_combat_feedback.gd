@@ -33,6 +33,7 @@ var _last_fire_haptic_msec := -10000
 var _last_hit_haptic_msec := -10000
 var _last_damage_haptic_msec := -10000
 var _last_objective_haptic_msec := -10000
+var _last_damage_feedback_msec := -10000
 var _configured := false
 var _local_health := Duelist.HEALTH
 var _skipped_low_priority := 0
@@ -48,7 +49,6 @@ func configure(presentation_enabled: bool, local_actor_id: String, listener: Cam
 		return
 	_configured = true
 	if _is_headless():
-		_build_player_pools()
 		return
 	_build_audio_bank()
 	_build_player_pools()
@@ -87,17 +87,14 @@ func projectile_impacted(fact: Dictionary, local_position: Vector3) -> void:
 		hit_confirm_feedback.emit()
 		_request_haptic("hit")
 	if hit_duelist and target_id == _local_actor_id:
-		var source_position: Vector3 = fact.get("source_position", Vector3.ZERO)
-		var direction := _screen_direction(source_position, local_position)
+		var source_position: Variant = fact.get("source_position", null)
 		var intensity := clampf(float(fact.get("damage", Duelist.HEALTH * 0.23)) / Duelist.HEALTH * 2.2, 0.2, 1.0)
-		damage_feedback.emit(direction, intensity, team)
-		_play_local("damage")
-		_request_haptic("damage")
+		_emit_damage(_screen_direction(source_position, local_position) if source_position is Vector3 else Vector2.ZERO, intensity, team)
 
-func scatter_fired(actor_id: String, origin: Vector3, end: Vector3, weapon: Duelist.Weapon, local: bool, hit_target: bool) -> void:
+func scatter_fired(actor_id: String, origin: Vector3, end: Vector3, team: Duelist.Team, weapon: Duelist.Weapon, local: bool, hit_target: bool, target_id: String = "", source_position: Variant = null, event_id: String = "", local_position: Vector3 = Vector3.ZERO) -> void:
 	if not _presentation_enabled:
 		return
-	var event_key := "scatter:%s:%s:%s" % [actor_id, origin, end]
+	var event_key := "scatter:%s" % event_id if not event_id.is_empty() else "scatter:%s:%s:%s" % [actor_id, origin, end]
 	if _seen_events.has(event_key):
 		return
 	_remember_event(event_key)
@@ -110,11 +107,23 @@ func scatter_fired(actor_id: String, origin: Vector3, end: Vector3, weapon: Duel
 		_play_local("hit_confirm")
 		hit_confirm_feedback.emit()
 		_request_haptic("hit")
+	if hit_target and target_id == _local_actor_id:
+		_emit_damage(_screen_direction(source_position, local_position) if source_position is Vector3 else Vector2.ZERO, 0.65, int(team))
+
+func local_damage_received(source_position: Variant, enemy_team: int, local_position: Vector3) -> void:
+	if not _presentation_enabled:
+		return
+	_emit_damage(_screen_direction(source_position, local_position) if source_position is Vector3 else Vector2.ZERO, 0.65, enemy_team)
 
 func reload_started(local: bool) -> void:
 	if not _presentation_enabled or not local:
 		return
 	_play_local("reload_start")
+
+func reload_stage(local: bool) -> void:
+	if not _presentation_enabled or not local:
+		return
+	_play_local("reload_stage")
 
 func reload_completed(local: bool) -> void:
 	if not _presentation_enabled or not local:
@@ -159,6 +168,9 @@ func stop_all() -> void:
 	for player in _world_players:
 		if is_instance_valid(player):
 			player.stop()
+	for player in _local_players:
+		if is_instance_valid(player):
+			player.stop()
 
 func diagnostics() -> Dictionary:
 	var active_voices := 0
@@ -175,10 +187,6 @@ func diagnostics() -> Dictionary:
 		"seen_events": _seen_events.size(),
 		"skipped_low_priority": _skipped_low_priority,
 	}
-	for player in _local_players:
-		if is_instance_valid(player):
-			player.stop()
-
 func _build_audio_bank() -> void:
 	_world_streams = {
 		"carbine_fire": _make_clip(0.105, 190.0, 900.0, 0.85, 17),
@@ -196,6 +204,7 @@ func _build_audio_bank() -> void:
 		"hit_confirm": _make_clip(0.06, 1660.0, 1040.0, 0.22, 139),
 		"damage": _make_clip(0.12, 82.0, 62.0, 0.46, 151),
 		"reload_start": _make_clip(0.08, 180.0, 360.0, 0.3, 163),
+		"reload_stage": _make_clip(0.075, 270.0, 190.0, 0.25, 169),
 		"reload_complete": _make_clip(0.105, 440.0, 760.0, 0.3, 179),
 		"seed_claimed": _make_clip(0.16, 410.0, 930.0, 0.38, 191),
 		"seed_dropped": _make_clip(0.12, 540.0, 220.0, 0.38, 211),
@@ -268,6 +277,15 @@ func _screen_direction(source_position: Vector3, local_position: Vector3) -> Vec
 	var camera_up := _listener.global_transform.basis.y.normalized()
 	var direction := Vector2(to_source.dot(camera_right), -to_source.dot(camera_up))
 	return direction.normalized() if direction.length_squared() > 0.0001 else Vector2.ZERO
+
+func _emit_damage(direction: Vector2, intensity: float, enemy_team: int) -> void:
+	var now := Time.get_ticks_msec()
+	if now - _last_damage_feedback_msec < 75:
+		return
+	_last_damage_feedback_msec = now
+	damage_feedback.emit(direction, clampf(intensity, 0.0, 1.0), enemy_team)
+	_play_local("damage")
+	_request_haptic("damage")
 
 func _request_haptic(kind: String) -> void:
 	if not haptics_enabled or not _can_haptic():

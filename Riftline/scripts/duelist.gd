@@ -6,8 +6,8 @@ const BALLISTICS := preload("res://scripts/rift_ballistics.gd")
 
 signal defeated(victim: Duelist, killer: Duelist)
 signal fire_requested(shooter: Duelist, weapon: Weapon, origin: Vector3, direction: Vector3)
-signal scatter_shot(shooter_id: String, origin: Vector3, end: Vector3, team: Team, weapon: Weapon, hit_target: bool)
-signal damaged(amount: float, remaining: float)
+signal scatter_shot(shooter_id: String, origin: Vector3, end: Vector3, team: Team, weapon: Weapon, hit_target: bool, target_id: String, source_position: Vector3)
+signal damaged(amount: float, remaining: float, attacker_id: String, source_position: Vector3, enemy_team: int)
 
 enum Team { SUN, VOID }
 enum Stance { STAND, CROUCH, PRONE }
@@ -487,7 +487,7 @@ func take_damage(amount: float, attacker: Duelist) -> void:
 		return
 	health = maxf(0.0, health - amount)
 	apply_damage_presentation(amount, health)
-	damaged.emit(amount, health)
+	damaged.emit(amount, health, attacker.actor_id if attacker != null else "", attacker.global_position if attacker != null else Vector3.ZERO, int(attacker.team) if attacker != null else -1)
 	if health <= 0.0:
 		eliminated = true
 		carrying_seed = false
@@ -534,13 +534,15 @@ func _fire_scatter_ray(origin: Vector3, direction: Vector3, damage: float, range
 	var hit := get_world_3d().direct_space_state.intersect_ray(query)
 	var end := origin + direction * range
 	var hit_target := false
+	var target_id := ""
 	if not hit.is_empty():
 		end = hit.position
 		var collider: Object = hit.collider
 		if collider is Duelist and collider != self and collider.team != team:
 			hit_target = true
+			target_id = collider.actor_id
 			collider.take_damage(damage, self)
-	scatter_shot.emit(actor_id, origin, end, team, weapon, hit_target)
+	scatter_shot.emit(actor_id, origin, end, team, weapon, hit_target, target_id, origin)
 
 func _team_color() -> Color:
 	return Color("ef6b3f") if team == Team.SUN else Color("4ba9ff")

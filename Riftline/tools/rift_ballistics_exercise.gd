@@ -78,7 +78,7 @@ func _initialize() -> void:
 
 	# Scatter remains a five-pellet close-range ray branch and never creates a carbine projectile.
 	var scatter_shots := [0]
-	human.scatter_shot.connect(func(_shooter_id: String, _origin: Vector3, _end: Vector3, _team: Duelist.Team, _weapon: Duelist.Weapon, _hit: bool) -> void: scatter_shots[0] += 1)
+	human.scatter_shot.connect(func(_shooter_id: String, _origin: Vector3, _end: Vector3, _team: Duelist.Team, _weapon: Duelist.Weapon, _hit: bool, _target_id: String, _source_position: Vector3) -> void: scatter_shots[0] += 1)
 	human.set_weapon_presentation(Duelist.Weapon.SCATTER)
 	human.fire_forward()
 	assert(scatter_shots[0] == 5)

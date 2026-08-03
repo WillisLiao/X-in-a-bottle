@@ -27,8 +27,13 @@ func _initialize() -> void:
 	feedback.set_preferences(true, false)
 	assert(feedback.effects_enabled)
 	assert(not feedback.haptics_enabled)
-	assert(feedback._world_players.size() == FEEDBACK.WORLD_VOICE_COUNT)
-	assert(feedback._local_players.size() == FEEDBACK.LOCAL_VOICE_COUNT)
+	assert(feedback._world_players.is_empty())
+	assert(feedback._local_players.is_empty())
+	var preferences := ConfigFile.new()
+	DuelHud.save_feedback_preferences(preferences, false, true)
+	var reloaded_preferences := DuelHud.load_feedback_preferences(preferences, true, false)
+	assert(not reloaded_preferences.effects_enabled)
+	assert(reloaded_preferences.haptics_enabled)
 
 	var local := _make_duelist(root, Duelist.Team.SUN, "local")
 	var enemy := _make_duelist(root, Duelist.Team.VOID, "enemy")
@@ -60,19 +65,17 @@ func _initialize() -> void:
 	assert(hit_count[0] == 1)
 	assert(is_equal_approx(local.health, initial_health))
 	assert(enemy.health == Duelist.HEALTH)
+	feedback._last_damage_feedback_msec = -10000
+	feedback.scatter_fired("enemy", Vector3(2.0, 1.0, 0.0), Vector3.ZERO, Duelist.Team.VOID, Duelist.Weapon.SCATTER, false, true, "local", Vector3(2.0, 1.0, 0.0), "scatter:1", local.global_position)
+	feedback.scatter_fired("enemy", Vector3(2.0, 1.0, 0.0), Vector3.ZERO, Duelist.Team.VOID, Duelist.Weapon.SCATTER, false, true, "local", Vector3(2.0, 1.0, 0.0), "scatter:1", local.global_position)
+	assert(damage_count[0] == 2)
 
-	# Reusing the event path never grows the fixed pools.
+	# Reusing the event path remains a no-op in headless mode and never allocates voices.
 	for index in 20:
 		feedback.weapon_fired("remote-%d" % index, Duelist.Weapon.PULSE, Vector3.ZERO, false)
-	assert(feedback._world_players.size() == FEEDBACK.WORLD_VOICE_COUNT)
-	assert(feedback._local_players.size() == FEEDBACK.LOCAL_VOICE_COUNT)
+	assert(feedback._world_players.is_empty())
+	assert(feedback._local_players.is_empty())
 	feedback.stop_all()
-	assert(not feedback._world_players.any(func(player: AudioStreamPlayer3D) -> bool: return player.playing))
-	assert(not feedback._local_players.any(func(player: AudioStreamPlayer) -> bool: return player.playing))
-	for player in feedback._world_players:
-		player.stream = null
-	for player in feedback._local_players:
-		player.stream = null
 	feedback._world_streams.clear()
 	feedback._local_streams.clear()
 
