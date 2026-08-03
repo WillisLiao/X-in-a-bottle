@@ -32,6 +32,7 @@ var _intermission_remaining := 0.0
 var _started := false
 var _winner: Duelist.Team = Duelist.Team.SUN
 var _last_replica_tick := -1
+var _route_finder := Callable()
 
 func configure(center: Vector3, gate_positions: Dictionary, presentation_enabled: bool) -> void:
 	_center = center
@@ -49,6 +50,10 @@ func configure(center: Vector3, gate_positions: Dictionary, presentation_enabled
 
 func add_spawn(team: Duelist.Team, point: Vector3) -> void:
 	spawn_points[team].append(point)
+
+func set_route_finder(route_finder: Callable) -> void:
+	_route_finder = route_finder
+	_sync_bot_context()
 
 func register_duelist(duelist: Duelist, actor_id: String) -> void:
 	if not is_instance_valid(duelist) or actor_id.is_empty():
@@ -287,4 +292,5 @@ func _sync_bot_context() -> void:
 			var enemies: Array[Duelist] = []
 			for candidate in _all_duelists():
 				(friendlies if candidate.team == duelist.team else enemies).append(candidate)
-			duelist.set_squad_context(friendlies, enemies, state, _gate_positions.get(duelist.team, Vector3.ZERO), _gate_positions.get(enemy_team, Vector3.ZERO))
+				duelist.set_squad_context(friendlies, enemies, state, _gate_positions.get(duelist.team, Vector3.ZERO), _gate_positions.get(enemy_team, Vector3.ZERO))
+				duelist.set_route_finder(_route_finder)

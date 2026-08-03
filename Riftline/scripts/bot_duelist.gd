@@ -17,6 +17,7 @@ var _random := RandomNumberGenerator.new()
 var _linebreak_seed_state: Dictionary = {}
 var _friendly_gate := Vector3.ZERO
 var _enemy_gate := Vector3.ZERO
+var _route_finder := Callable()
 
 func set_linebreak_context(seed_state: Dictionary, friendly_gate: Vector3, enemy_gate: Vector3) -> void:
 	set_squad_context([self], _enemies, seed_state, friendly_gate, enemy_gate)
@@ -28,6 +29,9 @@ func set_squad_context(friendlies: Array[Duelist], enemies: Array[Duelist], obje
 	_friendly_gate = friendly_gate
 	_enemy_gate = enemy_gate
 	_select_target()
+
+func set_route_finder(route_finder: Callable) -> void:
+	_route_finder = route_finder
 
 func _ready() -> void:
 	_random.randomize()
@@ -116,7 +120,12 @@ func _decide_linebreak_movement(distance: float, has_los: bool) -> bool:
 	return false
 
 func _world_move_goal(goal: Vector3) -> Vector2:
-	var direction := goal - global_position
+	var resolved_goal := goal
+	if _route_finder.is_valid():
+		var candidate: Variant = _route_finder.call(global_position, goal)
+		if candidate is Vector3:
+			resolved_goal = candidate
+	var direction := resolved_goal - global_position
 	direction.y = 0.0
 	if direction.length_squared() < 0.4:
 		return Vector2.ZERO

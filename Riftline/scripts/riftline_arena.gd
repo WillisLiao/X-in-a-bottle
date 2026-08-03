@@ -3,15 +3,6 @@ extends Node3D
 
 const PULP_LIT := preload("res://shaders/pulp_lit.gdshader")
 const SNAPSHOT_BUFFER := preload("res://scripts/riftline_snapshot_buffer.gd")
-const SUN_COVER_SPAWN := Vector3(-15.0, 0.1, 6.0)
-const VOID_COVER_SPAWN := Vector3(16.0, 0.1, -6.0)
-## Temporary authority-smoke points for the development squad preview.
-## Keep the original index-zero duel spawns unchanged until a real squad arena
-## replaces this deliberately unbalanced proof layout.
-const SUN_SQUAD_SPAWNS := [Vector3(-15.0, 0.1, 6.0), Vector3(-13.0, 0.1, -2.0), Vector3(-6.0, 0.1, 11.0), Vector3(-10.0, 0.1, -10.0), Vector3(-2.0, 0.1, 7.0)]
-const VOID_SQUAD_SPAWNS := [Vector3(16.0, 0.1, -6.0), Vector3(13.0, 0.1, 2.0), Vector3(6.0, 0.1, -11.0), Vector3(10.0, 0.1, 10.0), Vector3(2.0, 0.1, -7.0)]
-const SUN_GATE_POSITION := Vector3(-18.5, 0.05, 6.0)
-const VOID_GATE_POSITION := Vector3(18.5, 0.05, -6.0)
 const OPENING_HOLD_SECONDS := 2.5
 
 var ballistics: RiftBallistics
@@ -19,6 +10,7 @@ var hud: DuelHud
 var coach: RiftlineFirstMatchCoach
 var director: LinebreakMatch
 var network: RiftlineNetwork
+var arena_map: RiftlineMap
 var rift_link: RiftLinkPanel
 var _mouse_captured := false
 var _lan_active := false
@@ -44,6 +36,7 @@ var _local_actor_id := ""
 var _pending_actor_snapshots: Dictionary = {}
 var _snapshot_remaining := 0.0
 var _join_discovery_started := false
+var _session_ready_for_snapshots := true
 var _local_team: Duelist.Team = Duelist.Team.SUN
 var _capture_path := ""
 var _capture_after := 2.0
@@ -75,6 +68,7 @@ var _impact_cursor := 0
 func _ready() -> void:
 	_build_network()
 	var command_line_lan := network.start_command_line_mode()
+	_read_capture_arguments()
 	_dedicated_server = network.is_dedicated_server()
 	_presentation_enabled = not _dedicated_server
 	if _dedicated_server:
@@ -83,7 +77,6 @@ func _ready() -> void:
 	else:
 		_build_environment()
 		_build_arena()
-		_read_capture_arguments()
 		_capture_fixture_only = not _squad_preview.is_empty()
 		_build_match()
 		_build_hud()
@@ -207,34 +200,23 @@ func _build_environment() -> void:
 	add_child(fill)
 
 func _build_arena() -> void:
+	arena_map = RiftlineMap.new()
+	arena_map.name = "RiftlineMap"
+	add_child(arena_map)
+	var selected_map := RiftlineMap.Id.CONCOURSE if _offline_squad_size > 1 else RiftlineMap.Id.DUEL_YARD
+	if network != null:
+		selected_map = network.arena_id as RiftlineMap.Id
+	arena_map.configure(selected_map, _presentation_enabled)
 	if _presentation_enabled:
 		_presentation_effects = Node3D.new()
 		_presentation_effects.name = "PresentationEffects"
 		add_child(_presentation_effects)
-	_add_solid_box(Vector3(0, -0.5, 0), Vector3(44, 1, 32), Color("3d547c"), 0.0)
-	_add_solid_box(Vector3(0, 3, -16), Vector3(44, 6, 1), Color("28496e"), 0.0)
-	_add_solid_box(Vector3(0, 3, 16), Vector3(44, 6, 1), Color("28496e"), 0.0)
-	_add_solid_box(Vector3(-22, 3, 0), Vector3(1, 6, 32), Color("28496e"), 0.0)
-	_add_solid_box(Vector3(22, 3, 0), Vector3(1, 6, 32), Color("28496e"), 0.0)
-
-	# Four asymmetric blockers create sight-line decisions now and still read as lanes in a five-person match.
-	_add_solid_box(Vector3(-4, 1.7, -5), Vector3(3.2, 3.4, 3.2), Color("bd7254"), 0.0)
-	_add_solid_box(Vector3(5, 1.7, 4), Vector3(3.2, 3.4, 3.2), Color("d39a52"), 0.0)
-	_add_solid_box(Vector3(-10, 1.1, 6), Vector3(2.0, 2.2, 6.2), Color("496f8e"), 0.0)
-	_add_solid_box(Vector3(11, 1.1, -6), Vector3(2.0, 2.2, 6.2), Color("496f8e"), 0.0)
-	_add_pulp_cylinder(Vector3(-4, 4.2, -5), 0.9, 1.7, Color("e5b46b"))
-	_add_pulp_cylinder(Vector3(5, 4.2, 4), 0.9, 1.7, Color("e5b46b"))
-	_add_emissive_rail(Vector3(0, 0.06, -10), Vector3(28, 0.08, 0.08), Color("a7dced"))
-	_add_emissive_rail(Vector3(0, 0.06, 10), Vector3(28, 0.08, 0.08), Color("f4a55e"))
-	_add_emissive_rail(Vector3(-15, 0.06, 0), Vector3(0.08, 0.08, 20), Color("a7dced"))
-	_add_emissive_rail(Vector3(15, 0.06, 0), Vector3(0.08, 0.08, 20), Color("f4a55e"))
-	_build_landmarks()
-	_build_stormgates()
 
 func _build_match() -> void:
 	director = LinebreakMatch.new()
 	add_child(director)
-	director.configure(Vector3.ZERO, _gate_positions(), _presentation_enabled)
+	director.configure(arena_map.seed_position(), arena_map.gate_positions(), _presentation_enabled)
+	director.set_route_finder(Callable(arena_map, "route_toward"))
 	_add_spawn_points()
 	var offline_roster := RiftlineRoster.new()
 	offline_roster.configure(maxi(1, _offline_squad_size), false, _offline_squad_size > 1)
@@ -261,10 +243,14 @@ func _build_match() -> void:
 	director.objective_event.connect(_on_objective_event)
 
 func _add_spawn_points() -> void:
-	var points := SUN_SQUAD_SPAWNS if _offline_squad_size > 1 else [SUN_COVER_SPAWN]
+	var points := arena_map.spawn_points(Duelist.Team.SUN)
+	if _offline_squad_size <= 1:
+		points = [points[0]]
 	for point in points:
 		director.add_spawn(Duelist.Team.SUN, point)
-	points = VOID_SQUAD_SPAWNS if _offline_squad_size > 1 else [VOID_COVER_SPAWN]
+	points = arena_map.spawn_points(Duelist.Team.VOID)
+	if _offline_squad_size <= 1:
+		points = [points[0]]
 	for point in points:
 		director.add_spawn(Duelist.Team.VOID, point)
 
@@ -355,9 +341,9 @@ func _all_replica_actors() -> Array[Duelist]:
 	return result
 
 func _spawn_for_actor(team: Duelist.Team, registry: Dictionary) -> Vector3:
-	var points: Array = SUN_SQUAD_SPAWNS if _offline_squad_size > 1 else [SUN_COVER_SPAWN]
-	if team == Duelist.Team.VOID:
-		points = VOID_SQUAD_SPAWNS if _offline_squad_size > 1 else [VOID_COVER_SPAWN]
+	var points: Array[Vector3] = arena_map.spawn_points(team)
+	if _offline_squad_size <= 1:
+		points = [points[0]]
 	var slot := 0
 	for candidate in registry.values():
 		if candidate is Duelist and candidate.team == team:
@@ -439,6 +425,7 @@ func _build_network() -> void:
 	network.team_assigned.connect(_on_team_assigned)
 	network.actor_assigned.connect(_on_actor_assigned)
 	network.roster_received.connect(_on_roster_received)
+	network.session_descriptor_received.connect(_on_session_descriptor)
 
 func _build_rift_link() -> void:
 
@@ -707,7 +694,7 @@ func _on_network_input(peer_id: int, frame: Dictionary) -> void:
 	_last_sequences[actor_id] = int(frame.get("sequence", -1))
 
 func _on_network_snapshot(snapshot: Dictionary) -> void:
-	if not _lan_active or _lan_host or snapshot.is_empty():
+	if not _lan_active or _lan_host or not _session_ready_for_snapshots or snapshot.is_empty():
 		return
 	if director != null:
 		var replica_match: Dictionary = snapshot.get("match", snapshot).duplicate(true)
@@ -750,6 +737,8 @@ func _on_network_event(event: Dictionary, sender_id: int) -> void:
 			director.take_rematch()
 		return
 	match event_type:
+		"session":
+			_on_session_descriptor({"map_id": int(event.get("map_id", int(RiftlineMap.Id.DUEL_YARD))), "team_size": int(event.get("team_size", 1))})
 		"phase":
 			_apply_client_phase(int(event.get("phase", int(LinebreakMatch.Phase.OPENING))))
 		"score":
@@ -794,6 +783,7 @@ func _enter_lan_runtime(host: bool, from_player_flow: bool) -> void:
 	_actor_for_peer.clear()
 	_ready_peers.clear()
 	_authority_match_started = false
+	_session_ready_for_snapshots = host or _dedicated_server
 	_local_actor_id = network.local_actor_id
 	_local_team = network.local_team as Duelist.Team if network.local_team >= 0 else Duelist.Team.SUN
 	_replace_match_for_lan(host)
@@ -804,6 +794,17 @@ func _enter_lan_runtime(host: bool, from_player_flow: bool) -> void:
 		if hud != null:
 			hud.set_combat_input_enabled(false)
 
+func _on_session_descriptor(descriptor: Dictionary) -> void:
+	if descriptor.is_empty() or not _lan_active or _lan_host or _dedicated_server:
+		return
+	_session_ready_for_snapshots = false
+	var descriptor_map := int(descriptor.get("map_id", int(RiftlineMap.Id.DUEL_YARD))) as RiftlineMap.Id
+	if arena_map == null or arena_map.map_id() != descriptor_map:
+		_clear_match_nodes()
+		_rebuild_map(descriptor_map)
+		_replace_match_for_lan(false)
+	_session_ready_for_snapshots = true
+
 func _replace_match_for_lan(host: bool) -> void:
 	_clear_match_nodes()
 	if host:
@@ -813,11 +814,18 @@ func _replace_match_for_lan(host: bool) -> void:
 		ballistics = null
 	director = LinebreakMatch.new()
 	add_child(director)
-	director.configure(Vector3.ZERO, _gate_positions(), _presentation_enabled)
-	var team_points := SUN_SQUAD_SPAWNS if network.team_size > 1 else [SUN_COVER_SPAWN]
+	if arena_map == null or arena_map.map_id() != network.arena_id:
+		_rebuild_map(network.arena_id as RiftlineMap.Id)
+	director.configure(arena_map.seed_position(), arena_map.gate_positions(), _presentation_enabled)
+	director.set_route_finder(Callable(arena_map, "route_toward"))
+	var team_points := arena_map.spawn_points(Duelist.Team.SUN)
+	if network.team_size <= 1:
+		team_points = [team_points[0]]
 	for point in team_points:
 		director.add_spawn(Duelist.Team.SUN, point)
-	team_points = VOID_SQUAD_SPAWNS if network.team_size > 1 else [VOID_COVER_SPAWN]
+	team_points = arena_map.spawn_points(Duelist.Team.VOID)
+	if network.team_size <= 1:
+		team_points = [team_points[0]]
 	for point in team_points:
 		director.add_spawn(Duelist.Team.VOID, point)
 	director.score_changed.connect(_on_score_changed)
@@ -1104,6 +1112,15 @@ func _restore_offline_training(message: String) -> void:
 	director.begin()
 	hud.show_connection_message(message)
 
+func _rebuild_map(next_map_id: RiftlineMap.Id) -> void:
+	if arena_map != null:
+		arena_map.queue_free()
+		arena_map = null
+	arena_map = RiftlineMap.new()
+	arena_map.name = "RiftlineMap"
+	add_child(arena_map)
+	arena_map.configure(next_map_id, _presentation_enabled)
+
 func _sync_objective_presentation() -> void:
 	if director == null or not _objective_preview.is_empty():
 		return
@@ -1122,12 +1139,6 @@ func _sync_squad_hud() -> void:
 		records.append({"actor_id": actor.actor_id, "team": int(actor.team), "eliminated": actor.eliminated})
 	var squad := _offline_squad_size > 1 or (network != null and network.team_size > 1) or records.size() > 2
 	hud.set_roster_state(records, int(_local_team), squad)
-
-func _gate_positions() -> Dictionary:
-	return {
-		Duelist.Team.SUN: SUN_GATE_POSITION,
-		Duelist.Team.VOID: VOID_GATE_POSITION,
-	}
 
 func _continuous_input(frame: Dictionary) -> Dictionary:
 	return {
@@ -1372,61 +1383,6 @@ func _clear_presentation_effects() -> void:
 	for child in _presentation_effects.get_children():
 		child.queue_free()
 
-func _build_landmarks() -> void:
-	if not _presentation_enabled:
-		return
-	# These are callout shapes, not cover. Their narrow footprint keeps the proven collision and sight-line layout intact.
-	var sun_root := Node3D.new()
-	sun_root.position = Vector3(-17.0, 0.0, -10.5)
-	add_child(sun_root)
-	_add_landmark_part(sun_root, _box_mesh(Vector3(0.16, 5.2, 0.16)), Vector3.ZERO, Color("d6ad67"), Vector3(0.0, 0.0, -0.12))
-	_add_landmark_part(sun_root, _box_mesh(Vector3(1.65, 0.08, 0.08)), Vector3(0.35, 2.45, 0.0), Color("d6ad67"), Vector3(0.0, 0.0, 0.18))
-	_add_landmark_part(sun_root, _box_mesh(Vector3(0.08, 1.3, 0.08)), Vector3(0.72, 2.12, 0.0), Color("ffb15c"), Vector3(0.0, 0.0, -0.26), 2.8)
-	_add_landmark_part(sun_root, _cylinder_mesh(0.72, 0.72, 0.06), Vector3(0.38, 1.85, 0.0), Color("ffb15c"), Vector3.ZERO, 3.2)
-
-	var void_root := Node3D.new()
-	void_root.position = Vector3(17.0, 0.0, 10.5)
-	add_child(void_root)
-	_add_landmark_part(void_root, _box_mesh(Vector3(0.16, 5.0, 0.16)), Vector3.ZERO, Color("91b8d3"), Vector3(0.0, 0.0, 0.16))
-	_add_landmark_part(void_root, _box_mesh(Vector3(1.9, 0.1, 0.08)), Vector3(-0.32, 2.4, 0.0), Color("91b8d3"), Vector3(0.0, 0.0, -0.22))
-	_add_landmark_part(void_root, _box_mesh(Vector3(0.72, 0.05, 0.42)), Vector3(-0.86, 2.42, 0.0), Color("75dbff"), Vector3(0.0, 0.0, 0.08), 2.4)
-	_add_landmark_part(void_root, _cylinder_mesh(0.13, 0.13, 0.36), Vector3(0.0, 1.2, 0.0), Color("75dbff"), Vector3(PI * 0.5, 0.0, 0.0), 3.0)
-
-	for frame_data in [[Vector3(-1.8, 0.0, 1.8), -0.12], [Vector3(1.8, 0.0, -1.8), 0.12]]:
-		var frame := Node3D.new()
-		frame.position = frame_data[0]
-		frame.rotation.y = float(frame_data[1])
-		add_child(frame)
-		_add_landmark_part(frame, _box_mesh(Vector3(0.1, 4.0, 0.1)), Vector3(-0.75, 1.8, 0.0), Color("a7dced"))
-		_add_landmark_part(frame, _box_mesh(Vector3(0.1, 4.0, 0.1)), Vector3(0.75, 1.8, 0.0), Color("f4a55e"))
-		_add_landmark_part(frame, _box_mesh(Vector3(1.65, 0.1, 0.1)), Vector3(0.0, 3.72, 0.0), Color("dce9ef"), Vector3.ZERO, 0.8)
-	_add_emissive_rail(Vector3(0.0, 0.065, -7.0), Vector3(25.0, 0.035, 0.035), Color("8bb8d5"))
-	_add_emissive_rail(Vector3(0.0, 0.068, 7.0), Vector3(25.0, 0.035, 0.035), Color("d39a52"))
-
-func _build_stormgates() -> void:
-	if not _presentation_enabled:
-		return
-	_build_stormgate(SUN_GATE_POSITION, Color("ffb15c"), -1.0)
-	_build_stormgate(VOID_GATE_POSITION, Color("75dbff"), 1.0)
-
-func _build_stormgate(position: Vector3, color: Color, lean: float) -> void:
-	var gate := Node3D.new()
-	gate.name = "Stormgate"
-	gate.position = position
-	add_child(gate)
-	_add_landmark_part(gate, _box_mesh(Vector3(0.12, 3.4, 0.12)), Vector3(-0.72, 1.7, 0.0), color, Vector3(0.0, 0.0, lean * 0.08), 0.8)
-	_add_landmark_part(gate, _box_mesh(Vector3(0.12, 3.4, 0.12)), Vector3(0.72, 1.7, 0.0), color, Vector3(0.0, 0.0, -lean * 0.08), 0.8)
-	_add_landmark_part(gate, _box_mesh(Vector3(1.55, 0.08, 0.08)), Vector3(0.0, 3.3, 0.0), color.lerp(Color("fff4c7"), 0.3), Vector3(0.0, 0.0, lean * 0.08), 1.4)
-	_add_landmark_part(gate, _box_mesh(Vector3(0.05, 2.7, 0.05)), Vector3(0.0, 1.5, 0.0), color, Vector3(0.0, 0.0, lean * 0.02), 2.0)
-
-func _add_landmark_part(parent: Node3D, mesh: Mesh, position: Vector3, color: Color, rotation: Vector3 = Vector3.ZERO, glow: float = 0.0) -> void:
-	var instance := MeshInstance3D.new()
-	instance.mesh = mesh
-	instance.position = position
-	instance.rotation = rotation
-	instance.material_override = _pulp_material(color, glow)
-	parent.add_child(instance)
-
 func _box_mesh(dimensions: Vector3) -> BoxMesh:
 	var mesh := BoxMesh.new()
 	mesh.size = dimensions
@@ -1438,47 +1394,6 @@ func _cylinder_mesh(top_radius: float, bottom_radius: float, height: float) -> C
 	mesh.bottom_radius = bottom_radius
 	mesh.height = height
 	return mesh
-
-func _add_solid_box(position: Vector3, dimensions: Vector3, color: Color, emission: float) -> void:
-	var body := StaticBody3D.new()
-	body.position = position
-	add_child(body)
-	if _presentation_enabled:
-		var mesh_instance := MeshInstance3D.new()
-		var box := BoxMesh.new()
-		box.size = dimensions
-		mesh_instance.mesh = box
-		mesh_instance.material_override = _pulp_material(color, emission)
-		body.add_child(mesh_instance)
-	var collision := CollisionShape3D.new()
-	var shape := BoxShape3D.new()
-	shape.size = dimensions
-	collision.shape = shape
-	body.add_child(collision)
-
-func _add_emissive_rail(position: Vector3, dimensions: Vector3, color: Color) -> void:
-	if not _presentation_enabled:
-		return
-	var rail := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = dimensions
-	rail.mesh = box
-	rail.position = position
-	rail.material_override = _pulp_material(color, 5.5)
-	add_child(rail)
-
-func _add_pulp_cylinder(position: Vector3, radius: float, height: float, color: Color) -> void:
-	if not _presentation_enabled:
-		return
-	var cylinder := MeshInstance3D.new()
-	var mesh := CylinderMesh.new()
-	mesh.top_radius = radius * 0.82
-	mesh.bottom_radius = radius
-	mesh.height = height
-	cylinder.mesh = mesh
-	cylinder.position = position
-	cylinder.material_override = _pulp_material(color, 0.0)
-	add_child(cylinder)
 
 func _pulp_material(color: Color, glow: float) -> ShaderMaterial:
 	var material := ShaderMaterial.new()
@@ -1568,7 +1483,7 @@ func _apply_objective_preview() -> void:
 	hud.set_match_phase(LinebreakMatch.Phase.LIVE)
 	if _objective_preview.ends_with("-delivery"):
 		var scoring_team := int(Duelist.Team.SUN) if _objective_preview.begins_with("sun") else int(Duelist.Team.VOID)
-		var gate_position := VOID_GATE_POSITION if scoring_team == int(Duelist.Team.SUN) else SUN_GATE_POSITION
+		var gate_position: Vector3 = arena_map.gate_positions().get(Duelist.Team.VOID if scoring_team == int(Duelist.Team.SUN) else Duelist.Team.SUN, Vector3.ZERO)
 		hud.show_objective_event("objective_delivered", {"scoring_team": scoring_team, "gate_position": gate_position})
 
 func _apply_weapon_preview() -> void:
