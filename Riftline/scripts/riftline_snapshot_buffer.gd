@@ -8,11 +8,9 @@ const MAX_HISTORY := 12
 const MAX_EXTRAPOLATION_SECONDS := 0.12
 
 var _snapshots: Array[Dictionary] = []
-var _last_arrival_time := 0.0
 
 func clear() -> void:
 	_snapshots.clear()
-	_last_arrival_time = 0.0
 
 func push(state: Dictionary, host_tick: int, arrival_time: float) -> void:
 	if state.is_empty() or host_tick < 0:
@@ -20,12 +18,17 @@ func push(state: Dictionary, host_tick: int, arrival_time: float) -> void:
 	var copy := state.duplicate(true)
 	copy["_tick"] = host_tick
 	copy["_arrival"] = arrival_time
-	if not _snapshots.is_empty() and host_tick <= int(_snapshots[-1]["_tick"]):
-		if host_tick == int(_snapshots[-1]["_tick"]):
-			_snapshots[-1] = copy
-		return
+	for index in _snapshots.size():
+		var existing_tick := int(_snapshots[index]["_tick"])
+		if host_tick == existing_tick:
+			_snapshots[index] = copy
+			return
+		if host_tick < existing_tick:
+			_snapshots.insert(index, copy)
+			while _snapshots.size() > MAX_HISTORY:
+				_snapshots.pop_front()
+			return
 	_snapshots.append(copy)
-	_last_arrival_time = arrival_time
 	while _snapshots.size() > MAX_HISTORY:
 		_snapshots.pop_front()
 
@@ -43,6 +46,8 @@ func sample(now: float) -> Dictionary:
 			var span := float(newer["_tick"]) - float(older["_tick"])
 			var weight := 1.0 if span <= 0.0 else clampf((target_tick - float(older["_tick"])) / span, 0.0, 1.0)
 			return _interpolate(older, newer, weight)
+	if now - float(latest["_arrival"]) > MAX_EXTRAPOLATION_SECONDS:
+		return _clean_state(latest)
 	var elapsed := clampf(now - float(latest["_arrival"]), 0.0, MAX_EXTRAPOLATION_SECONDS)
 	return _extrapolate(latest, elapsed)
 

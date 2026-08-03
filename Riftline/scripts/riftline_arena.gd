@@ -365,18 +365,18 @@ func _on_network_input(peer_id: int, frame: Dictionary) -> void:
 	if _dedicated_server:
 		if network.peer_team(peer_id) < 0:
 			return
-		_server_continuous_input[peer_id] = frame.duplicate(true)
+		_server_continuous_input[peer_id] = _continuous_input(frame)
 		var dedicated_edges: Array = _server_edge_queue.get(peer_id, [])
-		dedicated_edges.append(frame.duplicate(true))
+		dedicated_edges.append(_discrete_input(frame))
 		_server_edge_queue[peer_id] = dedicated_edges
 		_server_last_sequence[peer_id] = int(frame.get("sequence", -1))
 		return
 	if peer_id != _lan_peer_id:
 		return
 	_remote_input = frame.duplicate(true)
-	_server_continuous_input[peer_id] = frame.duplicate(true)
+	_server_continuous_input[peer_id] = _continuous_input(frame)
 	var app_host_edges: Array = _server_edge_queue.get(peer_id, [])
-	app_host_edges.append(frame.duplicate(true))
+	app_host_edges.append(_discrete_input(frame))
 	_server_edge_queue[peer_id] = app_host_edges
 	_server_last_sequence[peer_id] = int(frame.get("sequence", -1))
 
@@ -395,7 +395,7 @@ func _on_network_snapshot(snapshot: Dictionary) -> void:
 		player.reconcile_from_authority(local_state, _pending_inputs, 1.0 / 60.0)
 	var remote_state: Dictionary = players.get(_team_key(_opposing_team()), {})
 	if not remote_state.is_empty():
-		_update_remote_snapshot(remote_state, int(snapshot.get("tick", -1)), int(snapshot.get("phase", int(_lan_phase))))
+		_update_remote_snapshot(remote_state, int(snapshot.get("tick", -1)))
 	if hud != null:
 		hud.set_score(int(snapshot.get("sun_score", 0)), int(snapshot.get("void_score", 0)))
 
@@ -588,11 +588,9 @@ func _smooth_remote_presentation() -> void:
 	if not presented.is_empty():
 		remote_duelist.apply_presentation_state(presented)
 
-func _update_remote_snapshot(remote_state: Dictionary, host_tick: int, phase_value: int) -> void:
+func _update_remote_snapshot(remote_state: Dictionary, host_tick: int) -> void:
 	if remote_duelist == null or _remote_snapshot_buffer == null or remote_state.is_empty():
 		return
-	if phase_value != int(_lan_phase):
-		_apply_client_phase(phase_value)
 	var next_eliminated := bool(remote_state.get("eliminated", false))
 	var next_stance := int(remote_state.get("stance", int(Duelist.Stance.STAND)))
 	var next_weapon := int(remote_state.get("weapon", int(Duelist.Weapon.PULSE)))
@@ -747,6 +745,26 @@ func _opposing_team() -> Duelist.Team:
 
 func _team_key(team: Duelist.Team) -> String:
 	return "sun" if team == Duelist.Team.SUN else "void"
+
+func _continuous_input(frame: Dictionary) -> Dictionary:
+	return {
+		"sequence": int(frame.get("sequence", -1)),
+		"move_x": float(frame.get("move_x", 0.0)),
+		"move_y": float(frame.get("move_y", 0.0)),
+		"yaw": float(frame.get("yaw", 0.0)),
+		"pitch": float(frame.get("pitch", 0.0)),
+		"aim": bool(frame.get("aim", false)),
+		"fire": bool(frame.get("fire", false)),
+	}
+
+func _discrete_input(frame: Dictionary) -> Dictionary:
+	return {
+		"sequence": int(frame.get("sequence", -1)),
+		"jump": bool(frame.get("jump", false)),
+		"crouch": bool(frame.get("crouch", false)),
+		"prone": bool(frame.get("prone", false)),
+		"weapon_switch": bool(frame.get("weapon_switch", false)),
+	}
 
 func _remove_beam(beam: MeshInstance3D) -> void:
 	await get_tree().create_timer(0.055).timeout

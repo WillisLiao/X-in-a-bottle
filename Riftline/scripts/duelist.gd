@@ -34,6 +34,7 @@ var _band: MeshInstance3D
 var _weapon_mesh: MeshInstance3D
 var _local_camera := false
 var _render_visuals := true
+var _authoritative_collision := true
 var _pending_jump := false
 
 var head: Node3D
@@ -43,6 +44,7 @@ func build(assigned_team: Team, local_camera: bool, render_visuals: bool = true,
 	team = assigned_team
 	_local_camera = local_camera
 	_render_visuals = render_visuals
+	_authoritative_collision = authoritative_collision
 	collision_layer = 2 if authoritative_collision else 0
 	collision_mask = 1 | 2
 
@@ -201,7 +203,7 @@ func apply_presentation_state(state: Dictionary) -> void:
 		_update_weapon_mesh()
 	eliminated = bool(state.get("eliminated", eliminated))
 	visible = not eliminated
-	collision_layer = 0 if eliminated else 2
+	collision_layer = 0 if eliminated or not _authoritative_collision else 2
 
 func reconcile_from_authority(state: Dictionary, unacknowledged_frames: Array, delta: float) -> void:
 	if state.is_empty():
