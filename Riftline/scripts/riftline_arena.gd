@@ -14,6 +14,7 @@ var bot: BotDuelist
 var remote_duelist: Duelist
 var ballistics: RiftBallistics
 var hud: DuelHud
+var coach: RiftlineFirstMatchCoach
 var director: LinebreakMatch
 var network: RiftlineNetwork
 var rift_link: RiftLinkPanel
@@ -53,6 +54,7 @@ var _capture_rift_link := false
 var _objective_preview := ""
 var _weapon_preview := ""
 var _ballistics_preview := ""
+var _touch_preview := ""
 var _presentation_effects: Node3D
 var _seen_projectile_fires: Dictionary = {}
 var _seen_projectile_impacts: Dictionary = {}
@@ -79,11 +81,15 @@ func _ready() -> void:
 		_build_arena()
 		_build_match()
 		_build_hud()
+		_build_first_match_coach()
 		_build_rift_link()
 		_read_capture_arguments()
 		if command_line_lan:
 			_enter_lan_runtime(network.multiplayer.is_server(), false)
 		else:
+			coach.begin_offline_match()
+			if not _touch_preview.is_empty():
+				hud.set_touch_preview(_touch_preview)
 			director.begin()
 		if not _lan_active:
 			if not _objective_preview.is_empty():
@@ -106,7 +112,10 @@ func _physics_process(delta: float) -> void:
 	if hud.take_rematch():
 		director.take_rematch()
 	var wants_reload := hud.take_reload() or Input.is_action_just_pressed("reload")
-	player.apply_look(hud.take_look_delta())
+	var look_delta := hud.take_look_delta()
+	player.apply_look(look_delta)
+	if hud.take_reset_training() and coach != null and not _lan_active:
+		coach.reset_training()
 	if hud.gyro_enabled:
 		var gyroscope := Input.get_gyroscope()
 		player.apply_look(Vector2(gyroscope.y, -gyroscope.x) * 2.4)
@@ -122,6 +131,11 @@ func _physics_process(delta: float) -> void:
 		return
 	var keyboard := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	var movement := hud.movement if hud.movement.length_squared() > 0.001 else keyboard
+	if coach != null and not _lan_active:
+		coach.observe_movement(movement)
+		coach.observe_look(look_delta)
+		if hud.fire_held or Input.is_action_pressed("fire"):
+			coach.observe_fire()
 	if hud.take_crouch():
 		player.toggle_crouch()
 	if hud.take_prone():
@@ -251,6 +265,10 @@ func _build_hud() -> void:
 	layer.add_child(hud)
 	hud.rift_link_requested.connect(_on_rift_link_requested)
 
+func _build_first_match_coach() -> void:
+	coach = RiftlineFirstMatchCoach.new()
+	coach.cue_changed.connect(hud.set_coach_cue)
+
 func _build_network() -> void:
 	network = RiftlineNetwork.new()
 	add_child(network)
@@ -291,6 +309,8 @@ func _on_objective_changed(state: Dictionary) -> void:
 func _on_objective_event(event_type: String, state: Dictionary) -> void:
 	if event_type == "objective_delivered":
 		_clear_ballistics()
+		if coach != null and not _lan_active:
+			coach.observe_delivery()
 	if hud != null:
 		hud.show_objective_event(event_type, state)
 	if event_type == "objective_delivered" and _presentation_enabled:
@@ -595,6 +615,8 @@ func _on_network_event(event: Dictionary, sender_id: int) -> void:
 func _enter_lan_runtime(host: bool, from_player_flow: bool) -> void:
 	if _lan_active:
 		return
+	if coach != null:
+		coach.hide()
 	_lan_active = true
 	_lan_host = host
 	_dedicated_server = network.is_dedicated_server()
@@ -913,6 +935,8 @@ func _apply_client_spawn(team_value: int) -> void:
 func _restore_offline_training(message: String) -> void:
 	_clear_ballistics()
 	_clear_presentation_effects()
+	if coach != null:
+		coach.hide()
 	_lan_active = false
 	_lan_host = false
 	_lan_peer_ready = false
@@ -931,6 +955,8 @@ func _sync_objective_presentation() -> void:
 	var state := director.objective_state()
 	if hud != null:
 		hud.set_objective_state(state)
+	if coach != null and not _lan_active:
+		coach.observe_objective(state)
 
 func _gate_positions() -> Dictionary:
 	return {
@@ -1332,6 +1358,8 @@ func _read_capture_arguments() -> void:
 			_weapon_preview = argument.trim_prefix("--weapon-preview=")
 		elif argument.begins_with("--ballistics-preview="):
 			_ballistics_preview = argument.trim_prefix("--ballistics-preview=")
+		elif argument.begins_with("--touch-preview="):
+			_touch_preview = argument.trim_prefix("--touch-preview=")
 	if _capture_settings:
 		hud.open_settings()
 	if _capture_hud_layout:
@@ -1352,6 +1380,8 @@ func _read_capture_arguments() -> void:
 	if _capture_rift_link:
 		hud.set_connection_flow_active(true)
 		rift_link.open_menu()
+	if not _touch_preview.is_empty():
+		hud.set_touch_preview(_touch_preview)
 
 func _apply_objective_preview() -> void:
 	if _lan_active or director == null or director.seed == null:
