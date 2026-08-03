@@ -43,6 +43,34 @@ var _solids: Array[Dictionary] = []
 var _route_blockers: Array[Dictionary] = []
 var _route_nodes: Array[Vector3] = []
 var _material_cache: Dictionary = {}
+var _ambient_motion: Array[Dictionary] = []
+var _ambient_time := 0.0
+var _objective_pulse_remaining := 0.0
+var _objective_pulse_root: Node3D
+
+func _process(delta: float) -> void:
+	if not _presentation_enabled:
+		return
+	_ambient_time += delta
+	_objective_pulse_remaining = maxf(0.0, _objective_pulse_remaining - delta)
+	for entry in _ambient_motion:
+		var root: Node3D = entry.get("root", null)
+		if root == null or not is_instance_valid(root):
+			continue
+		var phase := float(entry.get("phase", 0.0))
+		var frequency := float(entry.get("frequency", 0.2))
+		var amplitude := float(entry.get("amplitude", 0.0))
+		var axis := int(entry.get("axis", 1))
+		var offset := sin(_ambient_time * frequency + phase) * amplitude
+		if axis == 0:
+			root.rotation.x = float(entry.get("base", 0.0)) + offset
+		elif axis == 2:
+			root.rotation.z = float(entry.get("base", 0.0)) + offset
+		else:
+			root.rotation.y = float(entry.get("base", 0.0)) + offset
+	if _objective_pulse_root != null and is_instance_valid(_objective_pulse_root):
+		var pulse := sin((1.0 - _objective_pulse_remaining / 0.34) * PI) if _objective_pulse_remaining > 0.0 else 0.0
+		_objective_pulse_root.scale = Vector3.ONE * (1.0 + pulse * 0.035)
 
 func configure(next_map_id: Id, presentation_enabled: bool) -> void:
 	_clear_layout()
@@ -141,6 +169,18 @@ func _clear_layout() -> void:
 	_route_blockers.clear()
 	_route_nodes.clear()
 	_material_cache.clear()
+	_ambient_motion.clear()
+	_ambient_time = 0.0
+	_objective_pulse_remaining = 0.0
+	_objective_pulse_root = null
+
+func pulse_objective() -> void:
+	if not _presentation_enabled:
+		return
+	_objective_pulse_remaining = 0.34
+
+func ambient_motion_count() -> int:
+	return _ambient_motion.size()
 
 func _configure_duel_yard() -> void:
 	_seed_position = Vector3.ZERO
@@ -288,6 +328,7 @@ func _build_concourse_landmarks() -> void:
 	# No vertex colors are needed for this authored layer; every new part uses
 	# the shared pulp shader's uniform palette instead.
 	var sun_dock := _landmark_root("SunDock")
+	_register_ambient_motion(sun_dock, 0.004, 0.31, 0.0, 1)
 	_add_landmark_part(sun_dock, _box_mesh(Vector3(0.22, 7.0, 0.22)), Vector3(-7.0, 3.4, 0.0), CHALK_CERAMIC)
 	_add_landmark_part(sun_dock, _box_mesh(Vector3(0.22, 7.0, 0.22)), Vector3(7.0, 3.4, 0.0), CHALK_CERAMIC, Vector3(0.0, 0.0, 0.08))
 	_add_landmark_part(sun_dock, _box_mesh(Vector3(14.2, 0.24, 0.24)), Vector3(0.0, 6.8, 0.0), COPPER_LIGHT, Vector3.ZERO, 0.55)
@@ -299,6 +340,7 @@ func _build_concourse_landmarks() -> void:
 	_add_landmark_part(sun_dock, _box_mesh(Vector3(0.16, 1.9, 0.16)), Vector3(2.3, 0.95, -3.4), OXIDIZED_COPPER)
 
 	var void_dock := _landmark_root("VoidDock")
+	_register_ambient_motion(void_dock, 0.004, 0.44, 0.7, 1)
 	void_dock.scale.x = -1.0
 	_add_landmark_part(void_dock, _box_mesh(Vector3(0.22, 7.0, 0.22)), Vector3(-7.0, 3.4, 0.0), CHALK_CERAMIC)
 	_add_landmark_part(void_dock, _box_mesh(Vector3(0.22, 7.0, 0.22)), Vector3(7.0, 3.4, 0.0), CHALK_CERAMIC, Vector3(0.0, 0.0, -0.08))
@@ -309,6 +351,8 @@ func _build_concourse_landmarks() -> void:
 	_add_landmark_part(void_dock, _box_mesh(Vector3(10.5, 0.18, 0.18)), Vector3(0.0, 5.9, -2.8), CHALK_CERAMIC, Vector3(0.0, 0.0, 0.12), 0.35)
 
 	var relay_basin := _landmark_root("RelayBasin")
+	_objective_pulse_root = relay_basin
+	_register_ambient_motion(relay_basin, 0.006, 0.27, 1.2, 2)
 	_add_landmark_part(relay_basin, _box_mesh(Vector3(5.0, 0.18, 0.18)), Vector3(-2.5, 4.9, 0.0), CHALK_CERAMIC, Vector3(0.0, 0.0, -0.16), 0.55)
 	_add_landmark_part(relay_basin, _box_mesh(Vector3(5.0, 0.18, 0.18)), Vector3(2.5, 4.9, 0.0), CHALK_CERAMIC, Vector3(0.0, 0.0, 0.16), 0.55)
 	_add_landmark_part(relay_basin, _box_mesh(Vector3(0.18, 0.18, 4.2)), Vector3(0.0, 4.9, -2.1), OXIDIZED_COPPER, Vector3(0.16, 0.0, 0.0), 0.4)
@@ -323,6 +367,7 @@ func _build_concourse_landmarks() -> void:
 		_add_landmark_part(frame, _box_mesh(Vector3(2.2, 0.14, 0.14)), Vector3(0.0, 4.1, 0.0), SEED_LIGHT, Vector3.ZERO, 1.4)
 
 	var windwalk := _landmark_root("Windwalk")
+	_register_ambient_motion(windwalk, 0.005, 0.22, 1.9, 2)
 	var mast := _landmark_root("TransitMast", windwalk)
 	mast.position = Vector3(-8.0, 0.0, 0.0)
 	mast.rotation.z = -0.12
@@ -334,6 +379,7 @@ func _build_concourse_landmarks() -> void:
 	_add_landmark_part(windwalk, _box_mesh(Vector3(0.14, 0.14, 8.0)), Vector3(27.0, 2.2, -1.0), CHALK_CERAMIC, Vector3(0.0, 0.0, 0.16), 0.3)
 
 	var service_run := _landmark_root("ServiceRun")
+	_register_ambient_motion(service_run, 0.003, 0.36, 2.4, 1)
 	var gantry := _landmark_root("MaintenanceGantry", service_run)
 	gantry.position = Vector3(8.0, 0.0, 0.0)
 	_add_landmark_part(gantry, _box_mesh(Vector3(0.22, 4.8, 0.22)), Vector3(-2.0, 2.0, 0.0), OXIDIZED_COPPER)
@@ -346,6 +392,7 @@ func _build_concourse_landmarks() -> void:
 	_add_emissive_rail(Vector3(0.0, 0.06, -8.0), Vector3(78.0, 0.08, 0.08), COPPER_LIGHT, service_run)
 
 	var storm_horizon := _landmark_root("StormHorizon")
+	_register_ambient_motion(storm_horizon, 0.003, 0.18, 2.9, 2)
 	storm_horizon.position = Vector3(0.0, 0.0, 42.0)
 	_add_landmark_part(storm_horizon, _box_mesh(Vector3(18.0, 0.22, 0.22)), Vector3(-20.0, 9.0, 0.0), STORMGLASS_DEEP, Vector3(0.0, 0.0, -0.1))
 	_add_landmark_part(storm_horizon, _box_mesh(Vector3(0.22, 15.0, 0.22)), Vector3(-28.0, 3.0, 0.0), OXIDIZED_COPPER, Vector3(0.0, 0.0, -0.18))
@@ -371,6 +418,18 @@ func _landmark_root(root_name: String, parent: Node3D = null) -> Node3D:
 	root.name = root_name
 	(parent if parent != null else self).add_child(root)
 	return root
+
+func _register_ambient_motion(root: Node3D, amplitude: float, frequency: float, phase: float, axis: int) -> void:
+	if not _presentation_enabled or root == null:
+		return
+	_ambient_motion.append({
+		"root": root,
+		"amplitude": amplitude,
+		"frequency": frequency,
+		"phase": phase,
+		"axis": axis,
+		"base": root.rotation.x if axis == 0 else root.rotation.z if axis == 2 else root.rotation.y,
+	})
 
 func _add_landmark_part(parent: Node3D, mesh: Mesh, position: Vector3, color: Color, rotation: Vector3 = Vector3.ZERO, glow: float = 0.0) -> void:
 	var instance := MeshInstance3D.new()

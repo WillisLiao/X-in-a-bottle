@@ -354,8 +354,11 @@ func show_hit_confirm() -> void:
 	hit_confirm = 1.0
 	queue_redraw()
 
-func show_primary_fire_feedback() -> void:
-	primary_fire_bloom = minf(1.0, primary_fire_bloom + 0.72)
+func show_primary_fire_feedback(hip_burst_followup: bool = false) -> void:
+	# Only accepted follow-up hip shots open the reticle meaningfully.  A single
+	# shot and ADS keep a barely perceptible acknowledgement without exposing a
+	# player-facing accuracy value.
+	primary_fire_bloom = minf(1.0, primary_fire_bloom + (0.72 if hip_burst_followup else 0.14))
 	queue_redraw()
 
 func show_objective_feedback(event_type: String, scoring_team: int) -> void:

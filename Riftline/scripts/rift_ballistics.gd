@@ -18,18 +18,49 @@ const M4_MAX_RANGE := 48.0
 # The 48 meter cap keeps the fast projectile bounded to the arena's close competitive lanes.
 const PROJECTILE_GRAVITY := 9.81
 const COLLISION_MASK := 1 | 2
+const WORLD_COLLISION_MASK := 1
+# 18 mm is enough to detect a barrel actually inside a wall while leaving a
+# near-side surface outside the probe, which is important for crosshair truth.
+const MUZZLE_CONTACT_RADIUS := 0.018
 
 var _next_projectile_id := 1
 var _session_id := str(Time.get_ticks_usec())
 var _projectiles: Array[Dictionary] = []
 
-func fire(shooter: Duelist, weapon: Duelist.Weapon, origin: Vector3, direction: Vector3) -> bool:
+func fire(shooter: Duelist, weapon: Duelist.Weapon, _legacy_origin: Vector3 = Vector3.ZERO, _legacy_direction: Vector3 = Vector3.ZERO) -> bool:
 	if multiplayer.has_multiplayer_peer() and not is_multiplayer_authority():
 		return false
 	if not is_instance_valid(shooter) or not shooter.match_active or shooter.eliminated:
 		return false
-	if weapon != Duelist.Weapon.PULSE or direction.length_squared() < 0.000001:
+	if weapon != Duelist.Weapon.PULSE:
 		return false
+	# The authority consumes the accepted plan from Duelist.  The retained
+	# optional arguments keep old offline exercises source-compatible, but are
+	# deliberately ignored so a caller cannot author an origin or trajectory.
+	var plan := shooter.consume_authoritative_shot_plan()
+	var origin: Vector3 = plan.get("eye_origin", shooter.authoritative_eye_origin())
+	var direction: Vector3 = plan.get("direction", shooter.authoritative_aim_direction())
+	if direction.length_squared() < 0.000001:
+		return false
+	if _muzzle_is_embedded(shooter, plan.get("physical_muzzle", shooter.physical_muzzle_position())):
+		var obstruction_id := _next_projectile_id
+		_next_projectile_id += 1
+		projectile_impacted.emit({
+			"type": "projectile_impacted",
+			"session_id": _session_id,
+			"id": obstruction_id,
+			"team": int(shooter.team),
+			"weapon": int(weapon),
+			"shooter_id": shooter.actor_id,
+			"target_id": "",
+			"source_position": origin,
+			"damage": 0.0,
+			"position": plan.get("physical_muzzle", origin),
+			"normal": -direction,
+			"hit_duelist": false,
+			"obstructed": true,
+		})
+		return true
 	var velocity := direction.normalized() * M4_PROJECTILE_SPEED
 	var projectile_id := _next_projectile_id
 	_next_projectile_id += 1
@@ -41,8 +72,11 @@ func fire(shooter: Duelist, weapon: Duelist.Weapon, origin: Vector3, direction: 
 		"weapon": int(weapon),
 		"position": origin,
 		"source_position": origin,
+		"presentation_origin": plan.get("presentation_origin", origin),
 		"velocity": velocity,
 		"remaining_range": M4_MAX_RANGE,
+		"hip_burst_index": int(plan.get("hip_burst_index", 0)),
+		"hip_burst_followup": bool(plan.get("hip_burst_followup", false)),
 	}
 	_projectiles.append(projectile)
 	projectile_fired.emit({
@@ -53,7 +87,10 @@ func fire(shooter: Duelist, weapon: Duelist.Weapon, origin: Vector3, direction: 
 		"team": int(shooter.team),
 		"weapon": int(weapon),
 		"origin": origin,
+		"presentation_origin": projectile.get("presentation_origin", origin),
 		"velocity": velocity,
+		"hip_burst_index": projectile.get("hip_burst_index", 0),
+		"hip_burst_followup": projectile.get("hip_burst_followup", false),
 	})
 	return true
 
@@ -110,6 +147,21 @@ func _sweep(from: Vector3, to: Vector3, shooter: Duelist) -> Dictionary:
 	query.exclude = [shooter.get_rid()]
 	return world.direct_space_state.intersect_ray(query)
 
+func _muzzle_is_embedded(shooter: Duelist, muzzle_position: Vector3) -> bool:
+	var world := get_world_3d()
+	if world == null:
+		return false
+	var sphere := SphereShape3D.new()
+	sphere.radius = MUZZLE_CONTACT_RADIUS
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = sphere
+	query.transform = Transform3D(Basis.IDENTITY, muzzle_position)
+	query.collision_mask = WORLD_COLLISION_MASK
+	query.exclude = [shooter.get_rid()]
+	# A small overlap is intentionally used instead of an eye-to-muzzle ray.
+	# Proximity to a wall is not obstruction; the muzzle must actually occupy it.
+	return not world.direct_space_state.intersect_shape(query, 1).is_empty()
+
 func _handle_impact(projectile: Dictionary, hit: Dictionary) -> void:
 	var shooter: Duelist = projectile.shooter
 	var collider: Object = hit.get("collider", null)
@@ -131,4 +183,5 @@ func _handle_impact(projectile: Dictionary, hit: Dictionary) -> void:
 		"position": hit.get("position", projectile.position),
 		"normal": hit.get("normal", Vector3.UP),
 		"hit_duelist": hit_duelist,
+		"obstructed": false,
 	})

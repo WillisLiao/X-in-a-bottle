@@ -70,6 +70,7 @@ var _perf_logged := false
 var _objective_preview := ""
 var _weapon_preview := ""
 var _ballistics_preview := ""
+var _motion_preview := ""
 var _touch_preview := ""
 var _rift_link_preview := ""
 var _relay_cue_shown := false
@@ -88,6 +89,7 @@ var _impact_pool: Array[Node3D] = []
 var _projectile_tracers: Dictionary = {}
 var _tracer_cursor := 0
 var _impact_cursor := 0
+var _preview_ballistics_bodies: Array[Node] = []
 
 func _ready() -> void:
 	_build_network()
@@ -104,7 +106,7 @@ func _ready() -> void:
 		_enter_lan_runtime(true, false)
 	else:
 		_build_environment()
-		_capture_fixture_only = _capture_settings or _capture_hud_layout or not _squad_preview.is_empty() or not _arena_preview.is_empty() or not _feedback_preview.is_empty() or not _rift_link_preview.is_empty() or not _practice_preview.is_empty() or not _relay_preview.is_empty()
+		_capture_fixture_only = _capture_settings or _capture_hud_layout or not _squad_preview.is_empty() or not _arena_preview.is_empty() or not _feedback_preview.is_empty() or not _rift_link_preview.is_empty() or not _practice_preview.is_empty() or not _relay_preview.is_empty() or not _motion_preview.is_empty()
 		var show_practice := not command_line_lan and _should_show_practice_panel()
 		_build_hud()
 		if _capture_settings:
@@ -145,6 +147,7 @@ func _ready() -> void:
 					_apply_objective_preview()
 			_apply_weapon_preview()
 			_apply_ballistics_preview()
+			_apply_motion_preview()
 			_apply_feedback_preview()
 	if not _capture_path.is_empty():
 		_capture_after_delay()
@@ -534,7 +537,7 @@ func _should_show_practice_panel() -> bool:
 		return true
 	if not _capture_path.is_empty() or _offline_squad_size > 1:
 		return false
-	return _squad_preview.is_empty() and _arena_preview.is_empty() and _feedback_preview.is_empty() and _rift_link_preview.is_empty() and _objective_preview.is_empty() and _weapon_preview.is_empty() and _ballistics_preview.is_empty() and _touch_preview.is_empty() and _relay_preview.is_empty()
+	return _squad_preview.is_empty() and _arena_preview.is_empty() and _feedback_preview.is_empty() and _rift_link_preview.is_empty() and _objective_preview.is_empty() and _weapon_preview.is_empty() and _ballistics_preview.is_empty() and _motion_preview.is_empty() and _touch_preview.is_empty() and _relay_preview.is_empty()
 
 func _load_practice_drill() -> String:
 	var config := ConfigFile.new()
@@ -619,6 +622,8 @@ func _on_objective_changed(state: Dictionary) -> void:
 	_update_seed_relay_control(state)
 
 func _on_objective_event(event_type: String, state: Dictionary) -> void:
+	if arena_map != null and event_type in ["objective_claimed", "objective_dropped", "objective_returned", "objective_delivered", "objective_relay_launched", "objective_relay_caught", "objective_relay_disrupted"]:
+		arena_map.pulse_objective()
 	if event_type == "objective_delivered":
 		_clear_ballistics()
 		if coach != null and not _lan_active:
@@ -694,20 +699,20 @@ func _clear_ballistics() -> void:
 			impact.set_meta("token", int(impact.get_meta("token", 0)) + 1)
 			impact.visible = false
 
-func _on_authority_fire_requested(shooter: Duelist, fired_weapon: Duelist.Weapon, origin: Vector3, direction: Vector3) -> void:
+func _on_authority_fire_requested(shooter: Duelist, fired_weapon: Duelist.Weapon, _origin: Vector3, _direction: Vector3) -> void:
 	if ballistics != null:
-		ballistics.fire(shooter, fired_weapon, origin, direction)
+		ballistics.fire(shooter, fired_weapon)
 
-func _on_local_fire_requested(_shooter: Duelist, fired_weapon: Duelist.Weapon, _origin: Vector3, _direction: Vector3) -> void:
+func _on_local_fire_requested(shooter: Duelist, fired_weapon: Duelist.Weapon, origin: Vector3, _direction: Vector3) -> void:
 	if fired_weapon != Duelist.Weapon.PULSE or not _presentation_enabled:
 		return
 	# Joining clients predict only local presentation.  Combat remains authority-owned.
 	_pending_local_primary_predictions = mini(_pending_local_primary_predictions + 1, 8)
 	_play_shooter_fire(_local_team, fired_weapon)
 	if combat_feedback != null:
-		combat_feedback.weapon_fired(_local_actor_id, fired_weapon, _origin, true)
+		combat_feedback.weapon_fired(_local_actor_id, fired_weapon, origin, true)
 	if hud != null:
-		hud.show_primary_fire_feedback()
+		hud.show_primary_fire_feedback(shooter.last_shot_was_hip_followup)
 
 func _sync_reload_feedback() -> void:
 	if _local_duelist == null or combat_feedback == null:
@@ -741,7 +746,7 @@ func _on_projectile_fired(fact: Dictionary) -> void:
 			if combat_feedback != null:
 				combat_feedback.weapon_fired(shooter_id, Duelist.Weapon.PULSE, fact.get("origin", Vector3.ZERO), shooter_id == _local_actor_id)
 			if _local_duelist != null and shooter_id == _local_duelist.actor_id and hud != null:
-				hud.show_primary_fire_feedback()
+				hud.show_primary_fire_feedback(bool(fact.get("hip_burst_followup", false)))
 		_spawn_projectile_tracer(fact)
 	if _lan_host:
 		network.publish_event(fact)
@@ -758,6 +763,8 @@ func _on_projectile_impacted(fact: Dictionary) -> void:
 	if _presentation_enabled:
 		var team := int(fact.get("team", int(Duelist.Team.SUN))) as Duelist.Team
 		_spawn_projectile_impact(fact.get("position", Vector3.ZERO), fact.get("normal", Vector3.UP), team, bool(fact.get("hit_duelist", false)))
+		if bool(fact.get("obstructed", false)):
+			_play_shooter_obstruction(str(fact.get("shooter_id", "")))
 		if combat_feedback != null:
 			combat_feedback.projectile_impacted(fact, _local_duelist.global_position if _local_duelist != null else Vector3.ZERO)
 	if _lan_host:
@@ -1069,6 +1076,7 @@ func _replace_match_for_lan(host: bool) -> void:
 
 func _clear_match_nodes() -> void:
 	_clear_ballistics()
+	_clear_ballistics_preview_bodies()
 	if director != null:
 		director.queue_free()
 	for actor in _all_authority_actors():
@@ -1575,6 +1583,11 @@ func _play_shooter_fire_by_id(actor_id: String, fired_weapon: Duelist.Weapon) ->
 		return
 	actor.play_local_weapon_fire(fired_weapon) if actor == _local_duelist else actor.play_remote_weapon_fire(fired_weapon)
 
+func _play_shooter_obstruction(actor_id: String) -> void:
+	var actor := _actor(actor_id)
+	if actor != null:
+		actor.play_weapon_obstruction()
+
 func _build_projectile_presentation_pool() -> void:
 	if not _presentation_enabled or _projectile_presentation_pool != null:
 		return
@@ -1629,7 +1642,7 @@ func _spawn_projectile_tracer(fact: Dictionary) -> void:
 		_projectile_tracers.erase(previous_projectile_key)
 	var token := int(tracer.get_meta("token", 0)) + 1
 	tracer.set_meta("token", token)
-	var origin: Vector3 = fact.get("origin", Vector3.ZERO)
+	var origin: Vector3 = fact.get("presentation_origin", fact.get("origin", Vector3.ZERO))
 	var velocity: Vector3 = fact.get("velocity", Vector3.ZERO)
 	if velocity.length_squared() < 0.0001:
 		return
@@ -1854,6 +1867,10 @@ func _read_capture_arguments() -> void:
 			_weapon_preview = argument.trim_prefix("--weapon-preview=")
 		elif argument.begins_with("--ballistics-preview="):
 			_ballistics_preview = argument.trim_prefix("--ballistics-preview=")
+		elif argument.begins_with("--motion-preview="):
+			_motion_preview = argument.trim_prefix("--motion-preview=")
+			if _motion_preview in ["world-locomotion", "relay-machinery"]:
+				_offline_squad_size = 3
 		elif argument.begins_with("--touch-preview="):
 			_touch_preview = argument.trim_prefix("--touch-preview=")
 		elif argument.begins_with("--rift-link-preview="):
@@ -2096,20 +2113,105 @@ func _apply_ballistics_preview() -> void:
 	if hud != null:
 		hud.set_match_phase(LinebreakMatch.Phase.LIVE)
 		hud.set_combat_input_enabled(true)
-	# These are capture-only presenter fixtures.  They never call RiftBallistics.fire,
-	# never change health, and intentionally hold a record still so a 60ms live path
-	# can be inspected in a screenshot without slowing the real projectile.
-	var origin := _local_duelist.camera.global_position + -_local_duelist.camera.global_transform.basis.z * 0.7
-	var direction := -_local_duelist.camera.global_transform.basis.z
-	var fixture_direction := (direction + _local_duelist.camera.global_transform.basis.x * 0.7).normalized()
+		hud.set_coach_cue({})
+	if coach != null:
+		coach.hide()
+	# Preview fixtures use the real authority path so captures can prove the
+	# crosshair contract.  The fixtures are static presentation targets and never
+	# become part of the map or gameplay state.
+	_local_duelist.set_match_active(true)
+	_local_duelist.position = Vector3.ZERO
+	_local_duelist.rotation = Vector3.ZERO
+	_local_duelist.head.rotation = Vector3.ZERO
+	_clear_ballistics_preview_bodies()
+	_spawn_ballistics_preview_solid(Vector3(0.0, 1.2, -9.0), Vector3(0.8, 2.4, 0.8), Color("bd7254"))
 	match _ballistics_preview:
-		"carbine-tracer":
-			_show_capture_tracer(origin + fixture_direction * 0.45, fixture_direction, int(_local_duelist.team))
-		"carbine-impact":
-			_show_capture_impact(origin + direction * 0.35, -direction, _local_duelist.team, false)
-		"carbine-burst":
-			for distance in [0.4, 0.9, 1.4]:
-				_show_capture_tracer(origin + fixture_direction * distance, fixture_direction, int(_local_duelist.team))
+		"crosshair-clear-near-wall":
+			_spawn_ballistics_preview_solid(Vector3(0.42, 1.2, -2.0), Vector3(0.22, 2.4, 0.24), Color("496f8e"))
+			_local_duelist.set_combat_pose(false, 1.0)
+			_local_duelist._fire_remaining = 0.0
+			_local_duelist.fire_forward()
+			ballistics.tick_authority(1.0 / 60.0)
+		"muzzle-embedded":
+			_spawn_ballistics_preview_solid(_local_duelist.physical_muzzle_position(), Vector3(0.4, 0.4, 0.4), Color("496f8e"))
+			_local_duelist.set_combat_pose(false, 1.0)
+			_local_duelist._fire_remaining = 0.0
+			_local_duelist.fire_forward()
+		"hip-burst":
+			_local_duelist.set_combat_pose(false, 1.0)
+			for _index in 3:
+				_local_duelist._fire_remaining = 0.0
+				_local_duelist.fire_forward()
+				ballistics.tick_authority(1.0 / 60.0)
+		"ads-burst":
+			_local_duelist.set_combat_pose(true, 1.0)
+			for _index in 3:
+				_local_duelist._fire_remaining = 0.0
+				_local_duelist.fire_forward()
+				ballistics.tick_authority(1.0 / 60.0)
+		"single-fire":
+			_local_duelist.set_combat_pose(false, 1.0)
+			_local_duelist._fire_remaining = 0.0
+			_local_duelist.fire_forward()
+
+func _spawn_ballistics_preview_solid(position: Vector3, dimensions: Vector3, color: Color) -> void:
+	var body := StaticBody3D.new()
+	body.position = position
+	var collision := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = dimensions
+	collision.shape = shape
+	body.add_child(collision)
+	var mesh := MeshInstance3D.new()
+	mesh.mesh = _box_mesh(dimensions)
+	mesh.material_override = _pulp_material(color, 0.18)
+	body.add_child(mesh)
+	add_child(body)
+	_preview_ballistics_bodies.append(body)
+
+func _clear_ballistics_preview_bodies() -> void:
+	for body in _preview_ballistics_bodies:
+		if is_instance_valid(body):
+			body.queue_free()
+	_preview_ballistics_bodies.clear()
+
+func _apply_motion_preview() -> void:
+	if _motion_preview.is_empty() or _local_duelist == null or _local_duelist.camera == null:
+		return
+	if director != null:
+		director.set_physics_process(false)
+	if coach != null:
+		coach.hide()
+	if hud != null:
+		hud.set_match_phase(LinebreakMatch.Phase.LIVE)
+		hud.set_combat_input_enabled(true)
+		hud.set_coach_cue({})
+	_local_duelist.set_match_active(true)
+	match _motion_preview:
+		"first-person-reload":
+			_local_duelist.set_weapon_presentation(Duelist.Weapon.PULSE)
+			_local_duelist.magazine_rounds = 4
+			_local_duelist.reserve_ammo = 24
+			_local_duelist.reload_weapon()
+		"weapon-tuck":
+			_clear_ballistics_preview_bodies()
+			_spawn_ballistics_preview_solid(_local_duelist.physical_muzzle_position(), Vector3(0.4, 0.4, 0.4), Color("496f8e"))
+			_local_duelist.set_weapon_presentation(Duelist.Weapon.PULSE)
+			_local_duelist.set_combat_pose(false, 1.0)
+		"world-locomotion":
+			_local_duelist.camera.cull_mask = 1
+			_local_duelist.camera.global_position = Vector3(-7.0, 3.2, 8.0)
+			_local_duelist.camera.look_at(Vector3(0.0, 1.0, 1.0))
+			var preview_actor := _preview_actor()
+			preview_actor.position = Vector3(0.0, 0.1, 1.0)
+			preview_actor.velocity = Vector3(1.8, 0.0, 0.4)
+			preview_actor.set_match_active(true)
+		"relay-machinery":
+			_local_duelist.camera.cull_mask = 1
+			_local_duelist.camera.global_position = Vector3(0.0, 15.0, 22.0)
+			_local_duelist.camera.look_at(Vector3(0.0, 1.0, 0.0))
+			for actor in _all_authority_actors():
+				actor.set_match_active(true)
 
 func _apply_feedback_preview() -> void:
 	if _feedback_preview.is_empty() or _local_duelist == null or hud == null:

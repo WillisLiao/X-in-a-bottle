@@ -28,6 +28,30 @@ func _initialize() -> void:
 	blocker.queue_free()
 	await physics_frame
 
+	# The old muzzle-offset fixture is now a clear eye lane.  The wall is close
+	# to the rendered muzzle but outside the conservative embedded-contact probe.
+	ballistics.clear()
+	impacts.clear()
+	var side_wall := _make_solid(root, Vector3(0.42, 1.2, -2.0), Vector3(0.22, 2.4, 0.24))
+	ballistics.fire(human, Duelist.Weapon.PULSE, Vector3(0.42, 1.04, -1.22), Vector3.FORWARD)
+	ballistics.tick_authority(1.0 / 60.0)
+	assert(impacts.is_empty())
+	side_wall.queue_free()
+	await physics_frame
+
+	# Contact at the actual physical muzzle is a presentation-only world impact:
+	# it never creates a projectile and never applies damage.
+	ballistics.clear()
+	impacts.clear()
+	var embedded_wall := _make_solid(root, human.physical_muzzle_position(), Vector3(0.4, 0.4, 0.4))
+	ballistics.fire(human, Duelist.Weapon.PULSE, Vector3(99.0, 99.0, 99.0), Vector3.UP)
+	assert(impacts.size() == 1)
+	assert(bool(impacts[0].get("obstructed", false)))
+	assert(is_zero_approx(float(impacts[0].get("damage", 1.0))))
+	assert(ballistics.active_count() == 0)
+	embedded_wall.queue_free()
+	await physics_frame
+
 	# The shooter RID is excluded from the sweep, so a muzzle that begins in its capsule cannot self-hit.
 	ballistics.clear()
 	impacts.clear()
@@ -53,6 +77,45 @@ func _initialize() -> void:
 	assert(impacts.all(func(fact: Dictionary) -> bool: return bool(fact.hit_duelist)))
 	assert(impacts.all(func(fact: Dictionary) -> bool: return str(fact.shooter_id) == "human" and str(fact.target_id) == "bot"))
 	assert(impacts.all(func(fact: Dictionary) -> bool: return fact.has("source_position") and is_equal_approx(float(fact.damage), BALLISTICS.M4_DAMAGE)))
+
+	# Accepted hip-fire follow-ups are deterministic and capped, while a reset
+	# restores the exact first-shot trajectory and ADS adds no new dispersion.
+	ballistics.clear()
+	fired.clear()
+	human.global_position = Vector3.ZERO
+	human.set_combat_pose(false, 0.1)
+	human._simulate_motion(Vector2.ZERO, false, Duelist.HIP_BURST_RESET_SECONDS + 0.02)
+	human._fire_remaining = 0.0
+	human._accept_shot_plan()
+	ballistics.fire(human, Duelist.Weapon.PULSE)
+	human._fire_remaining = 0.0
+	human._accept_shot_plan()
+	ballistics.fire(human, Duelist.Weapon.PULSE)
+	assert(fired.size() >= 2)
+	var first_velocity: Vector3 = fired[-2].velocity
+	var followup_velocity: Vector3 = fired[-1].velocity
+	assert(not first_velocity.is_equal_approx(followup_velocity))
+	assert(float(fired[-1].get("hip_burst_index", 0)) <= Duelist.HIP_BURST_MAX_INDEX)
+	ballistics.clear()
+	human._simulate_motion(Vector2.ZERO, false, Duelist.HIP_BURST_RESET_SECONDS + 0.02)
+	fired.clear()
+	human._accept_shot_plan()
+	ballistics.fire(human, Duelist.Weapon.PULSE)
+	assert(fired.size() == 1)
+	assert(fired[0].velocity.is_equal_approx(first_velocity))
+	ballistics.clear()
+	human.set_combat_pose(true, 0.1)
+	fired.clear()
+	human._fire_remaining = 0.0
+	human._accept_shot_plan()
+	ballistics.fire(human, Duelist.Weapon.PULSE)
+	human._fire_remaining = 0.0
+	human._accept_shot_plan()
+	ballistics.fire(human, Duelist.Weapon.PULSE)
+	assert(fired.size() == 2)
+	assert(fired[0].velocity.is_equal_approx(fired[1].velocity))
+	ballistics.clear()
+	human.set_combat_pose(false, 0.1)
 
 	# A same-team target can be crossed by a projectile but never takes damage.
 	var friendly := _make_duelist(root, Duelist.Team.SUN, "friendly", Vector3(0.0, 0.0, -4.0))

@@ -18,6 +18,7 @@ func _initialize() -> void:
 	root.add_child(concourse)
 	concourse.configure(RiftlineMap.Id.CONCOURSE, false)
 	assert(not _contains_mesh(concourse))
+	assert(concourse.ambient_motion_count() == 0)
 	for team in [Duelist.Team.SUN, Duelist.Team.VOID]:
 		var spawns := concourse.spawn_points(team)
 		assert(spawns.size() == 5)
@@ -47,6 +48,7 @@ func _initialize() -> void:
 	root.add_child(rendered)
 	rendered.configure(RiftlineMap.Id.CONCOURSE, true)
 	assert(_contains_mesh(rendered))
+	assert(rendered.ambient_motion_count() >= 6)
 	for landmark_name in ["SunDock", "VoidDock", "RelayBasin", "Windwalk", "ServiceRun", "StormHorizon"]:
 		assert(_find_named_node(rendered, landmark_name) != null)
 

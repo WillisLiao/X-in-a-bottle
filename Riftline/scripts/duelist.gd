@@ -24,6 +24,13 @@ const SCATTER_DAMAGE := 13.0
 const GRAVITY := 26.0
 const JUMP_SPEED := 9.3
 const CARRY_SPEED_MULTIPLIER := 0.88
+# The first deliberate carbine shot is exact.  Follow-up hip shots open into a
+# small deterministic cone that is useful at Concourse range, while the short
+# reset window makes releasing fire restore the current single-shot feel.
+const HIP_BURST_RESET_SECONDS := 0.28
+const HIP_BURST_MAX_INDEX := 6
+const HIP_BURST_HORIZONTAL_STEP := 0.0085
+const HIP_BURST_VERTICAL_STEP := 0.0045
 
 var team: Team = Team.SUN
 var actor_id := ""
@@ -37,11 +44,16 @@ var reserve_ammo := M4_RESERVE_AMMO
 var reload_remaining := 0.0
 var match_active := false
 var _fire_remaining := 0.0
+var _hip_burst_reset_remaining := 0.0
+var _hip_burst_index := 0
+var _pending_authoritative_shot_plan: Dictionary = {}
+var last_shot_was_hip_followup := false
 var _collision: CollisionShape3D
 var _capsule: CapsuleShape3D
 var _torso: MeshInstance3D
 var _band: MeshInstance3D
 var _body_visual_root: Node3D
+var _body_visual_target_scale_y := 1.0
 var _weapon_root: Node3D
 var _weapon_mesh: MeshInstance3D
 var _weapon_core: MeshInstance3D
@@ -60,6 +72,11 @@ var _recoil_remaining := 0.0
 var _fire_flash_remaining := 0.0
 var _damage_flash_remaining := 0.0
 var _flinch_remaining := 0.0
+var _obstruction_remaining := 0.0
+var _swap_motion := 0.0
+var _recoil_kick := 0.0
+var _recoil_lateral := 0.0
+var _magazine_mesh: MeshInstance3D
 var _carrier_signal_root: Node3D
 var _local_camera := false
 var _render_visuals := true
@@ -139,6 +156,8 @@ func _process(delta: float) -> void:
 	_fire_flash_remaining = maxf(0.0, _fire_flash_remaining - delta)
 	_damage_flash_remaining = maxf(0.0, _damage_flash_remaining - delta)
 	_flinch_remaining = maxf(0.0, _flinch_remaining - delta)
+	_obstruction_remaining = maxf(0.0, _obstruction_remaining - delta)
+	_swap_motion = maxf(0.0, _swap_motion - delta * 5.5)
 	var moving := Vector2(velocity.x, velocity.z).length() > 0.35
 	var gait := sin(_pose_distance * 1.35) if moving else 0.0
 	var gait_lag := cos(_pose_distance * 1.35) if moving else 0.0
@@ -168,11 +187,26 @@ func _process(delta: float) -> void:
 		var hip := Vector3(0.42, -0.42, -1.22)
 		var ads := Vector3(0.0, -0.06, -0.96)
 		var target := ads if _aiming and _local_camera else hip
+		if _local_camera:
+			var breathing := sin(Time.get_ticks_msec() * 0.0017) * (0.004 if _aiming else 0.009)
+			var walking := sin(_pose_distance * 1.35) if moving else 0.0
+			target += Vector3(0.0, breathing + walking * (0.012 if not _aiming else 0.004), 0.0)
+			if _obstruction_remaining > 0.0 or _local_muzzle_obstructed():
+				target += Vector3(-0.12, 0.07, 0.22)
+			_weapon_root.rotation.z = lerpf(_weapon_root.rotation.z, 0.08 if _obstruction_remaining > 0.0 or _local_muzzle_obstructed() else 0.0, clampf(delta * 18.0, 0.0, 1.0))
+			if _swap_motion > 0.0:
+				target += Vector3(0.0, -0.16 * sin(_swap_motion * PI), 0.18 * sin(_swap_motion * PI))
 		if reload_remaining > 0.0 and _local_camera:
 			var reload_phase := clampf(1.0 - reload_remaining / M4_RELOAD_SECONDS, 0.0, 1.0)
 			target += Vector3(-0.04, -0.12 + sin(reload_phase * PI) * 0.06, 0.08)
 		_weapon_root.position = _weapon_root.position.lerp(target, clampf(delta * 14.0, 0.0, 1.0))
-		_weapon_root.rotation.x = lerpf(_weapon_root.rotation.x, -_recoil_remaining * (0.75 if weapon == Weapon.PULSE else 1.15), clampf(delta * 20.0, 0.0, 1.0))
+		_recoil_kick = move_toward(_recoil_kick, 0.0, delta * 5.4)
+		_recoil_lateral = move_toward(_recoil_lateral, 0.0, delta * 7.0)
+		_weapon_root.rotation.x = lerpf(_weapon_root.rotation.x, -_recoil_kick * (0.75 if weapon == Weapon.PULSE else 1.15), clampf(delta * 24.0, 0.0, 1.0))
+		_weapon_root.rotation.y = lerpf(_weapon_root.rotation.y, _recoil_lateral, clampf(delta * 20.0, 0.0, 1.0))
+		if _magazine_mesh != null and reload_remaining > 0.0:
+			var reload_phase := clampf(1.0 - reload_remaining / M4_RELOAD_SECONDS, 0.0, 1.0)
+			_magazine_mesh.visible = reload_phase < 0.16 or reload_phase > 0.68
 	if _muzzle_flare != null:
 		var flare := clampf(_fire_flash_remaining / 0.075, 0.0, 1.0)
 		_muzzle_flare.scale = Vector3.ONE * flare
@@ -180,7 +214,12 @@ func _process(delta: float) -> void:
 		var sequence := clampf((0.12 - _fire_flash_remaining) / 0.12 * 6.0, 0.0, 6.0)
 		for index in _rail_slots.size():
 			_set_material_glow(_rail_slots[index], 0.45 if index >= sequence else 1.2)
-	_set_material_glow(_band, 1.35 if _damage_flash_remaining > 0.0 else 0.6)
+		_set_material_glow(_band, 1.35 if _damage_flash_remaining > 0.0 else 0.6)
+	if _body_visual_root != null:
+		_body_visual_root.scale.y = lerpf(_body_visual_root.scale.y, _body_visual_target_scale_y, clampf(delta * 10.0, 0.0, 1.0))
+	if camera != null:
+		var camera_stance_offset := -0.14 if stance == Stance.CROUCH else -0.28 if stance == Stance.PRONE else 0.0
+		camera.position.y = lerpf(camera.position.y, camera_stance_offset, clampf(delta * 9.0, 0.0, 1.0))
 	if _body_visual_root != null:
 		var powered_down := eliminated
 		_body_visual_root.rotation.z = lerpf(_body_visual_root.rotation.z, -0.92 if powered_down else 0.0, clampf(delta * (7.0 if powered_down else 9.0), 0.0, 1.0))
@@ -196,7 +235,10 @@ func set_weapon_presentation(next_weapon: Weapon) -> void:
 		return
 	weapon = clamped
 	_recoil_remaining = 0.0
+	_recoil_kick = 0.0
+	_recoil_lateral = 0.0
 	_fire_flash_remaining = 0.0
+	_swap_motion = 1.0
 	_rebuild_weapon_models()
 
 func play_local_weapon_fire(fired_weapon: Weapon) -> void:
@@ -211,6 +253,8 @@ func _play_weapon_fire(fired_weapon: Weapon) -> void:
 	if weapon != fired_weapon:
 		set_weapon_presentation(fired_weapon)
 	_recoil_remaining = 0.12 if fired_weapon == Weapon.PULSE else 0.22
+	_recoil_kick = 0.16 if fired_weapon == Weapon.PULSE else 0.22
+	_recoil_lateral = -0.035 if fired_weapon == Weapon.PULSE else 0.05
 	_fire_flash_remaining = 0.075 if fired_weapon == Weapon.PULSE else 0.12
 	if _weapon_core != null:
 		_set_material_glow(_weapon_core, 5.0 if fired_weapon == Weapon.PULSE else 2.8)
@@ -238,6 +282,15 @@ func set_match_active(active: bool) -> void:
 		_fire_remaining = 0.0
 		reload_remaining = 0.0
 		_pending_jump = false
+		_hip_burst_index = 0
+		_hip_burst_reset_remaining = 0.0
+		_pending_authoritative_shot_plan.clear()
+		_obstruction_remaining = 0.0
+		_swap_motion = 0.0
+		_recoil_kick = 0.0
+		_recoil_lateral = 0.0
+		if _magazine_mesh != null:
+			_magazine_mesh.visible = true
 
 func make_input_frame(sequence: int, move_input: Vector2, aiming: bool, firing: bool, wants_jump: bool, crouch_edge: bool, prone_edge: bool, weapon_switch_edge: bool, reload_edge: bool, pass_seed_edge: bool = false) -> Dictionary:
 	return {
@@ -311,6 +364,7 @@ func apply_continuous_input(frame: Dictionary, delta: float, simulate_combat: bo
 		rotation.y = float(frame.get("yaw", rotation.y))
 		if head != null:
 			head.rotation.x = clampf(float(frame.get("pitch", head.rotation.x)), -1.05, 0.9)
+		_aiming = bool(frame.get("aim", _aiming))
 	var move_input := Vector2(float(frame.get("move_x", 0.0)), float(frame.get("move_y", 0.0))) if not frame.is_empty() else Vector2.ZERO
 	var wants_jump := _pending_jump
 	_pending_jump = false
@@ -368,6 +422,9 @@ func _apply_replay_frame(frame: Dictionary, delta: float) -> void:
 
 func _simulate_motion(move_input: Vector2, wants_jump: bool, delta: float) -> void:
 	_fire_remaining = maxf(0.0, _fire_remaining - delta)
+	_hip_burst_reset_remaining = maxf(0.0, _hip_burst_reset_remaining - delta)
+	if _hip_burst_reset_remaining <= 0.0:
+		_hip_burst_index = 0
 	if reload_remaining > 0.0:
 		reload_remaining = maxf(0.0, reload_remaining - delta)
 		if reload_remaining <= 0.0:
@@ -416,8 +473,7 @@ func _apply_stance(next_stance: Stance) -> void:
 	_capsule.height = body_height
 	_capsule.radius = body_radius
 	_collision.position.y = body_height * 0.5
-	if _body_visual_root != null:
-		_body_visual_root.scale.y = body_height / 1.8
+	_body_visual_target_scale_y = body_height / 1.8
 	head.position.y = body_height - 0.34
 
 func toggle_crouch() -> void:
@@ -450,13 +506,12 @@ func fire_forward() -> void:
 		reload_weapon()
 		return
 	_fire_remaining = BALLISTICS.M4_FIRE_INTERVAL if weapon == Weapon.PULSE else SCATTER_COOLDOWN
-	var origin := _fire_origin()
-	var direction := -head.global_transform.basis.z
+	var plan := _accept_shot_plan()
 	if weapon == Weapon.PULSE:
 		magazine_rounds -= 1
-		fire_requested.emit(self, weapon, origin, direction)
+		fire_requested.emit(self, weapon, plan.eye_origin, plan.direction)
 		return
-	_fire_scatter(origin, direction)
+	_fire_scatter(plan.eye_origin, plan.direction)
 
 func fire_at(target: Vector3) -> void:
 	if eliminated or not match_active or _fire_remaining > 0.0 or reload_remaining > 0.0:
@@ -465,13 +520,12 @@ func fire_at(target: Vector3) -> void:
 		reload_weapon()
 		return
 	_fire_remaining = BALLISTICS.M4_FIRE_INTERVAL if weapon == Weapon.PULSE else SCATTER_COOLDOWN
-	var origin := _fire_origin()
-	var direction := (target - origin).normalized()
+	var plan := _accept_shot_plan((target - authoritative_eye_origin()).normalized())
 	if weapon == Weapon.PULSE:
 		magazine_rounds -= 1
-		fire_requested.emit(self, weapon, origin, direction)
+		fire_requested.emit(self, weapon, plan.eye_origin, plan.direction)
 		return
-	_fire_scatter(origin, direction)
+	_fire_scatter(plan.eye_origin, plan.direction)
 
 func switch_weapon() -> void:
 	if eliminated or not match_active:
@@ -496,6 +550,12 @@ func take_damage(amount: float, attacker: Duelist) -> void:
 	if health <= 0.0:
 		eliminated = true
 		carrying_seed = false
+		_recoil_remaining = 0.0
+		_recoil_kick = 0.0
+		_recoil_lateral = 0.0
+		_obstruction_remaining = 0.0
+		_swap_motion = 0.0
+		_pending_authoritative_shot_plan.clear()
 		visible = _render_visuals
 		collision_layer = 0
 		defeated.emit(self, attacker)
@@ -516,16 +576,86 @@ func respawn_at(point: Vector3) -> void:
 	reload_remaining = 0.0
 	_damage_flash_remaining = 0.0
 	_flinch_remaining = 0.0
+	_obstruction_remaining = 0.0
+	_swap_motion = 0.0
+	_recoil_kick = 0.0
+	_recoil_lateral = 0.0
+	_hip_burst_index = 0
+	_hip_burst_reset_remaining = 0.0
+	_pending_authoritative_shot_plan.clear()
 	if _body_visual_root != null:
 		_body_visual_root.rotation = Vector3.ZERO
 		_body_visual_root.position = Vector3.ZERO
 	set_weapon_presentation(Weapon.PULSE)
 	_apply_stance(Stance.STAND)
 
-func _fire_origin() -> Vector3:
-	if is_instance_valid(_muzzle_flare):
-		return _muzzle_flare.global_position
-	return head.global_position + -head.global_transform.basis.z * 0.46
+func authoritative_eye_origin() -> Vector3:
+	return head.global_position if head != null else global_position + Vector3.UP * 1.46
+
+func authoritative_aim_direction() -> Vector3:
+	return -head.global_transform.basis.z if head != null else -global_transform.basis.z
+
+func physical_muzzle_position() -> Vector3:
+	var eye := authoritative_eye_origin()
+	var basis := head.global_transform.basis if head != null else global_transform.basis
+	return eye + basis.x * 0.42 - basis.y * 0.42 - basis.z * 1.85
+
+func consume_authoritative_shot_plan() -> Dictionary:
+	if not _pending_authoritative_shot_plan.is_empty():
+		var plan := _pending_authoritative_shot_plan.duplicate(true)
+		_pending_authoritative_shot_plan.clear()
+		return plan
+	return _accept_shot_plan()
+
+func play_weapon_obstruction() -> void:
+	_obstruction_remaining = 0.2
+
+func _accept_shot_plan(forced_direction: Vector3 = Vector3.ZERO) -> Dictionary:
+	var eye := authoritative_eye_origin()
+	var direction := authoritative_aim_direction()
+	var deliberate := forced_direction.length_squared() > 0.0001
+	if deliberate:
+		direction = forced_direction.normalized()
+		last_shot_was_hip_followup = false
+	elif weapon == Weapon.PULSE and not _aiming:
+		last_shot_was_hip_followup = _hip_burst_index > 0 and _hip_burst_reset_remaining > 0.0
+		if last_shot_was_hip_followup:
+			var right := head.global_transform.basis.x
+			var up := head.global_transform.basis.y
+			var phase := float((_hip_burst_index * 37 + actor_id.hash() % 19) % 19) / 18.0
+			var horizontal := (phase * 2.0 - 1.0) * HIP_BURST_HORIZONTAL_STEP * float(_hip_burst_index)
+			var vertical := (0.45 + phase * 0.55) * HIP_BURST_VERTICAL_STEP * float((_hip_burst_index + 1) % 3 - 1)
+			direction = (direction + right * horizontal + up * vertical).normalized()
+		_hip_burst_index = mini(_hip_burst_index + 1, HIP_BURST_MAX_INDEX)
+		_hip_burst_reset_remaining = HIP_BURST_RESET_SECONDS
+	else:
+		last_shot_was_hip_followup = false
+		if weapon == Weapon.PULSE:
+			_hip_burst_index = 1
+			_hip_burst_reset_remaining = HIP_BURST_RESET_SECONDS
+	var plan := {
+		"eye_origin": eye,
+		"direction": direction,
+		"physical_muzzle": physical_muzzle_position(),
+		"presentation_origin": eye + direction * 0.18,
+		"hip_burst_index": _hip_burst_index,
+		"hip_burst_followup": last_shot_was_hip_followup,
+		"deliberate": deliberate,
+	}
+	_pending_authoritative_shot_plan = plan.duplicate(true)
+	return plan
+
+func _local_muzzle_obstructed() -> bool:
+	if not _local_camera or get_world_3d() == null or not is_inside_tree():
+		return false
+	var sphere := SphereShape3D.new()
+	sphere.radius = BALLISTICS.MUZZLE_CONTACT_RADIUS
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = sphere
+	query.transform = Transform3D(Basis.IDENTITY, physical_muzzle_position())
+	query.collision_mask = 1
+	query.exclude = [get_rid()]
+	return not get_world_3d().direct_space_state.intersect_shape(query, 1).is_empty()
 
 func _fire_scatter(origin: Vector3, direction: Vector3) -> void:
 	# The scatter weapon intentionally keeps its existing close-range ray behavior.
@@ -643,6 +773,7 @@ func _rebuild_weapon_models() -> void:
 	_weapon_mesh = null
 	_weapon_core = null
 	_muzzle_flare = null
+	_magazine_mesh = null
 	_rail_slots.clear()
 	var ceramic := _material(Color("3f4b55") if weapon == Weapon.PULSE else Color("687386"), 0.08)
 	var dark := _material(Color("17263e"), 0.0)
@@ -658,7 +789,7 @@ func _rebuild_weapon_models() -> void:
 		_add_weapon_part(_box(Vector3(0.22, 0.16, 0.32)), Vector3(0.0, 0.05, 0.86), ceramic)
 		_add_weapon_part(_box(Vector3(0.24, 0.18, 0.07)), Vector3(0.0, 0.05, 1.03), dark)
 		_add_weapon_part(_box(Vector3(0.14, 0.28, 0.16)), Vector3(0.0, -0.21, 0.23), dark, Vector3(-0.18, 0.0, 0.0))
-		_add_weapon_part(_box(Vector3(0.15, 0.32, 0.18)), Vector3(0.0, -0.23, -0.04), ceramic, Vector3(-0.12, 0.0, 0.0))
+		_magazine_mesh = _add_weapon_part(_box(Vector3(0.15, 0.32, 0.18)), Vector3(0.0, -0.23, -0.04), ceramic, Vector3(-0.12, 0.0, 0.0))
 		_add_weapon_part(_box(Vector3(0.18, 0.05, 0.20)), Vector3(0.0, -0.40, -0.04), dark)
 		_add_weapon_part(_box(Vector3(0.24, 0.17, 0.70)), Vector3(0.0, 0.03, -0.72), ceramic)
 		_add_weapon_part(_box(Vector3(0.27, 0.045, 0.72)), Vector3(0.0, 0.14, -0.72), dark)
