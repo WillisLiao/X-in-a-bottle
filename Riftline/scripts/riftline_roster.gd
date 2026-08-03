@@ -1,8 +1,6 @@
 class_name RiftlineRoster
 extends RefCounted
 
-const CREW_IDENTITY := preload("res://scripts/riftline_crew_identity.gd")
-
 ## Authority-owned actor identity and team assignment.
 ##
 ## The roster deliberately knows nothing about nodes, input, physics, or match
@@ -32,24 +30,24 @@ func configure(requested_team_size: int = 1, is_dedicated_session: bool = false,
 	bot_fill_enabled = allow_bot_fill
 	return true
 
-func add_host(frame_id: String = "vane") -> Dictionary:
+func add_host() -> Dictionary:
 	if dedicated_session or _records_by_id.has("host"):
 		return {}
-	return _add_record("host", -1, Duelist.Team.SUN, true, frame_id)
+	return _add_record("host", -1, Duelist.Team.SUN, true)
 
-func assign_peer(peer_id: int, frame_id: String = "vane") -> Dictionary:
+func assign_peer(peer_id: int) -> Dictionary:
 	if peer_id <= 0 or _actor_by_peer.has(peer_id):
 		return {}
 	var team := _balanced_team()
 	if team < 0:
 		return {}
 	var actor_id := _next_peer_actor_id(peer_id)
-	return _add_record(actor_id, peer_id, team as Duelist.Team, true, frame_id)
+	return _add_record(actor_id, peer_id, team as Duelist.Team, true)
 
-func add_bot(actor_id: String, team: Duelist.Team, frame_id: String = "vane") -> Dictionary:
+func add_bot(actor_id: String, team: Duelist.Team) -> Dictionary:
 	if actor_id.is_empty() or _used_actor_ids.has(actor_id) or not _has_room_for(team):
 		return {}
-	return _add_record(actor_id, -1, team, false, frame_id)
+	return _add_record(actor_id, -1, team, false)
 
 func remove_peer(peer_id: int) -> Dictionary:
 	var actor_id := str(_actor_by_peer.get(peer_id, ""))
@@ -107,16 +105,7 @@ func team_records(team: Duelist.Team) -> Array[Dictionary]:
 			result.append((existing as Dictionary).duplicate(true))
 	return result
 
-func set_frame_for_actor(actor_id: String, frame_id: String) -> bool:
-	if not _records_by_id.has(actor_id) or not CREW_IDENTITY.valid_id(frame_id):
-		return false
-	var next_frame := CREW_IDENTITY.canonical_id(frame_id)
-	if str(_records_by_id[actor_id].get("frame_id", "vane")) == next_frame:
-		return false
-	_records_by_id[actor_id]["frame_id"] = next_frame
-	return true
-
-func _add_record(actor_id: String, peer_id: int, team: Duelist.Team, human: bool, frame_id: String) -> Dictionary:
+func _add_record(actor_id: String, peer_id: int, team: Duelist.Team, human: bool) -> Dictionary:
 	if actor_id.is_empty() or _records_by_id.has(actor_id) or not _has_room_for(team):
 		return {}
 	var next := {
@@ -124,7 +113,6 @@ func _add_record(actor_id: String, peer_id: int, team: Duelist.Team, human: bool
 		"peer_id": peer_id,
 		"team": int(team),
 		"human": human,
-		"frame_id": CREW_IDENTITY.canonical_id(frame_id),
 	}
 	_records_by_id[actor_id] = next
 	_used_actor_ids[actor_id] = true
@@ -172,5 +160,4 @@ func _public_record(private_record: Dictionary) -> Dictionary:
 		"actor_id": str(private_record.get("actor_id", "")),
 		"team": int(private_record.get("team", -1)),
 		"human": bool(private_record.get("human", false)),
-		"frame_id": CREW_IDENTITY.canonical_id(private_record.get("frame_id", "vane")),
 	}

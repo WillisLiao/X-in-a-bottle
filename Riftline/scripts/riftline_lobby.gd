@@ -1,8 +1,6 @@
 class_name RiftlineLobby
 extends RefCounted
 
-const CREW_IDENTITY := preload("res://scripts/riftline_crew_identity.gd")
-
 ## Server-authoritative staging contract for a local Rift Link session.
 ##
 ## Peer IDs and roster records stay private to this module. Callers receive
@@ -44,10 +42,10 @@ func configure(next_team_size: int, next_arena_id: RiftlineMap.Id, is_dedicated:
 	_configured = true
 	return true
 
-func add_host(frame_id: String = "vane") -> Dictionary:
+func add_host() -> Dictionary:
 	if not _configured or dedicated or _phase != Phase.STAGING:
 		return {}
-	var record := roster.add_host(CREW_IDENTITY.canonical_id(frame_id))
+	var record := roster.add_host()
 	if record.is_empty():
 		return {}
 	_ready_by_actor[str(record.get("actor_id", ""))] = false
@@ -55,31 +53,16 @@ func add_host(frame_id: String = "vane") -> Dictionary:
 	_emit_state()
 	return record.duplicate(true)
 
-func admit_peer(peer_id: int, frame_id: String = "vane") -> Dictionary:
+func admit_peer(peer_id: int) -> Dictionary:
 	if not _configured or _phase != Phase.STAGING:
 		return {}
-	var record := roster.assign_peer(peer_id, CREW_IDENTITY.canonical_id(frame_id))
+	var record := roster.assign_peer(peer_id)
 	if record.is_empty():
 		return {}
 	_ready_by_actor[str(record.get("actor_id", ""))] = false
 	_revision += 1
 	_emit_state()
 	return record.duplicate(true)
-
-func set_host_frame(frame_id: String) -> bool:
-	return _set_frame_for_actor("host", frame_id)
-
-func request_peer_frame(peer_id: int, frame_id: String) -> bool:
-	return _set_frame_for_actor(_actor_id_for_peer(peer_id), frame_id)
-
-func _set_frame_for_actor(actor_id: String, frame_id: String) -> bool:
-	if not _configured or _phase != Phase.STAGING or actor_id.is_empty() or not CREW_IDENTITY.valid_id(frame_id):
-		return false
-	if not roster.set_frame_for_actor(actor_id, frame_id):
-		return false
-	_revision += 1
-	_emit_state()
-	return true
 
 func remove_peer(peer_id: int) -> Dictionary:
 	if not _configured:

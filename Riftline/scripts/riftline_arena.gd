@@ -4,8 +4,6 @@ extends Node3D
 const PULP_LIT := preload("res://shaders/pulp_lit.gdshader")
 const SNAPSHOT_BUFFER := preload("res://scripts/riftline_snapshot_buffer.gd")
 const PRACTICE_PANEL := preload("res://scripts/riftline_practice_panel.gd")
-const CREW_PROFILE := preload("res://scripts/riftline_crew_profile.gd")
-const CREW_IDENTITY := preload("res://scripts/riftline_crew_identity.gd")
 const OPENING_HOLD_SECONDS := 2.5
 
 var ballistics: RiftBallistics
@@ -290,14 +288,14 @@ func _build_match() -> void:
 	_add_spawn_points()
 	var offline_roster := RiftlineRoster.new()
 	offline_roster.configure(maxi(1, _offline_squad_size), false, _offline_squad_size > 1)
-	offline_roster.add_host(CREW_PROFILE.load_frame())
+	offline_roster.add_host()
 	if _offline_squad_size > 1:
 		for index in range(1, _offline_squad_size):
-			offline_roster.add_bot("offline_actor_%d" % index, Duelist.Team.SUN, CREW_IDENTITY.bot_frame_for_slot(index, _offline_squad_size))
+			offline_roster.add_bot("offline_actor_%d" % index, Duelist.Team.SUN)
 		for index in range(_offline_squad_size):
-			offline_roster.add_bot("offline_actor_%d" % (_offline_squad_size + index), Duelist.Team.VOID, CREW_IDENTITY.bot_frame_for_slot(index + 1, _offline_squad_size))
+			offline_roster.add_bot("offline_actor_%d" % (_offline_squad_size + index), Duelist.Team.VOID)
 	else:
-		offline_roster.add_bot("offline_actor_1", Duelist.Team.VOID, "vane")
+		offline_roster.add_bot("offline_actor_1", Duelist.Team.VOID)
 	for record in offline_roster.records():
 		_ensure_actor(record, str(record.actor_id) == "host", not _capture_fixture_only)
 
@@ -335,7 +333,6 @@ func _ensure_actor(record: Dictionary, local_controlled: bool, authoritative_col
 	var existing: Variant = registry.get(actor_id, null)
 	if existing is Duelist and is_instance_valid(existing):
 		if existing.team == team_value as Duelist.Team:
-			existing.set_crew_frame(str(record.get("frame_id", "vane")))
 			if local_controlled and hud != null:
 				existing.set_horizontal_fov(hud.horizontal_fov)
 			if local_controlled:
@@ -353,7 +350,6 @@ func _ensure_actor(record: Dictionary, local_controlled: bool, authoritative_col
 	duelist.position = spawn
 	duelist.rotation.y = -PI * 0.5 if team_value == int(Duelist.Team.SUN) else PI * 0.5
 	duelist.set_actor_id(actor_id)
-	duelist.set_crew_frame(str(record.get("frame_id", "vane")))
 	if local_controlled and hud != null:
 		duelist.set_horizontal_fov(hud.horizontal_fov)
 	add_child(duelist)
@@ -525,7 +521,6 @@ func _build_network() -> void:
 	network.lobby_state_received.connect(_on_lobby_state_received)
 	network.lobby_live_received.connect(_on_lobby_live_received)
 	network.lobby_abandoned_received.connect(_on_lobby_abandoned_received)
-	network.frame_selection_changed.connect(_on_frame_selection_changed)
 
 func _build_rift_link() -> void:
 
@@ -1397,18 +1392,13 @@ func _on_view_fov_changed(horizontal_degrees: float) -> void:
 	if _local_duelist != null:
 		_local_duelist.set_horizontal_fov(horizontal_degrees)
 
-func _on_frame_selection_changed(actor_id: String, frame_id: String) -> void:
-	var actor := _actor(actor_id)
-	if actor != null:
-		actor.set_crew_frame(frame_id)
-
 func _on_actor_assigned(actor_id: String, team_value: int) -> void:
 	if actor_id.is_empty() or team_value < int(Duelist.Team.SUN) or team_value > int(Duelist.Team.VOID):
 		return
 	_local_actor_id = actor_id
 	_local_team = team_value as Duelist.Team
 	if _lan_active and not _lan_host and not _dedicated_server:
-		_sync_roster_records([{"actor_id": actor_id, "team": team_value, "human": true, "frame_id": network.local_frame_id}])
+		_sync_roster_records([{"actor_id": actor_id, "team": team_value, "human": true}])
 
 func _on_roster_received(records: Array[Dictionary]) -> void:
 	if not _lan_active or _lan_host:
@@ -1868,16 +1858,6 @@ func _read_capture_arguments() -> void:
 				_offline_squad_size = 3
 		elif argument.begins_with("--practice-preview="):
 			_practice_preview = argument.trim_prefix("--practice-preview=")
-		elif argument == "--crew-preview":
-			_practice_preview = "crew-board"
-		elif argument.begins_with("--crew-preview="):
-			var crew_preview := argument.trim_prefix("--crew-preview=")
-			if crew_preview in ["entry", "board", "wing", "full-line", "vane", "cradle", "keel", "loom"]:
-				_practice_preview = crew_preview
-			elif crew_preview == "staging":
-				_rift_link_preview = "host-crew"
-			elif crew_preview == "replica":
-				_rift_link_preview = "join-found"
 		elif argument.begins_with("--tactics-preview="):
 			_tactics_preview = argument.trim_prefix("--tactics-preview=")
 			_offline_squad_size = 5

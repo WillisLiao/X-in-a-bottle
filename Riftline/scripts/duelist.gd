@@ -3,7 +3,6 @@ extends CharacterBody3D
 
 const PULP_LIT := preload("res://shaders/pulp_lit.gdshader")
 const BALLISTICS := preload("res://scripts/rift_ballistics.gd")
-const CREW_IDENTITY := preload("res://scripts/riftline_crew_identity.gd")
 
 signal defeated(victim: Duelist, killer: Duelist)
 signal fire_requested(shooter: Duelist, weapon: Weapon, origin: Vector3, direction: Vector3)
@@ -59,7 +58,6 @@ var eliminated := false
 var carrying_seed := false
 var stance: Stance = Stance.STAND
 var weapon: Weapon = Weapon.PULSE
-var crew_frame_id := "vane"
 var horizontal_fov := DEFAULT_HORIZONTAL_FOV
 var _last_camera_aspect := -1.0
 var magazine_rounds := M4_MAGAZINE_SIZE
@@ -76,8 +74,6 @@ var _capsule: CapsuleShape3D
 var _torso: MeshInstance3D
 var _band: MeshInstance3D
 var _body_visual_root: Node3D
-var _frame_visual_root: Node3D
-var _first_person_frame_root: Node3D
 var _body_visual_target_scale_y := 1.0
 var _weapon_root: Node3D
 var _weapon_mesh: MeshInstance3D
@@ -150,16 +146,6 @@ func build(assigned_team: Team, local_camera: bool, render_visuals: bool = true,
 			_build_character_silhouette()
 			_build_world_weapon()
 		_rebuild_weapon_models()
-		_apply_crew_frame()
-
-func set_crew_frame(frame_id: String) -> void:
-	crew_frame_id = CREW_IDENTITY.canonical_id(frame_id)
-	if not _render_visuals:
-		return
-	if _local_camera and camera != null:
-		_apply_first_person_crew_frame()
-	elif _body_visual_root != null:
-		_apply_crew_frame()
 
 func set_horizontal_fov(value: float) -> void:
 	var next := clampf(value, MIN_HORIZONTAL_FOV, MAX_HORIZONTAL_FOV) if is_finite(value) else DEFAULT_HORIZONTAL_FOV
@@ -799,91 +785,6 @@ func _build_character_silhouette() -> void:
 		_build_storm_surveyor(cloth, dark, brass, glow)
 	_build_carrier_signal(glow)
 
-func _apply_crew_frame() -> void:
-	if _local_camera:
-		return
-	if _frame_visual_root != null:
-		_frame_visual_root.queue_free()
-	_frame_visual_root = Node3D.new()
-	_frame_visual_root.name = "CrewFrame_%s" % crew_frame_id
-	_body_visual_root.add_child(_frame_visual_root)
-	var facts := CREW_IDENTITY.facts(crew_frame_id)
-	var dark := _material(Color("182438"), 0.0)
-	var brass := _material(Color("d6ad67"), 0.0)
-	var glow := _material(_team_glow(), 0.9)
-	match crew_frame_id:
-		"vane":
-			_add_frame_part(_box(Vector3(0.07, 0.92, 0.07)), Vector3(0.23, 1.54, 0.16), brass, Vector3(0.0, 0.0, -0.18))
-			_add_frame_part(_box(Vector3(0.34, 0.05, 0.08)), Vector3(0.23, 1.91, 0.16), brass, Vector3(0.0, 0.0, -0.18))
-			_add_frame_part(_cylinder(0.13, 0.13, 0.1), Vector3(-0.42, 0.82, -0.12), dark, Vector3(PI * 0.5, 0.0, 0.0))
-			_add_frame_part(_box(Vector3(0.24, 0.18, 0.05)), Vector3(-0.39, 0.98, -0.32), brass, Vector3(-0.12, 0.0, 0.0))
-		"cradle":
-			for offset in [-0.22, 0.22]:
-				var hoop := _add_frame_part(_torus(0.2, 0.035), Vector3(offset, 1.7, 0.18), brass, Vector3(PI * 0.5, 0.0, 0.0))
-				hoop.rotation.z = -0.16 if offset < 0.0 else 0.22
-			_add_frame_part(_box(Vector3(0.36, 0.11, 0.2)), Vector3(0.15, 1.42, 0.16), dark)
-			_add_frame_part(_box(Vector3(0.08, 0.28, 0.08)), Vector3(-0.48, 0.97, -0.18), glow, Vector3(0.0, 0.0, -0.35))
-		"keel":
-			_add_frame_part(_box(Vector3(0.72, 0.72, 0.08)), Vector3(0.0, 1.17, 0.34), dark, Vector3(0.0, 0.0, 0.08))
-			_add_frame_part(_box(Vector3(0.08, 0.82, 0.08)), Vector3(0.28, 1.16, 0.39), brass, Vector3(0.0, 0.0, -0.34))
-			_add_frame_part(_box(Vector3(0.4, 0.07, 0.08)), Vector3(-0.18, 0.82, 0.32), brass)
-			_add_frame_part(_box(Vector3(0.12, 0.16, 0.12)), Vector3(-0.34, 0.98, -0.3), glow)
-		"loom":
-			_add_frame_part(_box(Vector3(0.06, 0.62, 0.06)), Vector3(-0.18, 1.62, 0.25), brass, Vector3(0.0, 0.0, -0.08))
-			_add_frame_part(_box(Vector3(0.06, 0.62, 0.06)), Vector3(0.18, 1.62, 0.25), brass, Vector3(0.0, 0.0, 0.08))
-			_add_frame_part(_box(Vector3(0.46, 0.1, 0.24)), Vector3(0.0, 1.46, 0.32), dark)
-			_add_frame_part(_box(Vector3(0.22, 0.2, 0.16)), Vector3(0.38, 0.74, -0.22), brass)
-	_add_frame_part(_box(Vector3(0.05, 0.05, 0.05)), Vector3(0.0, 1.1, -0.34), glow)
-	_frame_visual_root.set_meta("identity_name", facts.get("name", "VANE"))
-	_frame_visual_root.set_meta("identity_purpose", facts.get("purpose", "ROUTE READER"))
-
-func _apply_first_person_crew_frame() -> void:
-	if not _local_camera or camera == null:
-		return
-	if _first_person_frame_root != null:
-		_first_person_frame_root.queue_free()
-	_first_person_frame_root = Node3D.new()
-	_first_person_frame_root.name = "FirstPersonCrewFrame_%s" % crew_frame_id
-	_first_person_frame_root.position = Vector3(-0.34, -0.22, -0.72)
-	_first_person_frame_root.scale = Vector3.ONE * 0.38
-	camera.add_child(_first_person_frame_root)
-	var brass := _material(Color("d6ad67"), 0.0)
-	var glow := _material(_team_glow(), 0.9)
-	match crew_frame_id:
-		"vane":
-			_add_first_person_frame_part(_box(Vector3(0.08, 0.38, 0.06)), Vector3(0.0, 0.1, 0.0), brass, Vector3(0.0, 0.0, -0.25))
-			_add_first_person_frame_part(_box(Vector3(0.24, 0.04, 0.06)), Vector3(0.0, 0.28, 0.0), glow)
-		"cradle":
-			_add_first_person_frame_part(_torus(0.16, 0.025), Vector3(0.0, 0.08, 0.0), brass, Vector3(PI * 0.5, 0.0, 0.0))
-			_add_first_person_frame_part(_box(Vector3(0.07, 0.22, 0.07)), Vector3(0.15, -0.02, 0.0), glow)
-		"keel":
-			_add_first_person_frame_part(_box(Vector3(0.28, 0.22, 0.05)), Vector3(0.0, 0.02, 0.08), brass, Vector3(0.0, 0.0, 0.1))
-			_add_first_person_frame_part(_box(Vector3(0.04, 0.3, 0.05)), Vector3(0.12, 0.02, 0.0), glow)
-		"loom":
-			_add_first_person_frame_part(_box(Vector3(0.05, 0.36, 0.05)), Vector3(-0.1, 0.08, 0.0), brass, Vector3(0.0, 0.0, -0.12))
-			_add_first_person_frame_part(_box(Vector3(0.2, 0.04, 0.05)), Vector3(0.0, 0.24, 0.0), glow)
-	_first_person_frame_root.set_meta("identity_name", CREW_IDENTITY.facts(crew_frame_id).get("name", "VANE"))
-
-func _add_first_person_frame_part(mesh: Mesh, position: Vector3, material: Material, rotation: Vector3 = Vector3.ZERO) -> MeshInstance3D:
-	var instance := MeshInstance3D.new()
-	instance.mesh = mesh
-	instance.position = position
-	instance.rotation = rotation
-	instance.material_override = material
-	instance.layers = 2
-	_first_person_frame_root.add_child(instance)
-	return instance
-
-func _add_frame_part(mesh: Mesh, position: Vector3, material: Material, rotation: Vector3 = Vector3.ZERO) -> MeshInstance3D:
-	var instance := MeshInstance3D.new()
-	instance.mesh = mesh
-	instance.position = position
-	instance.rotation = rotation
-	instance.material_override = material
-	instance.layers = 1
-	_frame_visual_root.add_child(instance)
-	return instance
-
 func _torus(inner_radius: float, outer_radius: float) -> TorusMesh:
 	var mesh := TorusMesh.new()
 	mesh.inner_radius = inner_radius
@@ -935,7 +836,6 @@ func _build_first_person_weapon() -> void:
 	_weapon_root.position = Vector3(0.42, -0.42, -1.22)
 	_weapon_root.scale = Vector3.ONE * 0.38
 	camera.add_child(_weapon_root)
-	_apply_first_person_crew_frame()
 
 func _build_world_weapon() -> void:
 	_weapon_root = Node3D.new()

@@ -403,7 +403,6 @@ func _sync_bot_context() -> void:
 			members.append({
 				"actor_id": candidate.actor_id,
 				"human": not candidate is BotDuelist,
-				"frame_id": candidate.crew_frame_id,
 				"eliminated": candidate.eliminated,
 				"position": candidate.global_position,
 				"carrying": candidate.carrying_seed,

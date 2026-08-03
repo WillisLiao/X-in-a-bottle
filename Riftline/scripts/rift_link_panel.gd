@@ -2,7 +2,6 @@ class_name RiftLinkPanel
 extends Control
 
 const RESPONSIVE := preload("res://scripts/riftline_responsive_layout.gd")
-const CREW_IDENTITY := preload("res://scripts/riftline_crew_identity.gd")
 
 signal host_requested
 signal join_requested
@@ -306,10 +305,6 @@ func _draw_crew(origin: Vector2, width: float, color: Color) -> void:
 			else:
 				draw_circle(center, 10.0, Color(team_color, 0.82 if filled else 0.08))
 				draw_arc(center, 10.0, 0.0, TAU, 20, Color(team_color, 0.95), 2.0)
-			if filled:
-				var glyph := CREW_IDENTITY.glyph(record.get("frame_id", "vane"))
-				var glyph_width := ThemeDB.fallback_font.get_string_size(glyph, HORIZONTAL_ALIGNMENT_LEFT, -1, 9).x
-				draw_string(ThemeDB.fallback_font, center + Vector2(-glyph_width * 0.5, 3.0), glyph, HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color("071126", 0.94))
 			if ready:
 				draw_arc(center, 16.0, -PI * 0.82, -PI * 0.18, 12, Color("f1f6ff", 0.96), 2.0)
 		draw_string(ThemeDB.fallback_font, origin + Vector2(width - 64.0, row * row_height + 5.0), "SUN" if team == Duelist.Team.SUN else "VOID", HORIZONTAL_ALIGNMENT_RIGHT, 64, 11, Color(team_color, 0.86))
@@ -342,11 +337,11 @@ func _preview_state(name: String) -> Dictionary:
 			records = [{"actor_id": "host", "team": int(Duelist.Team.SUN), "human": true, "ready": false}]
 			_local_actor_id = "host"
 		"host-crew":
-			records = [{"actor_id": "host", "team": int(Duelist.Team.SUN), "human": true, "ready": false, "frame_id": "vane"}, {"actor_id": "peer", "team": int(Duelist.Team.VOID), "human": true, "ready": false, "frame_id": "loom"}]
+			records = [{"actor_id": "host", "team": int(Duelist.Team.SUN), "human": true, "ready": false}, {"actor_id": "peer", "team": int(Duelist.Team.VOID), "human": true, "ready": false}]
 			_local_actor_id = "host"
 			complete = true
 		"host-ready":
-			records = [{"actor_id": "host", "team": int(Duelist.Team.SUN), "human": true, "ready": true, "frame_id": "vane"}, {"actor_id": "peer", "team": int(Duelist.Team.VOID), "human": true, "ready": false, "frame_id": "loom"}]
+			records = [{"actor_id": "host", "team": int(Duelist.Team.SUN), "human": true, "ready": true}, {"actor_id": "peer", "team": int(Duelist.Team.VOID), "human": true, "ready": false}]
 			_local_actor_id = "host"
 			complete = true
 		"arming":
