@@ -485,6 +485,7 @@ func _read_command_line_options() -> void:
 				_configuration_valid = false
 			else:
 				arena_override = requested_arena
+				arena_override_set = true
 		elif argument.begins_with("--arena-preview="):
 			arena_preview_requested = true
 		elif argument.begins_with("--net-sim-latency-ms="):
