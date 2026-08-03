@@ -2,6 +2,7 @@ class_name RiftlineArena
 extends Node3D
 
 const PULP_LIT := preload("res://shaders/pulp_lit.gdshader")
+const SNAPSHOT_BUFFER := preload("res://scripts/riftline_snapshot_buffer.gd")
 const SUN_COVER_SPAWN := Vector3(-15.0, 0.1, 6.0)
 const VOID_COVER_SPAWN := Vector3(16.0, 0.1, -6.0)
 const OPENING_HOLD_SECONDS := 2.5
@@ -16,14 +17,26 @@ var rift_link: RiftLinkPanel
 var _mouse_captured := false
 var _lan_active := false
 var _lan_host := false
+var _dedicated_server := false
+var _presentation_enabled := true
 var _lan_peer_id := 0
 var _lan_peer_ready := false
+var _authority_match_started := false
 var _lan_phase: MatchDirector.Phase = MatchDirector.Phase.OPENING
 var _lan_tick := 0
 var _local_input_sequence := 0
 var _remote_input: Dictionary = {}
+var _server_continuous_input: Dictionary = {}
+var _server_edge_queue: Dictionary = {}
+var _server_last_sequence: Dictionary = {}
+var _ready_peers: Dictionary = {}
 var _pending_inputs: Array[Dictionary] = []
-var _remote_target_state: Dictionary = {}
+var _remote_snapshot_buffer: RefCounted
+var _last_remote_eliminated := false
+var _last_remote_stance := -1
+var _last_remote_weapon := -1
+var _last_remote_health := Duelist.HEALTH
+var _last_remote_phase := MatchDirector.Phase.OPENING
 var _snapshot_remaining := 0.0
 var _join_discovery_started := false
 var _local_team: Duelist.Team = Duelist.Team.SUN
@@ -36,21 +49,31 @@ var _capture_overview := false
 var _capture_rift_link := false
 
 func _ready() -> void:
-	_build_environment()
-	_build_arena()
-	_build_match()
-	_build_hud()
-	_build_lan_flow()
-	_read_capture_arguments()
+	_build_network()
 	var command_line_lan := network.start_command_line_mode()
-	if command_line_lan:
-		_enter_lan_runtime(network.multiplayer.is_server(), false)
+	_dedicated_server = network.is_dedicated_server()
+	_presentation_enabled = not _dedicated_server
+	if _dedicated_server:
+		_build_arena()
+		_enter_lan_runtime(true, false)
 	else:
-		director.begin()
+		_build_environment()
+		_build_arena()
+		_build_match()
+		_build_hud()
+		_build_rift_link()
+		_read_capture_arguments()
+		if command_line_lan:
+			_enter_lan_runtime(network.multiplayer.is_server(), false)
+		else:
+			director.begin()
 	if not _capture_path.is_empty():
 		_capture_after_delay()
 
 func _physics_process(delta: float) -> void:
+	if _dedicated_server:
+		_tick_dedicated_server(delta)
+		return
 	if player == null:
 		return
 	if _lan_active:
@@ -85,6 +108,8 @@ func _physics_process(delta: float) -> void:
 	hud.set_weapon(player.weapon)
 
 func _unhandled_input(event: InputEvent) -> void:
+	if player == null:
+		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
 		_mouse_captured = event.pressed
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if _mouse_captured else Input.MOUSE_MODE_VISIBLE
@@ -183,7 +208,7 @@ func _build_hud() -> void:
 	layer.add_child(hud)
 	hud.rift_link_requested.connect(_on_rift_link_requested)
 
-func _build_lan_flow() -> void:
+func _build_network() -> void:
 	network = RiftlineNetwork.new()
 	add_child(network)
 	network.session_status.connect(_on_network_status)
@@ -193,6 +218,9 @@ func _build_lan_flow() -> void:
 	network.input_received.connect(_on_network_input)
 	network.snapshot_received.connect(_on_network_snapshot)
 	network.reliable_event_received.connect(_on_network_event)
+	network.team_assigned.connect(_on_team_assigned)
+
+func _build_rift_link() -> void:
 
 	var layer := CanvasLayer.new()
 	add_child(layer)
@@ -204,15 +232,18 @@ func _build_lan_flow() -> void:
 	rift_link.retry_requested.connect(_on_join_retry_requested)
 
 func _on_player_damaged(_amount: float, remaining: float) -> void:
-	hud.show_damage(remaining)
+	if hud != null:
+		hud.show_damage(remaining)
 
 func _on_score_changed(sun: int, void_score: int) -> void:
-	hud.set_score(sun, void_score)
+	if hud != null:
+		hud.set_score(sun, void_score)
 	if _lan_host:
 		network.publish_event({"type": "score", "sun": sun, "void": void_score})
 
 func _on_match_finished(winner: Duelist.Team) -> void:
-	hud.show_match_result(winner)
+	if hud != null:
+		hud.show_match_result(winner)
 	if _lan_host:
 		network.publish_event({"type": "finished", "winner": int(winner)})
 
@@ -220,8 +251,11 @@ func _on_phase_changed(phase: MatchDirector.Phase) -> void:
 	_lan_phase = phase
 	if phase != MatchDirector.Phase.LIVE:
 		_remote_input.clear()
-	hud.set_match_phase(phase)
-	hud.set_combat_input_enabled(phase == MatchDirector.Phase.LIVE)
+		_server_continuous_input.clear()
+		_server_edge_queue.clear()
+	if hud != null:
+		hud.set_match_phase(phase)
+		hud.set_combat_input_enabled(phase == MatchDirector.Phase.LIVE)
 	if _lan_host:
 		network.publish_event({"type": "phase", "phase": int(phase)})
 
@@ -284,7 +318,7 @@ func _on_rift_link_cancelled() -> void:
 func _on_network_status(status: String) -> void:
 	if rift_link != null and rift_link.visible:
 		rift_link.set_status(status)
-	if status in ["LINK LOST", "LINK FAILED"] and _lan_active:
+	if status in ["LINK LOST", "LINK FAILED"] and _lan_active and not _dedicated_server:
 		_restore_offline_training(status)
 
 func _on_host_discovered(_session: Dictionary) -> void:
@@ -295,21 +329,56 @@ func _on_host_discovered(_session: Dictionary) -> void:
 func _on_network_peer_joined(peer_id: int) -> void:
 	if not _lan_active:
 		return
-	if _lan_host:
-		_lan_peer_id = peer_id
+	if _dedicated_server:
+		_server_continuous_input[peer_id] = {}
+		_server_edge_queue[peer_id] = []
+		_server_last_sequence[peer_id] = -1
+		return
 	else:
 		_lan_peer_id = peer_id
+		_server_continuous_input[peer_id] = {}
+		_server_edge_queue[peer_id] = []
+		_server_last_sequence[peer_id] = -1
+	if _lan_host and not _dedicated_server:
+		_lan_peer_id = peer_id
+	else:
 		_lan_peer_ready = true
 		network.publish_event({"type": "ready"})
 
-func _on_network_peer_left(_peer_id: int) -> void:
+
+func _on_network_peer_left(peer_id: int) -> void:
+	if _dedicated_server:
+		_authority_match_started = false
+		_ready_peers.erase(peer_id)
+		_server_continuous_input.erase(peer_id)
+		_server_edge_queue.erase(peer_id)
+		_server_last_sequence.erase(peer_id)
+		if director != null:
+			_replace_match_for_lan(true)
+		return
 	if _lan_active:
 		_restore_offline_training("LINK LOST")
 
 func _on_network_input(peer_id: int, frame: Dictionary) -> void:
-	if not _lan_active or not _lan_host or peer_id != _lan_peer_id or director == null or not director.is_live():
+	if not _lan_active or not _lan_host or director == null or not director.is_live():
+		return
+	if _dedicated_server:
+		if network.peer_team(peer_id) < 0:
+			return
+		_server_continuous_input[peer_id] = frame.duplicate(true)
+		var dedicated_edges: Array = _server_edge_queue.get(peer_id, [])
+		dedicated_edges.append(frame.duplicate(true))
+		_server_edge_queue[peer_id] = dedicated_edges
+		_server_last_sequence[peer_id] = int(frame.get("sequence", -1))
+		return
+	if peer_id != _lan_peer_id:
 		return
 	_remote_input = frame.duplicate(true)
+	_server_continuous_input[peer_id] = frame.duplicate(true)
+	var app_host_edges: Array = _server_edge_queue.get(peer_id, [])
+	app_host_edges.append(frame.duplicate(true))
+	_server_edge_queue[peer_id] = app_host_edges
+	_server_last_sequence[peer_id] = int(frame.get("sequence", -1))
 
 func _on_network_snapshot(snapshot: Dictionary) -> void:
 	if not _lan_active or _lan_host or snapshot.is_empty():
@@ -326,17 +395,23 @@ func _on_network_snapshot(snapshot: Dictionary) -> void:
 		player.reconcile_from_authority(local_state, _pending_inputs, 1.0 / 60.0)
 	var remote_state: Dictionary = players.get(_team_key(_opposing_team()), {})
 	if not remote_state.is_empty():
-		_remote_target_state = remote_state.duplicate(true)
-		if remote_duelist != null and remote_duelist.global_position == Vector3.ZERO:
-			remote_duelist.apply_presentation_state(remote_state)
-	hud.set_score(int(snapshot.get("sun_score", 0)), int(snapshot.get("void_score", 0)))
+		_update_remote_snapshot(remote_state, int(snapshot.get("tick", -1)), int(snapshot.get("phase", int(_lan_phase))))
+	if hud != null:
+		hud.set_score(int(snapshot.get("sun_score", 0)), int(snapshot.get("void_score", 0)))
 
 func _on_network_event(event: Dictionary, sender_id: int) -> void:
 	if event.is_empty():
 		return
 	var event_type := str(event.get("type", ""))
 	if _lan_host:
-		if event_type == "ready" and sender_id == _lan_peer_id and not _lan_peer_ready:
+		if event_type == "assigned_team":
+			_on_team_assigned(int(event.get("team", -1)))
+			return
+		if event_type == "ready" and _dedicated_server and network.peer_team(sender_id) >= 0:
+			_ready_peers[sender_id] = true
+			if _ready_peers.size() >= 2:
+				_start_host_match()
+		elif event_type == "ready" and sender_id == _lan_peer_id and not _lan_peer_ready:
 			_lan_peer_ready = true
 			_start_host_match()
 		elif event_type == "rematch_request" and sender_id == _lan_peer_id and director != null:
@@ -346,9 +421,11 @@ func _on_network_event(event: Dictionary, sender_id: int) -> void:
 		"phase":
 			_apply_client_phase(int(event.get("phase", int(MatchDirector.Phase.OPENING))))
 		"score":
-			hud.set_score(int(event.get("sun", 0)), int(event.get("void", 0)))
+			if hud != null:
+				hud.set_score(int(event.get("sun", 0)), int(event.get("void", 0)))
 		"finished":
-			hud.show_match_result(int(event.get("winner", int(Duelist.Team.SUN))) as Duelist.Team)
+			if hud != null:
+				hud.show_match_result(int(event.get("winner", int(Duelist.Team.SUN))) as Duelist.Team)
 		"defeat":
 			_apply_client_defeat(int(event.get("victim", int(Duelist.Team.SUN))))
 		"shot":
@@ -361,30 +438,44 @@ func _enter_lan_runtime(host: bool, from_player_flow: bool) -> void:
 		return
 	_lan_active = true
 	_lan_host = host
+	_dedicated_server = network.is_dedicated_server()
 	_lan_phase = MatchDirector.Phase.OPENING
 	_lan_tick = 0
 	_local_input_sequence = 0
 	_remote_input = {}
 	_pending_inputs.clear()
-	_remote_target_state = {}
-	_local_team = Duelist.Team.SUN if host else Duelist.Team.VOID
+	_server_continuous_input.clear()
+	_server_edge_queue.clear()
+	_server_last_sequence.clear()
+	_ready_peers.clear()
+	_authority_match_started = false
+	_remote_snapshot_buffer = SNAPSHOT_BUFFER.new()
+	_remote_snapshot_buffer.clear()
+	if host:
+		_local_team = Duelist.Team.SUN
+	elif network.local_team >= 0:
+		_local_team = network.local_team as Duelist.Team
+	else:
+		_local_team = Duelist.Team.VOID
 	_replace_match_for_lan(host)
-	hud.set_connection_flow_active(false if not from_player_flow else true)
+	if hud != null:
+		hud.set_connection_flow_active(false if not from_player_flow else true)
 	if from_player_flow:
 		# The panel remains up until the second human is ready, so the arena cannot consume stale touches.
-		hud.set_combat_input_enabled(false)
+		if hud != null:
+			hud.set_combat_input_enabled(false)
 
 func _replace_match_for_lan(host: bool) -> void:
 	_clear_match_nodes()
 	player = Duelist.new()
 	player.name = "LocalDuelist"
-	player.build(_local_team, true)
+	player.build(_local_team, not _dedicated_server, _presentation_enabled, true)
 	player.position = SUN_COVER_SPAWN if _local_team == Duelist.Team.SUN else VOID_COVER_SPAWN
 	player.rotation.y = -PI * 0.5 if _local_team == Duelist.Team.SUN else PI * 0.5
 	add_child(player)
 	remote_duelist = Duelist.new()
 	remote_duelist.name = "RemoteDuelist"
-	remote_duelist.build(_opposing_team(), false)
+	remote_duelist.build(_opposing_team(), false, _presentation_enabled, _lan_host or _dedicated_server)
 	remote_duelist.position = VOID_COVER_SPAWN if _local_team == Duelist.Team.SUN else SUN_COVER_SPAWN
 	remote_duelist.rotation.y = PI * 0.5 if _local_team == Duelist.Team.SUN else -PI * 0.5
 	add_child(remote_duelist)
@@ -422,11 +513,15 @@ func _clear_match_nodes() -> void:
 	remote_duelist = null
 
 func _start_host_match() -> void:
-	if director == null or not _lan_peer_ready:
+	if _authority_match_started or director == null or (_dedicated_server and _ready_peers.size() < 2) or (not _dedicated_server and not _lan_peer_ready):
 		return
-	rift_link.hide_panel()
-	hud.set_connection_flow_active(false)
+	if rift_link != null:
+		rift_link.hide_panel()
+	if hud != null:
+		hud.set_connection_flow_active(false)
+	_authority_match_started = true
 	director.begin()
+	print("Riftline authoritative match started")
 	network.publish_event({"type": "spawn", "team": int(Duelist.Team.SUN)})
 	network.publish_event({"type": "spawn", "team": int(Duelist.Team.VOID)})
 
@@ -466,7 +561,10 @@ func _tick_lan_duel(delta: float) -> void:
 		player.set_combat_pose(bool(frame.aim), delta)
 		if _lan_host:
 			player.apply_input_frame(frame, delta, true)
-			remote_duelist.apply_input_frame(_remote_input, delta, true)
+			for edge in _server_edge_queue.get(_lan_peer_id, []):
+				remote_duelist.apply_discrete_input(edge)
+			_server_edge_queue[_lan_peer_id] = []
+			remote_duelist.apply_continuous_input(_server_continuous_input.get(_lan_peer_id, {}), delta, true)
 		else:
 			player.apply_input_frame(frame, delta, false)
 			_pending_inputs.append(frame)
@@ -474,8 +572,8 @@ func _tick_lan_duel(delta: float) -> void:
 	hud.set_stance(player.stance)
 	hud.set_weapon(player.weapon)
 	hud.show_damage(player.health)
-	if not _lan_host and not _remote_target_state.is_empty() and remote_duelist != null:
-		_smooth_remote_presentation(delta)
+	if not _lan_host and remote_duelist != null:
+		_smooth_remote_presentation()
 	if _lan_host:
 		_lan_tick += 1
 		_snapshot_remaining -= delta
@@ -483,14 +581,65 @@ func _tick_lan_duel(delta: float) -> void:
 			_snapshot_remaining = 0.05
 			_publish_lan_snapshot()
 
-func _smooth_remote_presentation(delta: float) -> void:
-	var target := _remote_target_state
-	var presented := target.duplicate(true)
-	var position: Vector3 = remote_duelist.global_position.lerp(target.get("position", remote_duelist.global_position), clampf(delta * 12.0, 0.0, 1.0))
-	presented["position"] = position
-	presented["yaw"] = lerp_angle(remote_duelist.rotation.y, float(target.get("yaw", remote_duelist.rotation.y)), clampf(delta * 12.0, 0.0, 1.0))
-	presented["pitch"] = lerpf(remote_duelist.head.rotation.x, float(target.get("pitch", remote_duelist.head.rotation.x)), clampf(delta * 12.0, 0.0, 1.0))
-	remote_duelist.apply_presentation_state(presented)
+func _smooth_remote_presentation() -> void:
+	if _remote_snapshot_buffer == null or remote_duelist == null:
+		return
+	var presented: Dictionary = _remote_snapshot_buffer.sample(network.simulation_clock)
+	if not presented.is_empty():
+		remote_duelist.apply_presentation_state(presented)
+
+func _update_remote_snapshot(remote_state: Dictionary, host_tick: int, phase_value: int) -> void:
+	if remote_duelist == null or _remote_snapshot_buffer == null or remote_state.is_empty():
+		return
+	if phase_value != int(_lan_phase):
+		_apply_client_phase(phase_value)
+	var next_eliminated := bool(remote_state.get("eliminated", false))
+	var next_stance := int(remote_state.get("stance", int(Duelist.Stance.STAND)))
+	var next_weapon := int(remote_state.get("weapon", int(Duelist.Weapon.PULSE)))
+	var next_health := float(remote_state.get("health", Duelist.HEALTH))
+	var should_reset := next_eliminated != _last_remote_eliminated or (not next_eliminated and _last_remote_eliminated)
+	if _last_remote_phase != _lan_phase:
+		should_reset = true
+	var incoming_position: Vector3 = remote_state.get("position", remote_duelist.global_position)
+	if remote_duelist.global_position.distance_to(incoming_position) > 3.0:
+		should_reset = true
+	if should_reset:
+		_remote_snapshot_buffer.clear()
+		remote_duelist.apply_presentation_state(remote_state)
+	_remote_snapshot_buffer.push(remote_state, host_tick, network.simulation_clock)
+	_last_remote_eliminated = next_eliminated
+	_last_remote_stance = next_stance
+	_last_remote_weapon = next_weapon
+	_last_remote_health = next_health
+	_last_remote_phase = _lan_phase
+
+func _tick_dedicated_server(delta: float) -> void:
+	if not _lan_active or director == null or player == null or remote_duelist == null:
+		return
+	var applied_teams: Dictionary = {}
+	for peer_id in _server_continuous_input.keys():
+		var team_value := network.peer_team(int(peer_id))
+		var target := player if team_value == int(Duelist.Team.SUN) else remote_duelist if team_value == int(Duelist.Team.VOID) else null
+		if target == null:
+			continue
+		applied_teams[team_value] = true
+		var edges: Array = _server_edge_queue.get(peer_id, [])
+		_server_edge_queue[peer_id] = []
+		if director.is_live():
+			for edge in edges:
+				target.apply_discrete_input(edge)
+			target.apply_continuous_input(_server_continuous_input.get(peer_id, {}), delta, true)
+		else:
+			target.apply_continuous_input({}, delta, false)
+	for team_value in [int(Duelist.Team.SUN), int(Duelist.Team.VOID)]:
+		if not applied_teams.has(team_value):
+			var idle_target := player if team_value == int(Duelist.Team.SUN) else remote_duelist
+			idle_target.apply_continuous_input({}, delta, false)
+	_lan_tick += 1
+	_snapshot_remaining -= delta
+	if _snapshot_remaining <= 0.0:
+		_snapshot_remaining = 0.05
+		_publish_lan_snapshot()
 
 func _publish_lan_snapshot() -> void:
 	if director == null or remote_duelist == null:
@@ -510,20 +659,42 @@ func _publish_lan_snapshot() -> void:
 	network.publish_snapshot(snapshot)
 
 func _last_sequence_for(duelist: Duelist) -> int:
-	return _local_input_sequence - 1 if duelist == player else int(_remote_input.get("sequence", -1))
+	if _dedicated_server:
+		for peer_id in _server_last_sequence:
+			var team_value := network.peer_team(int(peer_id))
+			if (duelist == player and team_value == int(Duelist.Team.SUN)) or (duelist == remote_duelist and team_value == int(Duelist.Team.VOID)):
+				return int(_server_last_sequence[peer_id])
+		return -1
+	return _local_input_sequence - 1 if duelist == player else int(_server_last_sequence.get(_lan_peer_id, -1))
 
 func _apply_client_phase(next_phase: int) -> void:
 	_lan_phase = next_phase as MatchDirector.Phase
-	hud.set_match_phase(_lan_phase)
-	hud.set_combat_input_enabled(_lan_phase == MatchDirector.Phase.LIVE)
-	player.set_match_active(_lan_phase == MatchDirector.Phase.LIVE)
-	remote_duelist.set_match_active(_lan_phase == MatchDirector.Phase.LIVE)
+	_last_remote_phase = _lan_phase
+	if _remote_snapshot_buffer != null:
+		_remote_snapshot_buffer.clear()
+	if hud != null:
+		hud.set_match_phase(_lan_phase)
+		hud.set_combat_input_enabled(_lan_phase == MatchDirector.Phase.LIVE)
+	if player != null:
+		player.set_match_active(_lan_phase == MatchDirector.Phase.LIVE)
+	if remote_duelist != null:
+		remote_duelist.set_match_active(_lan_phase == MatchDirector.Phase.LIVE)
 	if _lan_phase == MatchDirector.Phase.LIVE:
-		rift_link.hide_panel()
-		hud.set_connection_flow_active(false)
+		if rift_link != null:
+			rift_link.hide_panel()
+		if hud != null:
+			hud.set_connection_flow_active(false)
+
+func _on_team_assigned(team_value: int) -> void:
+	if team_value < int(Duelist.Team.SUN) or team_value > int(Duelist.Team.VOID):
+		return
+	_local_team = team_value as Duelist.Team
+	if _lan_active and not _lan_host and not _dedicated_server and player != null and player.team != _local_team:
+		_replace_match_for_lan(false)
 
 func _on_authoritative_shot(origin: Vector3, end: Vector3, team: Duelist.Team) -> void:
-	_show_shot(origin, end, team)
+	if _presentation_enabled:
+		_show_shot(origin, end, team)
 	network.publish_event({"type": "shot", "origin": origin, "end": end, "team": int(team)})
 
 func _on_lan_defeat(victim: Duelist, killer: Duelist) -> void:
@@ -585,12 +756,13 @@ func _add_solid_box(position: Vector3, dimensions: Vector3, color: Color, emissi
 	var body := StaticBody3D.new()
 	body.position = position
 	add_child(body)
-	var mesh_instance := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = dimensions
-	mesh_instance.mesh = box
-	mesh_instance.material_override = _pulp_material(color, emission)
-	body.add_child(mesh_instance)
+	if _presentation_enabled:
+		var mesh_instance := MeshInstance3D.new()
+		var box := BoxMesh.new()
+		box.size = dimensions
+		mesh_instance.mesh = box
+		mesh_instance.material_override = _pulp_material(color, emission)
+		body.add_child(mesh_instance)
 	var collision := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
 	shape.size = dimensions
@@ -598,6 +770,8 @@ func _add_solid_box(position: Vector3, dimensions: Vector3, color: Color, emissi
 	body.add_child(collision)
 
 func _add_emissive_rail(position: Vector3, dimensions: Vector3, color: Color) -> void:
+	if not _presentation_enabled:
+		return
 	var rail := MeshInstance3D.new()
 	var box := BoxMesh.new()
 	box.size = dimensions
@@ -607,6 +781,8 @@ func _add_emissive_rail(position: Vector3, dimensions: Vector3, color: Color) ->
 	add_child(rail)
 
 func _add_pulp_cylinder(position: Vector3, radius: float, height: float, color: Color) -> void:
+	if not _presentation_enabled:
+		return
 	var cylinder := MeshInstance3D.new()
 	var mesh := CylinderMesh.new()
 	mesh.top_radius = radius * 0.82

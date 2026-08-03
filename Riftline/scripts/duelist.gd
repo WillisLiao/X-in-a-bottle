@@ -33,14 +33,17 @@ var _torso: MeshInstance3D
 var _band: MeshInstance3D
 var _weapon_mesh: MeshInstance3D
 var _local_camera := false
+var _render_visuals := true
+var _pending_jump := false
 
 var head: Node3D
 var camera: Camera3D
 
-func build(assigned_team: Team, local_camera: bool) -> void:
+func build(assigned_team: Team, local_camera: bool, render_visuals: bool = true, authoritative_collision: bool = true) -> void:
 	team = assigned_team
 	_local_camera = local_camera
-	collision_layer = 2
+	_render_visuals = render_visuals
+	collision_layer = 2 if authoritative_collision else 0
 	collision_mask = 1 | 2
 
 	_collision = CollisionShape3D.new()
@@ -51,48 +54,51 @@ func build(assigned_team: Team, local_camera: bool) -> void:
 	_collision.position.y = 0.9
 	add_child(_collision)
 
-	_torso = MeshInstance3D.new()
-	var torso_mesh := BoxMesh.new()
-	torso_mesh.size = Vector3(0.66, 0.98, 0.42)
-	_torso.mesh = torso_mesh
-	_torso.position.y = 1.1
-	_torso.material_override = _material(_team_color(), 0.07)
-	_torso.layers = 2 if _local_camera else 1
-	add_child(_torso)
+	if _render_visuals:
+		_torso = MeshInstance3D.new()
+		var torso_mesh := BoxMesh.new()
+		torso_mesh.size = Vector3(0.66, 0.98, 0.42)
+		_torso.mesh = torso_mesh
+		_torso.position.y = 1.1
+		_torso.material_override = _material(_team_color(), 0.07)
+		_torso.layers = 2 if _local_camera else 1
+		add_child(_torso)
 
-	# The bright band makes opponents readable against the dark arena before any HUD is learned.
-	_band = MeshInstance3D.new()
-	var band_mesh := CylinderMesh.new()
-	band_mesh.top_radius = 0.51
-	band_mesh.bottom_radius = 0.51
-	band_mesh.height = 0.13
-	_band.mesh = band_mesh
-	_band.position.y = 1.18
-	_band.material_override = _material(_team_glow(), 0.6)
-	_band.layers = 2 if _local_camera else 1
-	add_child(_band)
+		# The bright band makes opponents readable against the dark arena before any HUD is learned.
+		_band = MeshInstance3D.new()
+		var band_mesh := CylinderMesh.new()
+		band_mesh.top_radius = 0.51
+		band_mesh.bottom_radius = 0.51
+		band_mesh.height = 0.13
+		_band.mesh = band_mesh
+		_band.position.y = 1.18
+		_band.material_override = _material(_team_glow(), 0.6)
+		_band.layers = 2 if _local_camera else 1
+		add_child(_band)
 
 	head = Node3D.new()
 	head.name = "Head"
 	head.position = Vector3(0.0, 1.46, 0.0)
 	add_child(head)
 
-	_weapon_mesh = MeshInstance3D.new()
-	var weapon_mesh := BoxMesh.new()
-	weapon_mesh.size = Vector3(0.13, 0.12, 0.56)
-	_weapon_mesh.mesh = weapon_mesh
-	_weapon_mesh.position = Vector3(0.38, -0.3, -0.82)
-	_weapon_mesh.material_override = _material(Color("304769"), 0.35)
-	head.add_child(_weapon_mesh)
+	if _render_visuals:
+		_weapon_mesh = MeshInstance3D.new()
+		var weapon_mesh := BoxMesh.new()
+		weapon_mesh.size = Vector3(0.13, 0.12, 0.56)
+		_weapon_mesh.mesh = weapon_mesh
+		_weapon_mesh.position = Vector3(0.38, -0.3, -0.82)
+		_weapon_mesh.material_override = _material(Color("304769"), 0.35)
+		head.add_child(_weapon_mesh)
 
-	if local_camera:
+	if local_camera and _render_visuals:
 		camera = Camera3D.new()
 		camera.fov = 78.0
 		camera.cull_mask = 1
 		camera.current = true
 		head.add_child(camera)
 
-	_build_character_silhouette(local_camera)
+	if _render_visuals:
+		_build_character_silhouette(local_camera)
 
 func apply_look(delta: Vector2) -> void:
 	if eliminated:
@@ -106,6 +112,7 @@ func set_match_active(active: bool) -> void:
 		velocity.x = 0.0
 		velocity.z = 0.0
 		_fire_remaining = 0.0
+		_pending_jump = false
 
 func make_input_frame(sequence: int, move_input: Vector2, aiming: bool, firing: bool, wants_jump: bool, crouch_edge: bool, prone_edge: bool, weapon_switch_edge: bool) -> Dictionary:
 	return {
@@ -138,25 +145,42 @@ func authoritative_state(server_tick: int, last_input_sequence: int) -> Dictiona
 
 func apply_input_frame(frame: Dictionary, delta: float, simulate_combat: bool) -> void:
 	if frame.is_empty():
-		_simulate_motion(Vector2.ZERO, false, delta)
+		apply_continuous_input({}, delta, simulate_combat)
 		return
 	if eliminated or not match_active:
-		_simulate_motion(Vector2.ZERO, false, delta)
+		apply_continuous_input({}, delta, false)
 		return
-	# Absolute look values make a frame replayable after a correction and remove peer-specific mouse deltas.
-	rotation.y = float(frame.get("yaw", rotation.y))
-	if head != null:
-		head.rotation.x = clampf(float(frame.get("pitch", head.rotation.x)), -1.05, 0.9)
+	apply_discrete_input(frame)
+	apply_continuous_input(frame, delta, simulate_combat)
+
+func apply_discrete_input(frame: Dictionary) -> void:
+	if frame.is_empty() or eliminated or not match_active:
+		return
 	if bool(frame.get("crouch", false)):
 		toggle_crouch()
 	if bool(frame.get("prone", false)):
 		toggle_prone()
 	if bool(frame.get("weapon_switch", false)):
 		switch_weapon()
-	_simulate_motion(Vector2(float(frame.get("move_x", 0.0)), float(frame.get("move_y", 0.0))), bool(frame.get("jump", false)), delta)
-	if bool(frame.get("fire", false)):
-		if simulate_combat:
-			fire_forward()
+	if bool(frame.get("jump", false)):
+		_pending_jump = true
+
+func apply_continuous_input(frame: Dictionary, delta: float, simulate_combat: bool) -> void:
+	if eliminated or not match_active:
+		_pending_jump = false
+		_simulate_motion(Vector2.ZERO, false, delta)
+		return
+	# Absolute look values make a frame replayable after a correction and remove peer-specific mouse deltas.
+	if not frame.is_empty():
+		rotation.y = float(frame.get("yaw", rotation.y))
+		if head != null:
+			head.rotation.x = clampf(float(frame.get("pitch", head.rotation.x)), -1.05, 0.9)
+	var move_input := Vector2(float(frame.get("move_x", 0.0)), float(frame.get("move_y", 0.0))) if not frame.is_empty() else Vector2.ZERO
+	var wants_jump := _pending_jump
+	_pending_jump = false
+	_simulate_motion(move_input, wants_jump, delta)
+	if not frame.is_empty() and bool(frame.get("fire", false)) and simulate_combat:
+		fire_forward()
 
 func apply_presentation_state(state: Dictionary) -> void:
 	if state.is_empty():
@@ -188,6 +212,7 @@ func reconcile_from_authority(state: Dictionary, unacknowledged_frames: Array, d
 	var yaw_error := absf(angle_difference(rotation.y, server_yaw))
 	# Small errors are hidden by a short blend; large errors need an immediate authoritative reset.
 	var corrected := state.duplicate(true)
+	_pending_jump = false
 	if position_error <= 0.8 and yaw_error <= 0.22:
 		corrected["position"] = global_position.lerp(server_position, clampf(delta * 10.0, 0.0, 1.0))
 		corrected["yaw"] = lerp_angle(rotation.y, server_yaw, clampf(delta * 10.0, 0.0, 1.0))
@@ -199,18 +224,8 @@ func reconcile_from_authority(state: Dictionary, unacknowledged_frames: Array, d
 func _apply_replay_frame(frame: Dictionary, delta: float) -> void:
 	if eliminated or not match_active:
 		return
-	rotation.y = float(frame.get("yaw", rotation.y))
-	if head != null:
-		head.rotation.x = clampf(float(frame.get("pitch", head.rotation.x)), -1.05, 0.9)
-	if bool(frame.get("crouch", false)):
-		toggle_crouch()
-	if bool(frame.get("prone", false)):
-		toggle_prone()
-	if bool(frame.get("weapon_switch", false)):
-		# Replaying a correction must not invoke any combat effect.
-		weapon = Weapon.SCATTER if weapon == Weapon.PULSE else Weapon.PULSE
-		_update_weapon_mesh()
-	_simulate_motion(Vector2(float(frame.get("move_x", 0.0)), float(frame.get("move_y", 0.0))), bool(frame.get("jump", false)), delta)
+	apply_discrete_input(frame)
+	apply_continuous_input(frame, delta, false)
 
 func _simulate_motion(move_input: Vector2, wants_jump: bool, delta: float) -> void:
 	_fire_remaining = maxf(0.0, _fire_remaining - delta)
@@ -255,9 +270,11 @@ func _apply_stance(next_stance: Stance) -> void:
 	_capsule.height = body_height
 	_capsule.radius = body_radius
 	_collision.position.y = body_height * 0.5
-	_torso.position.y = body_height * 0.61
-	_torso.scale.y = body_height / 1.75
-	_band.position.y = body_height * 0.63
+	if _torso != null:
+		_torso.position.y = body_height * 0.61
+		_torso.scale.y = body_height / 1.75
+	if _band != null:
+		_band.position.y = body_height * 0.63
 	head.position.y = body_height - 0.34
 
 func toggle_crouch() -> void:
