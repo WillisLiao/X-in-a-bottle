@@ -92,5 +92,44 @@ func _initialize() -> void:
 	assert(rules.seed.state == RiftSeed.State.HOME)
 	assert(rules.seed.carrier_id().is_empty())
 
+	# A three-versus-three authority roster scores through one carrier without
+	# duplicating the delivery fact.
+	var squad_rules := LinebreakMatch.new()
+	root.add_child(squad_rules)
+	squad_rules.configure(Vector3.ZERO, {
+		Duelist.Team.SUN: Vector3(-18.5, 0.05, 6.0),
+		Duelist.Team.VOID: Vector3(18.5, 0.05, -6.0),
+	}, false)
+	for index in 3:
+		squad_rules.add_spawn(Duelist.Team.SUN, Vector3(-15.0 + index, 0.1, 6.0))
+		squad_rules.add_spawn(Duelist.Team.VOID, Vector3(16.0 - index, 0.1, -6.0))
+		var squad_sun := _make_duelist(root, Duelist.Team.SUN, "sun_%d" % index, Vector3(-4.0 + index, 0.1, 0.0))
+		var squad_void := _make_duelist(root, Duelist.Team.VOID, "void_%d" % index, Vector3(4.0 - index, 0.1, 0.0))
+		squad_rules.register_duelist(squad_sun, squad_sun.actor_id)
+		squad_rules.register_duelist(squad_void, squad_void.actor_id)
+	var delivery_events := [0]
+	squad_rules.objective_event.connect(func(event_type: String, _state: Dictionary) -> void:
+		if event_type == "objective_delivered":
+			delivery_events[0] += 1
+	)
+	squad_rules.begin()
+	squad_rules._set_phase(LinebreakMatch.Phase.LIVE)
+	var squad_carrier := squad_rules._lookup_duelist("sun_0")
+	squad_carrier.position = Vector3.ZERO
+	squad_rules.seed.tick_authority(0.016, squad_rules._all_duelists())
+	squad_carrier.position = Vector3(18.5, 0.1, -6.0)
+	squad_rules.seed.tick_authority(0.016, squad_rules._all_duelists())
+	assert(int(squad_rules.scores[Duelist.Team.SUN]) == 1)
+	assert(delivery_events[0] == 1)
+
 	print("Riftline Linebreak rules exercise: PASS")
 	quit()
+
+func _make_duelist(root: Node, team: Duelist.Team, actor_id: String, point: Vector3) -> Duelist:
+	var duelist := Duelist.new()
+	duelist.build(team, false, false, false)
+	duelist.set_actor_id(actor_id)
+	duelist.position = point
+	root.add_child(duelist)
+	duelist.set_match_active(true)
+	return duelist

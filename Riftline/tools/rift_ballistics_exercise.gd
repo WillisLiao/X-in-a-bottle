@@ -52,6 +52,17 @@ func _initialize() -> void:
 	assert(impacts.size() == 5)
 	assert(impacts.all(func(fact: Dictionary) -> bool: return bool(fact.hit_duelist)))
 
+	# A same-team target can be crossed by a projectile but never takes damage.
+	var friendly := _make_duelist(root, Duelist.Team.SUN, "friendly", Vector3(0.0, 0.0, -4.0))
+	ballistics.clear()
+	var friendly_health := friendly.health
+	ballistics.fire(human, Duelist.Weapon.PULSE, Vector3(0.0, 1.0, 0.0), Vector3(0.0, 0.0, -1.0))
+	ballistics.tick_authority(1.0 / 60.0)
+	assert(is_equal_approx(friendly.health, friendly_health))
+	friendly.queue_free()
+	await physics_frame
+	impacts.clear()
+
 	# clear() cancels in-flight state, so a late tick cannot damage after a phase reset.
 	bot.eliminated = false
 	bot.health = Duelist.HEALTH
@@ -61,11 +72,11 @@ func _initialize() -> void:
 	ballistics.clear()
 	ballistics.tick_authority(1.0 / 60.0)
 	assert(is_equal_approx(bot.health, Duelist.HEALTH))
-	assert(impacts.size() == 5)
+	assert(impacts.is_empty())
 
 	# Scatter remains a five-pellet close-range ray branch and never creates a carbine projectile.
 	var scatter_shots := [0]
-	human.scatter_shot.connect(func(_origin: Vector3, _end: Vector3, _team: Duelist.Team, _weapon: Duelist.Weapon, _hit: bool) -> void: scatter_shots[0] += 1)
+	human.scatter_shot.connect(func(_shooter_id: String, _origin: Vector3, _end: Vector3, _team: Duelist.Team, _weapon: Duelist.Weapon, _hit: bool) -> void: scatter_shots[0] += 1)
 	human.set_weapon_presentation(Duelist.Weapon.SCATTER)
 	human.fire_forward()
 	assert(scatter_shots[0] == 5)

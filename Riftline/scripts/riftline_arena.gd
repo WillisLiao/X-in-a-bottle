@@ -5,13 +5,15 @@ const PULP_LIT := preload("res://shaders/pulp_lit.gdshader")
 const SNAPSHOT_BUFFER := preload("res://scripts/riftline_snapshot_buffer.gd")
 const SUN_COVER_SPAWN := Vector3(-15.0, 0.1, 6.0)
 const VOID_COVER_SPAWN := Vector3(16.0, 0.1, -6.0)
+## Temporary authority-smoke points for the development squad preview.
+## Keep the original index-zero duel spawns unchanged until a real squad arena
+## replaces this deliberately unbalanced proof layout.
+const SUN_SQUAD_SPAWNS := [Vector3(-15.0, 0.1, 6.0), Vector3(-13.0, 0.1, -2.0), Vector3(-6.0, 0.1, 11.0), Vector3(-10.0, 0.1, -10.0), Vector3(-2.0, 0.1, 7.0)]
+const VOID_SQUAD_SPAWNS := [Vector3(16.0, 0.1, -6.0), Vector3(13.0, 0.1, 2.0), Vector3(6.0, 0.1, -11.0), Vector3(10.0, 0.1, 10.0), Vector3(2.0, 0.1, -7.0)]
 const SUN_GATE_POSITION := Vector3(-18.5, 0.05, 6.0)
 const VOID_GATE_POSITION := Vector3(18.5, 0.05, -6.0)
 const OPENING_HOLD_SECONDS := 2.5
 
-var player: Duelist
-var bot: BotDuelist
-var remote_duelist: Duelist
 var ballistics: RiftBallistics
 var hud: DuelHud
 var coach: RiftlineFirstMatchCoach
@@ -23,24 +25,23 @@ var _lan_active := false
 var _lan_host := false
 var _dedicated_server := false
 var _presentation_enabled := true
-var _lan_peer_id := 0
 var _lan_peer_ready := false
 var _authority_match_started := false
 var _lan_phase: LinebreakMatch.Phase = LinebreakMatch.Phase.OPENING
 var _lan_tick := 0
 var _local_input_sequence := 0
-var _remote_input: Dictionary = {}
-var _server_continuous_input: Dictionary = {}
-var _server_edge_queue: Dictionary = {}
-var _server_last_sequence: Dictionary = {}
+var _authoritative_duelists: Dictionary = {}
+var _replica_duelists: Dictionary = {}
+var _remote_snapshot_buffers: Dictionary = {}
+var _continuous_inputs: Dictionary = {}
+var _edge_queues: Dictionary = {}
+var _last_sequences: Dictionary = {}
+var _actor_for_peer: Dictionary = {}
 var _ready_peers: Dictionary = {}
 var _pending_inputs: Array[Dictionary] = []
-var _remote_snapshot_buffer: RefCounted
-var _last_remote_eliminated := false
-var _last_remote_stance := -1
-var _last_remote_weapon := -1
-var _last_remote_health := Duelist.HEALTH
-var _last_remote_phase := LinebreakMatch.Phase.OPENING
+var _local_duelist: Duelist
+var _local_actor_id := ""
+var _pending_actor_snapshots: Dictionary = {}
 var _snapshot_remaining := 0.0
 var _join_discovery_started := false
 var _local_team: Duelist.Team = Duelist.Team.SUN
@@ -51,6 +52,9 @@ var _capture_hud_layout := false
 var _capture_character := false
 var _capture_overview := false
 var _capture_rift_link := false
+var _offline_squad_size := 0
+var _squad_preview := ""
+var _capture_fixture_only := false
 var _objective_preview := ""
 var _weapon_preview := ""
 var _ballistics_preview := ""
@@ -79,6 +83,8 @@ func _ready() -> void:
 	else:
 		_build_environment()
 		_build_arena()
+		_read_capture_arguments()
+		_capture_fixture_only = not _squad_preview.is_empty()
 		_build_match()
 		_build_hud()
 		_build_first_match_coach()
@@ -87,10 +93,14 @@ func _ready() -> void:
 		if command_line_lan:
 			_enter_lan_runtime(network.multiplayer.is_server(), false)
 		else:
-			coach.begin_offline_match()
+			if _squad_preview.is_empty():
+				coach.begin_offline_match()
+			else:
+				coach.hide()
 			if not _touch_preview.is_empty():
 				hud.set_touch_preview(_touch_preview)
-			director.begin()
+			if not _capture_fixture_only:
+				director.begin()
 		if not _lan_active:
 			if not _objective_preview.is_empty():
 				_apply_objective_preview()
@@ -103,9 +113,10 @@ func _physics_process(delta: float) -> void:
 	if _dedicated_server:
 		_tick_dedicated_server(delta)
 		return
-	if player == null:
+	if _local_duelist == null:
 		return
 	_sync_objective_presentation()
+	_sync_squad_hud()
 	if _lan_active:
 		_tick_lan_duel(delta)
 		return
@@ -113,21 +124,21 @@ func _physics_process(delta: float) -> void:
 		director.take_rematch()
 	var wants_reload := hud.take_reload() or Input.is_action_just_pressed("reload")
 	var look_delta := hud.take_look_delta()
-	player.apply_look(look_delta)
+	_local_duelist.apply_look(look_delta)
 	if hud.take_reset_training() and coach != null and not _lan_active:
 		coach.reset_training()
 	if hud.gyro_enabled:
 		var gyroscope := Input.get_gyroscope()
-		player.apply_look(Vector2(gyroscope.y, -gyroscope.x) * 2.4)
+		_local_duelist.apply_look(Vector2(gyroscope.y, -gyroscope.x) * 2.4)
 	if not director.is_live() or not hud.can_drive_combat():
 		# Non-live beats can still show the arena and accept camera look, but no combat intent survives into the next phase.
 		hud.take_jump()
 		hud.take_crouch()
 		hud.take_prone()
 		hud.take_weapon_switch()
-		player.set_combat_pose(false, delta)
-		player.drive(Vector2.ZERO, false, false, delta)
-		hud.show_ammo(player.magazine_rounds, player.reserve_ammo, player.reload_remaining)
+		_local_duelist.set_combat_pose(false, delta)
+		_local_duelist.drive(Vector2.ZERO, false, false, delta)
+		hud.show_ammo(_local_duelist.magazine_rounds, _local_duelist.reserve_ammo, _local_duelist.reload_remaining)
 		return
 	var keyboard := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	var movement := hud.movement if hud.movement.length_squared() > 0.001 else keyboard
@@ -137,29 +148,30 @@ func _physics_process(delta: float) -> void:
 		if hud.fire_held or Input.is_action_pressed("fire"):
 			coach.observe_fire()
 	if hud.take_crouch():
-		player.toggle_crouch()
+		_local_duelist.toggle_crouch()
 	if hud.take_prone():
-		player.toggle_prone()
+		_local_duelist.toggle_prone()
 	if hud.take_weapon_switch():
-		player.switch_weapon()
+		_local_duelist.switch_weapon()
 	if wants_reload:
-		player.reload_weapon()
-	player.set_combat_pose(hud.aim_held, delta)
-	player.drive(movement, hud.fire_held or Input.is_action_pressed("fire"), hud.take_jump() or Input.is_action_just_pressed("jump"), delta)
+		_local_duelist.reload_weapon()
+	_local_duelist.set_combat_pose(hud.aim_held, delta)
+	_local_duelist.drive(movement, hud.fire_held or Input.is_action_pressed("fire"), hud.take_jump() or Input.is_action_just_pressed("jump"), delta)
 	_tick_authority_ballistics(delta)
-	hud.set_stance(player.stance)
-	hud.set_weapon(player.weapon)
-	hud.show_ammo(player.magazine_rounds, player.reserve_ammo, player.reload_remaining)
+	hud.set_stance(_local_duelist.stance)
+	hud.set_weapon(_local_duelist.weapon)
+	hud.show_ammo(_local_duelist.magazine_rounds, _local_duelist.reserve_ammo, _local_duelist.reload_remaining)
 	_sync_objective_presentation()
+	_sync_squad_hud()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if player == null:
+	if _local_duelist == null:
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
 		_mouse_captured = event.pressed
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if _mouse_captured else Input.MOUSE_MODE_VISIBLE
 	elif event is InputEventMouseMotion and _mouse_captured:
-		player.apply_look(event.relative)
+		_local_duelist.apply_look(event.relative)
 
 func _build_environment() -> void:
 	var environment := Environment.new()
@@ -223,40 +235,185 @@ func _build_match() -> void:
 	director = LinebreakMatch.new()
 	add_child(director)
 	director.configure(Vector3.ZERO, _gate_positions(), _presentation_enabled)
-	# Each duelist begins with its gray lane block between it and the center.
-	# This makes the first action a deliberate peek rather than an instant sight-line.
-	director.add_spawn(Duelist.Team.SUN, SUN_COVER_SPAWN)
-	director.add_spawn(Duelist.Team.VOID, VOID_COVER_SPAWN)
+	_add_spawn_points()
+	var offline_roster := RiftlineRoster.new()
+	offline_roster.configure(maxi(1, _offline_squad_size), false, _offline_squad_size > 1)
+	offline_roster.add_host()
+	if _offline_squad_size > 1:
+		for index in range(1, _offline_squad_size):
+			offline_roster.add_bot("offline_actor_%d" % index, Duelist.Team.SUN)
+		for index in range(_offline_squad_size):
+			offline_roster.add_bot("offline_actor_%d" % (_offline_squad_size + index), Duelist.Team.VOID)
+	else:
+		offline_roster.add_bot("offline_actor_1", Duelist.Team.VOID)
+	for record in offline_roster.records():
+		_ensure_actor(record, str(record.actor_id) == "host", not _capture_fixture_only)
 
-	player = Duelist.new()
-	player.name = "SunDuelist"
-	player.build(Duelist.Team.SUN, true)
-	player.position = SUN_COVER_SPAWN
-	player.rotation.y = -PI * 0.5
-	add_child(player)
-	director.register_duelist(player, "sun")
-
-	bot = BotDuelist.new()
-	bot.name = "VoidDuelist"
-	bot.build(Duelist.Team.VOID, false)
-	bot.position = VOID_COVER_SPAWN
-	bot.rotation.y = PI * 0.5
-	bot.target = player
-	bot.hold_opening_position(OPENING_HOLD_SECONDS)
-	add_child(bot)
-	director.register_duelist(bot, "void")
+	for duelist in _all_authority_actors():
+		if duelist is BotDuelist:
+			(duelist as BotDuelist).hold_opening_position(OPENING_HOLD_SECONDS)
 
 	_ensure_ballistics()
-	player.fire_requested.connect(_on_authority_fire_requested)
-	bot.fire_requested.connect(_on_authority_fire_requested)
-	player.scatter_shot.connect(_on_scatter_shot)
-	bot.scatter_shot.connect(_on_scatter_shot)
-	player.damaged.connect(_on_player_damaged)
 	director.score_changed.connect(_on_score_changed)
 	director.phase_changed.connect(_on_phase_changed)
 	director.match_finished.connect(_on_match_finished)
 	director.objective_changed.connect(_on_objective_changed)
 	director.objective_event.connect(_on_objective_event)
+
+func _add_spawn_points() -> void:
+	var points := SUN_SQUAD_SPAWNS if _offline_squad_size > 1 else [SUN_COVER_SPAWN]
+	for point in points:
+		director.add_spawn(Duelist.Team.SUN, point)
+	points = VOID_SQUAD_SPAWNS if _offline_squad_size > 1 else [VOID_COVER_SPAWN]
+	for point in points:
+		director.add_spawn(Duelist.Team.VOID, point)
+
+func _ensure_actor(record: Dictionary, local_controlled: bool, authoritative_collision: bool) -> Duelist:
+	var actor_id := str(record.get("actor_id", ""))
+	var team_value := int(record.get("team", -1))
+	if actor_id.is_empty() or team_value < int(Duelist.Team.SUN) or team_value > int(Duelist.Team.VOID):
+		return null
+	var authority_registry := not _lan_active or _lan_host or _dedicated_server
+	var registry: Dictionary = _authoritative_duelists if authority_registry else _replica_duelists
+	var existing: Variant = registry.get(actor_id, null)
+	if existing is Duelist and is_instance_valid(existing):
+		if existing.team == team_value as Duelist.Team:
+			if local_controlled:
+				_local_duelist = existing
+				_local_actor_id = actor_id
+			return existing
+		_remove_actor(actor_id)
+	var is_bot := not bool(record.get("human", true)) and not _lan_active
+	var duelist: Duelist = BotDuelist.new() if is_bot else Duelist.new()
+	duelist.name = "Actor_%s" % actor_id
+	var should_render := _presentation_enabled and not _dedicated_server
+	duelist.build(team_value as Duelist.Team, local_controlled and should_render, should_render, authoritative_collision)
+	duelist.set_friendly_presenter(not local_controlled and team_value == int(_local_team))
+	var spawn := _spawn_for_actor(team_value as Duelist.Team, registry)
+	duelist.position = spawn
+	duelist.rotation.y = -PI * 0.5 if team_value == int(Duelist.Team.SUN) else PI * 0.5
+	duelist.set_actor_id(actor_id)
+	add_child(duelist)
+	registry[actor_id] = duelist
+	if director != null and not _capture_fixture_only:
+		director.register_duelist(duelist, actor_id)
+		if not authority_registry:
+			duelist.set_match_active(director.is_live())
+	if authoritative_collision:
+		duelist.fire_requested.connect(_on_authority_fire_requested)
+		if _lan_active:
+			duelist.defeated.connect(_on_lan_defeat)
+	elif local_controlled:
+		duelist.fire_requested.connect(_on_local_fire_requested)
+	duelist.scatter_shot.connect(_on_scatter_shot)
+	if local_controlled:
+		duelist.damaged.connect(_on_player_damaged)
+		_local_duelist = duelist
+		_local_actor_id = actor_id
+	if not authority_registry and not local_controlled:
+		_remote_snapshot_buffers[actor_id] = SNAPSHOT_BUFFER.new()
+	return duelist
+
+func _remove_actor(actor_id: String) -> void:
+	if actor_id.is_empty():
+		return
+	if director != null:
+		director.unregister_duelist(actor_id)
+	for registry in [_authoritative_duelists, _replica_duelists]:
+		var candidate: Variant = registry.get(actor_id, null)
+		if candidate is Duelist and is_instance_valid(candidate):
+			candidate.queue_free()
+		registry.erase(actor_id)
+	_remote_snapshot_buffers.erase(actor_id)
+	_pending_actor_snapshots.erase(actor_id)
+	_continuous_inputs.erase(actor_id)
+	_edge_queues.erase(actor_id)
+	_last_sequences.erase(actor_id)
+	if _local_actor_id == actor_id:
+		_local_actor_id = ""
+		_local_duelist = null
+
+func _actor(actor_id: String) -> Duelist:
+	var candidate: Variant = _authoritative_duelists.get(actor_id, null)
+	if candidate is Duelist and is_instance_valid(candidate):
+		return candidate
+	candidate = _replica_duelists.get(actor_id, null)
+	return candidate if candidate is Duelist and is_instance_valid(candidate) else null
+
+func _all_authority_actors() -> Array[Duelist]:
+	var result: Array[Duelist] = []
+	for candidate in _authoritative_duelists.values():
+		if candidate is Duelist and is_instance_valid(candidate):
+			result.append(candidate)
+	return result
+
+func _all_replica_actors() -> Array[Duelist]:
+	var result: Array[Duelist] = []
+	for candidate in _replica_duelists.values():
+		if candidate is Duelist and is_instance_valid(candidate):
+			result.append(candidate)
+	return result
+
+func _spawn_for_actor(team: Duelist.Team, registry: Dictionary) -> Vector3:
+	var points: Array = SUN_SQUAD_SPAWNS if _offline_squad_size > 1 else [SUN_COVER_SPAWN]
+	if team == Duelist.Team.VOID:
+		points = VOID_SQUAD_SPAWNS if _offline_squad_size > 1 else [VOID_COVER_SPAWN]
+	var slot := 0
+	for candidate in registry.values():
+		if candidate is Duelist and candidate.team == team:
+			slot += 1
+	return points[posmod(slot, points.size())]
+
+func _preview_actor() -> Duelist:
+	for candidate in _all_authority_actors():
+		if candidate != _local_duelist:
+			return candidate
+	return _local_duelist
+
+func _actor_for_team(team: Duelist.Team) -> Duelist:
+	for actor in _all_authority_actors():
+		if actor.team == team:
+			return actor
+	for actor in _all_replica_actors():
+		if actor.team == team:
+			return actor
+	return _local_duelist
+
+func _sync_roster_records(records: Variant) -> void:
+	var now_msec := Time.get_ticks_msec()
+	for pending_actor_id in _pending_actor_snapshots.keys().duplicate():
+		var pending_snapshot: Dictionary = _pending_actor_snapshots[pending_actor_id]
+		if now_msec - int(pending_snapshot.get("arrival", now_msec)) > 1000:
+			_pending_actor_snapshots.erase(pending_actor_id)
+	var desired := {}
+	var entries: Array = records if records is Array else []
+	for raw_record in entries:
+		if not raw_record is Dictionary:
+			continue
+		var record: Dictionary = raw_record
+		var actor_id := str(record.get("actor_id", ""))
+		if actor_id.is_empty():
+			continue
+		desired[actor_id] = true
+		var is_local := actor_id == _local_actor_id
+		_ensure_actor(record, is_local, _lan_host or _dedicated_server or is_local)
+	for actor_id in _authoritative_duelists.keys().duplicate():
+		if not desired.has(actor_id):
+			_remove_actor(actor_id)
+	for actor_id in _replica_duelists.keys().duplicate():
+		if not desired.has(actor_id):
+			_remove_actor(actor_id)
+	_sync_squad_hud()
+	for actor_id in _pending_actor_snapshots.keys().duplicate():
+		if _actor(str(actor_id)) != null:
+			var pending: Dictionary = _pending_actor_snapshots[actor_id]
+			_update_remote_snapshot(str(actor_id), pending.get("state", {}), int(pending.get("tick", -1)))
+			_pending_actor_snapshots.erase(actor_id)
+
+func _authority_records() -> Array[Dictionary]:
+	if network != null and network.roster != null:
+		return network.roster.records()
+	return []
 
 func _build_hud() -> void:
 	var layer := CanvasLayer.new()
@@ -280,6 +437,8 @@ func _build_network() -> void:
 	network.snapshot_received.connect(_on_network_snapshot)
 	network.reliable_event_received.connect(_on_network_event)
 	network.team_assigned.connect(_on_team_assigned)
+	network.actor_assigned.connect(_on_actor_assigned)
+	network.roster_received.connect(_on_roster_received)
 
 func _build_rift_link() -> void:
 
@@ -287,6 +446,7 @@ func _build_rift_link() -> void:
 	add_child(layer)
 	rift_link = RiftLinkPanel.new()
 	layer.add_child(rift_link)
+	rift_link.set_squad_mode(_offline_squad_size > 1 or network.team_size > 1)
 	rift_link.host_requested.connect(_on_host_requested)
 	rift_link.join_requested.connect(_on_join_requested)
 	rift_link.cancel_requested.connect(_on_rift_link_cancelled)
@@ -334,9 +494,8 @@ func _on_phase_changed(phase: LinebreakMatch.Phase) -> void:
 		_clear_presentation_effects()
 	_lan_phase = phase
 	if phase != LinebreakMatch.Phase.LIVE:
-		_remote_input.clear()
-		_server_continuous_input.clear()
-		_server_edge_queue.clear()
+		_continuous_inputs.clear()
+		_edge_queues.clear()
 	if hud != null:
 		hud.set_match_phase(phase)
 		hud.set_combat_input_enabled(phase == LinebreakMatch.Phase.LIVE)
@@ -393,13 +552,13 @@ func _on_projectile_fired(fact: Dictionary) -> void:
 	_seen_projectile_fires[projectile_key] = Time.get_ticks_msec()
 	_trim_projectile_cache(_seen_projectile_fires)
 	var shooter_id := str(fact.get("shooter_id", ""))
-	var local_prediction := player != null and shooter_id == player.actor_id and _pending_local_primary_predictions > 0
+	var local_prediction := _local_duelist != null and shooter_id == _local_duelist.actor_id and _pending_local_primary_predictions > 0
 	if local_prediction:
 		_pending_local_primary_predictions -= 1
 	if _presentation_enabled:
 		if not local_prediction:
 			_play_shooter_fire_by_id(shooter_id, Duelist.Weapon.PULSE)
-			if player != null and shooter_id == player.actor_id and hud != null:
+			if _local_duelist != null and shooter_id == _local_duelist.actor_id and hud != null:
 				hud.show_primary_fire_feedback()
 		_spawn_projectile_tracer(fact)
 	if _lan_host:
@@ -426,16 +585,16 @@ func _trim_projectile_cache(cache: Dictionary) -> void:
 	while cache.size() > 128:
 		cache.erase(cache.keys()[0])
 
-func _on_scatter_shot(origin: Vector3, end: Vector3, team: Duelist.Team, fired_weapon: Duelist.Weapon, hit_target: bool) -> void:
+func _on_scatter_shot(shooter_id: String, origin: Vector3, end: Vector3, team: Duelist.Team, fired_weapon: Duelist.Weapon, hit_target: bool) -> void:
 	if _presentation_enabled:
-		_show_scatter_shot(origin, end, team, fired_weapon, hit_target)
+		_show_scatter_shot(shooter_id, origin, end, team, fired_weapon, hit_target)
 	if _lan_host:
-		network.publish_event({"type": "shot", "origin": origin, "end": end, "team": int(team), "weapon": int(fired_weapon), "hit": hit_target})
+		network.publish_event({"type": "shot", "shooter_id": shooter_id, "origin": origin, "end": end, "team": int(team), "weapon": int(fired_weapon), "hit": hit_target})
 
-func _show_scatter_shot(origin: Vector3, end: Vector3, team: Duelist.Team, fired_weapon: Duelist.Weapon, hit_target: bool) -> void:
+func _show_scatter_shot(shooter_id: String, origin: Vector3, end: Vector3, team: Duelist.Team, fired_weapon: Duelist.Weapon, hit_target: bool) -> void:
 	if not _presentation_enabled:
 		return
-	_play_shooter_fire(team, fired_weapon)
+	_play_shooter_fire_by_id(shooter_id, fired_weapon)
 	if team == _local_team and hit_target and hud != null:
 		hud.show_hit_confirm()
 	var accent := Color("ffb15c") if team == Duelist.Team.SUN else Color("75dbff")
@@ -490,26 +649,28 @@ func _on_network_status(status: String) -> void:
 	if status in ["LINK LOST", "LINK FAILED"] and _lan_active and not _dedicated_server:
 		_restore_offline_training(status)
 
-func _on_host_discovered(_session: Dictionary) -> void:
+func _on_host_discovered(session: Dictionary) -> void:
 	_join_discovery_started = true
 	if rift_link != null and rift_link.visible:
+		rift_link.set_squad_mode(str(session.get("mode", "duel")) == "squad")
 		rift_link.set_discovered_session(true)
 
 func _on_network_peer_joined(peer_id: int) -> void:
 	if not _lan_active:
 		return
-	if _dedicated_server:
-		_server_continuous_input[peer_id] = {}
-		_server_edge_queue[peer_id] = []
-		_server_last_sequence[peer_id] = -1
+	if not _lan_host:
+		_lan_peer_ready = true
+		network.publish_event({"type": "ready"})
 		return
-	else:
-		_lan_peer_id = peer_id
-		_server_continuous_input[peer_id] = {}
-		_server_edge_queue[peer_id] = []
-		_server_last_sequence[peer_id] = -1
-	if _lan_host and not _dedicated_server:
-		_lan_peer_id = peer_id
+	var actor_id := network.peer_actor_id(peer_id)
+	if actor_id.is_empty():
+		return
+	_actor_for_peer[peer_id] = actor_id
+	_continuous_inputs[actor_id] = {}
+	_edge_queues[actor_id] = []
+	_last_sequences[actor_id] = -1
+	if _lan_host:
+		_sync_roster_records(_authority_records())
 	else:
 		_lan_peer_ready = true
 		network.publish_event({"type": "ready"})
@@ -517,46 +678,43 @@ func _on_network_peer_joined(peer_id: int) -> void:
 
 func _on_network_peer_left(peer_id: int) -> void:
 	_clear_ballistics()
+	var actor_id := str(_actor_for_peer.get(peer_id, network.peer_actor_id(peer_id)))
+	_actor_for_peer.erase(peer_id)
+	if not actor_id.is_empty():
+		_remove_actor(actor_id)
 	if _dedicated_server:
 		_authority_match_started = false
 		_ready_peers.erase(peer_id)
-		_server_continuous_input.erase(peer_id)
-		_server_edge_queue.erase(peer_id)
-		_server_last_sequence.erase(peer_id)
+		_continuous_inputs.erase(actor_id)
+		_edge_queues.erase(actor_id)
+		_last_sequences.erase(actor_id)
 		if director != null:
-			_replace_match_for_lan(true)
+			_sync_roster_records(_authority_records())
 		return
-	if _lan_active:
+	if _lan_active and not _lan_host:
 		_restore_offline_training("LINK LOST")
 
 func _on_network_input(peer_id: int, frame: Dictionary) -> void:
 	if not _lan_active or not _lan_host or director == null or not director.is_live():
 		return
-	if _dedicated_server:
-		if network.peer_team(peer_id) < 0:
-			return
-		_server_continuous_input[peer_id] = _continuous_input(frame)
-		var dedicated_edges: Array = _server_edge_queue.get(peer_id, [])
-		dedicated_edges.append(_discrete_input(frame))
-		_server_edge_queue[peer_id] = dedicated_edges
-		_server_last_sequence[peer_id] = int(frame.get("sequence", -1))
+	var actor_id := str(_actor_for_peer.get(peer_id, network.peer_actor_id(peer_id)))
+	if actor_id.is_empty() or _actor(actor_id) == null:
 		return
-	if peer_id != _lan_peer_id:
-		return
-	_remote_input = frame.duplicate(true)
-	_server_continuous_input[peer_id] = _continuous_input(frame)
-	var app_host_edges: Array = _server_edge_queue.get(peer_id, [])
-	app_host_edges.append(_discrete_input(frame))
-	_server_edge_queue[peer_id] = app_host_edges
-	_server_last_sequence[peer_id] = int(frame.get("sequence", -1))
+	_continuous_inputs[actor_id] = _continuous_input(frame)
+	var edges: Array = _edge_queues.get(actor_id, [])
+	edges.append(_discrete_input(frame))
+	_edge_queues[actor_id] = edges
+	_last_sequences[actor_id] = int(frame.get("sequence", -1))
 
 func _on_network_snapshot(snapshot: Dictionary) -> void:
 	if not _lan_active or _lan_host or snapshot.is_empty():
 		return
 	if director != null:
-		director.apply_replica_state(snapshot)
+		var replica_match: Dictionary = snapshot.get("match", snapshot).duplicate(true)
+		replica_match["tick"] = int(snapshot.get("tick", -1))
+		director.apply_replica_state(replica_match)
 	var players: Dictionary = snapshot.get("players", {})
-	var local_state: Dictionary = players.get(_team_key(_local_team), {})
+	var local_state: Dictionary = players.get(_local_actor_id, {})
 	if not local_state.is_empty():
 		var acknowledged := int(local_state.get("last_input", -1))
 		var remaining: Array[Dictionary] = []
@@ -564,29 +722,31 @@ func _on_network_snapshot(snapshot: Dictionary) -> void:
 			if int(frame.get("sequence", -1)) > acknowledged:
 				remaining.append(frame)
 		_pending_inputs = remaining
-		player.reconcile_from_authority(local_state, _pending_inputs, 1.0 / 60.0)
-	var remote_state: Dictionary = players.get(_team_key(_opposing_team()), {})
-	if not remote_state.is_empty():
-		_update_remote_snapshot(remote_state, int(snapshot.get("tick", -1)))
+		if _local_duelist != null:
+			_local_duelist.reconcile_from_authority(local_state, _pending_inputs, 1.0 / 60.0)
+	for actor_id in players.keys():
+		if str(actor_id) == _local_actor_id:
+			continue
+		var remote_state: Dictionary = players[actor_id]
+		if _actor(str(actor_id)) == null:
+			_pending_actor_snapshots[str(actor_id)] = {"state": remote_state.duplicate(true), "tick": int(snapshot.get("tick", -1)), "arrival": Time.get_ticks_msec()}
+		else:
+			_update_remote_snapshot(str(actor_id), remote_state, int(snapshot.get("tick", -1)))
 	if hud != null:
-		hud.set_score(int(snapshot.get("sun_score", 0)), int(snapshot.get("void_score", 0)))
+		var match_state: Dictionary = snapshot.get("match", snapshot)
+		hud.set_score(int(match_state.get("sun_score", 0)), int(match_state.get("void_score", 0)))
+	_sync_squad_hud()
 
 func _on_network_event(event: Dictionary, sender_id: int) -> void:
 	if event.is_empty():
 		return
 	var event_type := str(event.get("type", ""))
 	if _lan_host:
-		if event_type == "assigned_team":
-			_on_team_assigned(int(event.get("team", -1)))
-			return
-		if event_type == "ready" and _dedicated_server and network.peer_team(sender_id) >= 0:
+		if event_type == "ready" and not network.peer_actor_id(sender_id).is_empty():
 			_ready_peers[sender_id] = true
-			if _ready_peers.size() >= 2:
+			if _authority_roster_ready():
 				_start_host_match()
-		elif event_type == "ready" and sender_id == _lan_peer_id and not _lan_peer_ready:
-			_lan_peer_ready = true
-			_start_host_match()
-		elif event_type == "rematch_request" and sender_id == _lan_peer_id and director != null:
+		elif event_type == "rematch_request" and not network.peer_actor_id(sender_id).is_empty() and director != null:
 			director.take_rematch()
 		return
 	match event_type:
@@ -600,15 +760,17 @@ func _on_network_event(event: Dictionary, sender_id: int) -> void:
 			if hud != null:
 				hud.show_match_result(int(event.get("winner", int(Duelist.Team.SUN))) as Duelist.Team)
 		"defeat":
-			_apply_client_defeat(int(event.get("victim", int(Duelist.Team.SUN))))
+			_apply_client_defeat(str(event.get("victim_id", "")))
 		"projectile_fired":
 			_on_projectile_fired(event)
 		"projectile_impacted":
 			_on_projectile_impacted(event)
 		"shot":
-			_show_scatter_shot(event.get("origin", Vector3.ZERO), event.get("end", Vector3.ZERO), int(event.get("team", int(Duelist.Team.SUN))) as Duelist.Team, int(event.get("weapon", int(Duelist.Weapon.SCATTER))) as Duelist.Weapon, bool(event.get("hit", false)))
+			_show_scatter_shot(str(event.get("shooter_id", "")), event.get("origin", Vector3.ZERO), event.get("end", Vector3.ZERO), int(event.get("team", int(Duelist.Team.SUN))) as Duelist.Team, int(event.get("weapon", int(Duelist.Weapon.SCATTER))) as Duelist.Weapon, bool(event.get("hit", false)))
 		"spawn":
-			_apply_client_spawn(int(event.get("team", int(Duelist.Team.SUN))))
+			_apply_client_spawn(str(event.get("actor_id", "")), event.get("position", null), float(event.get("yaw", 0.0)))
+		"roster":
+			_sync_roster_records(event.get("records", []))
 		"objective_claimed", "objective_dropped", "objective_returned", "objective_delivered":
 			_on_objective_event(str(event.get("type", "")), event.get("state", {}))
 
@@ -623,22 +785,17 @@ func _enter_lan_runtime(host: bool, from_player_flow: bool) -> void:
 	_lan_phase = LinebreakMatch.Phase.OPENING
 	_lan_tick = 0
 	_local_input_sequence = 0
-	_remote_input = {}
 	_pending_inputs.clear()
+	_pending_actor_snapshots.clear()
 	_clear_ballistics()
-	_server_continuous_input.clear()
-	_server_edge_queue.clear()
-	_server_last_sequence.clear()
+	_continuous_inputs.clear()
+	_edge_queues.clear()
+	_last_sequences.clear()
+	_actor_for_peer.clear()
 	_ready_peers.clear()
 	_authority_match_started = false
-	_remote_snapshot_buffer = SNAPSHOT_BUFFER.new()
-	_remote_snapshot_buffer.clear()
-	if host:
-		_local_team = Duelist.Team.SUN
-	elif network.local_team >= 0:
-		_local_team = network.local_team as Duelist.Team
-	else:
-		_local_team = Duelist.Team.VOID
+	_local_actor_id = network.local_actor_id
+	_local_team = network.local_team as Duelist.Team if network.local_team >= 0 else Duelist.Team.SUN
 	_replace_match_for_lan(host)
 	if hud != null:
 		hud.set_connection_flow_active(false if not from_player_flow else true)
@@ -649,40 +806,20 @@ func _enter_lan_runtime(host: bool, from_player_flow: bool) -> void:
 
 func _replace_match_for_lan(host: bool) -> void:
 	_clear_match_nodes()
-	player = Duelist.new()
-	player.name = "LocalDuelist"
-	player.build(_local_team, not _dedicated_server, _presentation_enabled, true)
-	player.position = SUN_COVER_SPAWN if _local_team == Duelist.Team.SUN else VOID_COVER_SPAWN
-	player.rotation.y = -PI * 0.5 if _local_team == Duelist.Team.SUN else PI * 0.5
-	add_child(player)
-	remote_duelist = Duelist.new()
-	remote_duelist.name = "RemoteDuelist"
-	remote_duelist.build(_opposing_team(), false, _presentation_enabled, _lan_host or _dedicated_server)
-	remote_duelist.position = VOID_COVER_SPAWN if _local_team == Duelist.Team.SUN else SUN_COVER_SPAWN
-	remote_duelist.rotation.y = PI * 0.5 if _local_team == Duelist.Team.SUN else -PI * 0.5
-	add_child(remote_duelist)
 	if host:
 		_ensure_ballistics()
 	elif ballistics != null:
 		ballistics.queue_free()
 		ballistics = null
-	if host:
-		player.fire_requested.connect(_on_authority_fire_requested)
-		remote_duelist.fire_requested.connect(_on_authority_fire_requested)
-	else:
-		player.fire_requested.connect(_on_local_fire_requested)
-	player.scatter_shot.connect(_on_scatter_shot)
-	remote_duelist.scatter_shot.connect(_on_scatter_shot)
-	player.damaged.connect(_on_player_damaged)
-	if host:
-		director = null
 	director = LinebreakMatch.new()
 	add_child(director)
 	director.configure(Vector3.ZERO, _gate_positions(), _presentation_enabled)
-	director.add_spawn(Duelist.Team.SUN, SUN_COVER_SPAWN)
-	director.add_spawn(Duelist.Team.VOID, VOID_COVER_SPAWN)
-	director.register_duelist(player if _local_team == Duelist.Team.SUN else remote_duelist, "sun")
-	director.register_duelist(remote_duelist if _local_team == Duelist.Team.SUN else player, "void")
+	var team_points := SUN_SQUAD_SPAWNS if network.team_size > 1 else [SUN_COVER_SPAWN]
+	for point in team_points:
+		director.add_spawn(Duelist.Team.SUN, point)
+	team_points = VOID_SQUAD_SPAWNS if network.team_size > 1 else [VOID_COVER_SPAWN]
+	for point in team_points:
+		director.add_spawn(Duelist.Team.VOID, point)
 	director.score_changed.connect(_on_score_changed)
 	director.phase_changed.connect(_on_phase_changed)
 	director.match_finished.connect(_on_match_finished)
@@ -690,26 +827,32 @@ func _replace_match_for_lan(host: bool) -> void:
 	director.objective_changed.connect(_on_objective_changed)
 	director.objective_event.connect(_on_objective_event)
 	if host:
-		player.defeated.connect(_on_lan_defeat)
-		remote_duelist.defeated.connect(_on_lan_defeat)
+		_sync_roster_records(_authority_records())
+	elif not _local_actor_id.is_empty():
+		var local_record := {"actor_id": _local_actor_id, "team": int(_local_team), "human": true}
+		_sync_roster_records([local_record])
 
 func _clear_match_nodes() -> void:
 	_clear_ballistics()
 	if director != null:
 		director.queue_free()
-	if bot != null:
-		bot.queue_free()
-	if player != null:
-		player.queue_free()
-	if remote_duelist != null:
-		remote_duelist.queue_free()
+	for actor in _all_authority_actors():
+		if is_instance_valid(actor):
+			actor.queue_free()
+	for actor in _all_replica_actors():
+		if is_instance_valid(actor):
+			actor.queue_free()
+	_authoritative_duelists.clear()
+	_replica_duelists.clear()
+	_remote_snapshot_buffers.clear()
+	_continuous_inputs.clear()
+	_edge_queues.clear()
+	_last_sequences.clear()
 	director = null
-	bot = null
-	player = null
-	remote_duelist = null
+	_local_duelist = null
 
 func _start_host_match() -> void:
-	if _authority_match_started or director == null or (_dedicated_server and _ready_peers.size() < 2) or (not _dedicated_server and not _lan_peer_ready):
+	if _authority_match_started or director == null or not _authority_roster_ready():
 		return
 	if rift_link != null:
 		rift_link.hide_panel()
@@ -718,21 +861,21 @@ func _start_host_match() -> void:
 	_authority_match_started = true
 	director.begin()
 	print("Riftline authoritative match started")
-	network.publish_event({"type": "spawn", "team": int(Duelist.Team.SUN)})
-	network.publish_event({"type": "spawn", "team": int(Duelist.Team.VOID)})
+	for actor in _all_authority_actors():
+		network.publish_event({"type": "spawn", "actor_id": actor.actor_id, "position": actor.global_position, "yaw": actor.rotation.y})
 
 func _tick_lan_duel(delta: float) -> void:
-	if player == null:
+	if _local_duelist == null:
 		return
 	if hud.take_rematch():
 		if _lan_host and director != null:
 			director.take_rematch()
 		elif not _lan_host:
 			network.publish_event({"type": "rematch_request"})
-	player.apply_look(hud.take_look_delta())
+	_local_duelist.apply_look(hud.take_look_delta())
 	if hud.gyro_enabled:
 		var gyroscope := Input.get_gyroscope()
-		player.apply_look(Vector2(gyroscope.y, -gyroscope.x) * 2.4)
+		_local_duelist.apply_look(Vector2(gyroscope.y, -gyroscope.x) * 2.4)
 	var live := director != null and director.is_live() if _lan_host else _lan_phase == LinebreakMatch.Phase.LIVE
 	var wants_reload := hud.take_reload() or Input.is_action_just_pressed("reload")
 	if not live or not hud.can_drive_combat():
@@ -740,12 +883,12 @@ func _tick_lan_duel(delta: float) -> void:
 		hud.take_crouch()
 		hud.take_prone()
 		hud.take_weapon_switch()
-		player.set_combat_pose(false, delta)
-		player.apply_input_frame({}, delta, false)
+		_local_duelist.set_combat_pose(false, delta)
+		_local_duelist.apply_input_frame({}, delta, false)
 	else:
 		var keyboard := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 		var movement := hud.movement if hud.movement.length_squared() > 0.001 else keyboard
-		var frame := player.make_input_frame(
+		var frame := _local_duelist.make_input_frame(
 			_local_input_sequence,
 			movement,
 			hud.aim_held,
@@ -756,25 +899,31 @@ func _tick_lan_duel(delta: float) -> void:
 			hud.take_weapon_switch(),
 			wants_reload)
 		_local_input_sequence += 1
-		player.set_combat_pose(bool(frame.aim), delta)
+		_local_duelist.set_combat_pose(bool(frame.aim), delta)
 		if _lan_host:
-			player.apply_input_frame(frame, delta, true)
-			for edge in _server_edge_queue.get(_lan_peer_id, []):
-				remote_duelist.apply_discrete_input(edge)
-			_server_edge_queue[_lan_peer_id] = []
-			remote_duelist.apply_continuous_input(_server_continuous_input.get(_lan_peer_id, {}), delta, true)
+			_local_duelist.apply_input_frame(frame, delta, true)
+			for actor_id in _authoritative_duelists.keys():
+				if str(actor_id) == _local_actor_id:
+					continue
+				var target := _actor(str(actor_id))
+				if target == null:
+					continue
+				for edge in _edge_queues.get(actor_id, []):
+					target.apply_discrete_input(edge)
+				_edge_queues[actor_id] = []
+				target.apply_continuous_input(_continuous_inputs.get(actor_id, {}), delta, true)
 		else:
-			player.apply_input_frame(frame, delta, false)
-			if player.weapon == Duelist.Weapon.PULSE and bool(frame.fire):
+			_local_duelist.apply_input_frame(frame, delta, false)
+			if _local_duelist.weapon == Duelist.Weapon.PULSE and bool(frame.fire):
 				# The joining client predicts only the local carbine presentation.  No scatter ray or hit path runs here.
-				player.fire_forward()
+				_local_duelist.fire_forward()
 			_pending_inputs.append(frame)
 			network.send_input(frame)
-	hud.set_stance(player.stance)
-	hud.set_weapon(player.weapon)
-	hud.show_ammo(player.magazine_rounds, player.reserve_ammo, player.reload_remaining)
-	hud.show_damage(player.health)
-	if not _lan_host and remote_duelist != null:
+	hud.set_stance(_local_duelist.stance)
+	hud.set_weapon(_local_duelist.weapon)
+	hud.show_ammo(_local_duelist.magazine_rounds, _local_duelist.reserve_ammo, _local_duelist.reload_remaining)
+	hud.show_damage(_local_duelist.health)
+	if not _lan_host:
 		_smooth_remote_presentation()
 	if _lan_host:
 		_lan_tick += 1
@@ -785,57 +934,52 @@ func _tick_lan_duel(delta: float) -> void:
 			_publish_lan_snapshot()
 
 func _smooth_remote_presentation() -> void:
-	if _remote_snapshot_buffer == null or remote_duelist == null:
-		return
-	var presented: Dictionary = _remote_snapshot_buffer.sample(network.simulation_clock)
-	if not presented.is_empty():
-		remote_duelist.apply_presentation_state(presented)
+	for actor_id in _remote_snapshot_buffers.keys():
+		var actor := _actor(str(actor_id))
+		var buffer: RefCounted = _remote_snapshot_buffers[actor_id]
+		if actor == null or buffer == null:
+			continue
+		var presented: Dictionary = buffer.sample(network.simulation_clock)
+		if not presented.is_empty():
+			actor.apply_presentation_state(presented)
 
-func _update_remote_snapshot(remote_state: Dictionary, host_tick: int) -> void:
-	if remote_duelist == null or _remote_snapshot_buffer == null or remote_state.is_empty():
+func _update_remote_snapshot(actor_id: String, remote_state: Dictionary, host_tick: int) -> void:
+	var actor := _actor(actor_id)
+	var buffer: RefCounted = _remote_snapshot_buffers.get(actor_id, null)
+	if actor == null or buffer == null or remote_state.is_empty():
 		return
 	var next_eliminated := bool(remote_state.get("eliminated", false))
-	var next_stance := int(remote_state.get("stance", int(Duelist.Stance.STAND)))
-	var next_weapon := int(remote_state.get("weapon", int(Duelist.Weapon.PULSE)))
-	var next_health := float(remote_state.get("health", Duelist.HEALTH))
-	var should_reset := next_eliminated != _last_remote_eliminated or (not next_eliminated and _last_remote_eliminated)
-	if _last_remote_phase != _lan_phase:
-		should_reset = true
-	var incoming_position: Vector3 = remote_state.get("position", remote_duelist.global_position)
-	if remote_duelist.global_position.distance_to(incoming_position) > 3.0:
+	var previous: Dictionary = buffer.sample(network.simulation_clock)
+	var should_reset := not previous.is_empty() and next_eliminated != bool(previous.get("eliminated", false))
+	var incoming_position: Vector3 = remote_state.get("position", actor.global_position)
+	if actor.global_position.distance_to(incoming_position) > 3.0:
 		should_reset = true
 	if should_reset:
-		_remote_snapshot_buffer.clear()
-		remote_duelist.apply_presentation_state(remote_state)
-	_remote_snapshot_buffer.push(remote_state, host_tick, network.simulation_clock)
-	_last_remote_eliminated = next_eliminated
-	_last_remote_stance = next_stance
-	_last_remote_weapon = next_weapon
-	_last_remote_health = next_health
-	_last_remote_phase = _lan_phase
+		buffer.clear()
+		actor.apply_presentation_state(remote_state)
+	buffer.push(remote_state, host_tick, network.simulation_clock)
 
 func _tick_dedicated_server(delta: float) -> void:
-	if not _lan_active or director == null or player == null or remote_duelist == null:
+	if not _lan_active or director == null:
 		return
-	var applied_teams: Dictionary = {}
-	for peer_id in _server_continuous_input.keys():
-		var team_value := network.peer_team(int(peer_id))
-		var target := player if team_value == int(Duelist.Team.SUN) else remote_duelist if team_value == int(Duelist.Team.VOID) else null
+	var applied: Dictionary = {}
+	for actor_id in _authoritative_duelists.keys():
+		var target: Duelist = _authoritative_duelists[actor_id]
 		if target == null:
 			continue
-		applied_teams[team_value] = true
-		var edges: Array = _server_edge_queue.get(peer_id, [])
-		_server_edge_queue[peer_id] = []
+		if _continuous_inputs.has(actor_id):
+			applied[actor_id] = true
+		var edges: Array = _edge_queues.get(actor_id, [])
+		_edge_queues[actor_id] = []
 		if director.is_live():
 			for edge in edges:
 				target.apply_discrete_input(edge)
-			target.apply_continuous_input(_server_continuous_input.get(peer_id, {}), delta, true)
+			target.apply_continuous_input(_continuous_inputs.get(actor_id, {}), delta, true)
 		else:
 			target.apply_continuous_input({}, delta, false)
-	for team_value in [int(Duelist.Team.SUN), int(Duelist.Team.VOID)]:
-		if not applied_teams.has(team_value):
-			var idle_target := player if team_value == int(Duelist.Team.SUN) else remote_duelist
-			idle_target.apply_continuous_input({}, delta, false)
+	for actor_id in _authoritative_duelists.keys():
+		if not applied.has(actor_id):
+			(_authoritative_duelists[actor_id] as Duelist).apply_continuous_input({}, delta, false)
 	_tick_authority_ballistics(delta)
 	_lan_tick += 1
 	_snapshot_remaining -= delta
@@ -844,46 +988,38 @@ func _tick_dedicated_server(delta: float) -> void:
 		_publish_lan_snapshot()
 
 func _publish_lan_snapshot() -> void:
-	if director == null or remote_duelist == null:
+	if director == null:
 		return
-	var host_duelist := player if _local_team == Duelist.Team.SUN else remote_duelist
-	var join_duelist := remote_duelist if _local_team == Duelist.Team.SUN else player
+	var match_state := director.authoritative_state()
+	var players := {}
+	for actor_id in _authoritative_duelists.keys():
+		var duelist: Duelist = _authoritative_duelists[actor_id]
+		players[actor_id] = duelist.authoritative_state(_lan_tick, _last_sequence_for(duelist))
 	var snapshot := {
 		"tick": _lan_tick,
-		"phase": int(director.phase),
-		"sun_score": int(director.scores[Duelist.Team.SUN]),
-		"void_score": int(director.scores[Duelist.Team.VOID]),
-		"objective": director.objective_state(),
-		"players": {
-			"sun": host_duelist.authoritative_state(_lan_tick, _last_sequence_for(host_duelist)),
-			"void": join_duelist.authoritative_state(_lan_tick, _last_sequence_for(join_duelist)),
-		},
+		"match": match_state,
+		"phase": int(match_state.get("phase", int(director.phase))),
+		"sun_score": int(match_state.get("sun_score", 0)),
+		"void_score": int(match_state.get("void_score", 0)),
+		"objective": match_state.get("objective", {}),
+		"players": players,
 	}
 	network.publish_snapshot(snapshot)
 
 func _last_sequence_for(duelist: Duelist) -> int:
-	if _dedicated_server:
-		for peer_id in _server_last_sequence:
-			var team_value := network.peer_team(int(peer_id))
-			if (duelist == player and team_value == int(Duelist.Team.SUN)) or (duelist == remote_duelist and team_value == int(Duelist.Team.VOID)):
-				return int(_server_last_sequence[peer_id])
-		return -1
-	return _local_input_sequence - 1 if duelist == player else int(_server_last_sequence.get(_lan_peer_id, -1))
+	return _local_input_sequence - 1 if duelist.actor_id == _local_actor_id else int(_last_sequences.get(duelist.actor_id, -1))
 
 func _apply_client_phase(next_phase: int) -> void:
 	_lan_phase = next_phase as LinebreakMatch.Phase
-	_last_remote_phase = _lan_phase
 	if _lan_phase != LinebreakMatch.Phase.LIVE:
 		_clear_ballistics()
-	if _remote_snapshot_buffer != null:
-		_remote_snapshot_buffer.clear()
+	for buffer in _remote_snapshot_buffers.values():
+		(buffer as RefCounted).clear()
 	if hud != null:
 		hud.set_match_phase(_lan_phase)
 		hud.set_combat_input_enabled(_lan_phase == LinebreakMatch.Phase.LIVE)
-	if player != null:
-		player.set_match_active(_lan_phase == LinebreakMatch.Phase.LIVE)
-	if remote_duelist != null:
-		remote_duelist.set_match_active(_lan_phase == LinebreakMatch.Phase.LIVE)
+	for actor in _all_replica_actors():
+		actor.set_match_active(_lan_phase == LinebreakMatch.Phase.LIVE)
 	if _lan_phase == LinebreakMatch.Phase.LIVE:
 		if rift_link != null:
 			rift_link.hide_panel()
@@ -894,42 +1030,62 @@ func _on_team_assigned(team_value: int) -> void:
 	if team_value < int(Duelist.Team.SUN) or team_value > int(Duelist.Team.VOID):
 		return
 	_local_team = team_value as Duelist.Team
-	if _lan_active and not _lan_host and not _dedicated_server and player != null and player.team != _local_team:
-		_replace_match_for_lan(false)
+
+func _on_actor_assigned(actor_id: String, team_value: int) -> void:
+	if actor_id.is_empty() or team_value < int(Duelist.Team.SUN) or team_value > int(Duelist.Team.VOID):
+		return
+	_local_actor_id = actor_id
+	_local_team = team_value as Duelist.Team
+	if _lan_active and not _lan_host and not _dedicated_server:
+		_sync_roster_records([{"actor_id": actor_id, "team": team_value, "human": true}])
+
+func _on_roster_received(records: Array[Dictionary]) -> void:
+	if not _lan_active or _lan_host:
+		return
+	_sync_roster_records(records)
+
+func _authority_roster_ready() -> bool:
+	if network == null or network.roster == null or not network.roster.is_ready():
+		return false
+	var remote_required := 0
+	for record in network.roster.records():
+		if bool(record.get("human", false)) and int(record.get("peer_id", -1)) > 0:
+			remote_required += 1
+	return _ready_peers.size() >= remote_required
 
 func _on_lan_defeat(victim: Duelist, killer: Duelist) -> void:
 	if _lan_host:
-		network.publish_event({"type": "defeat", "victim": int(victim.team), "killer": int(killer.team)})
+		network.publish_event({"type": "defeat", "victim_id": victim.actor_id, "killer_id": killer.actor_id})
 
 func _on_lan_respawn_started(victim: Duelist) -> void:
 	_clear_presentation_effects()
 	if _lan_host:
-		network.publish_event({"type": "spawn", "team": int(victim.team)})
+		network.publish_event({"type": "spawn", "actor_id": victim.actor_id, "position": victim.global_position, "yaw": victim.rotation.y})
 
-func _apply_client_defeat(team_value: int) -> void:
-	var victim := player if team_value == int(_local_team) else remote_duelist
+func _apply_client_defeat(actor_id: String) -> void:
+	var victim := _actor(actor_id)
 	if victim != null:
 		victim.apply_presentation_state({"health": 0.0, "eliminated": true})
 
-func _apply_client_spawn(team_value: int) -> void:
+func _apply_client_spawn(actor_id: String, position: Variant = null, yaw: float = 0.0) -> void:
 	_clear_ballistics()
 	_clear_presentation_effects()
-	var target_team := team_value as Duelist.Team
-	var target := player if target_team == _local_team else remote_duelist
+	var target := _actor(actor_id)
 	if target == null:
 		return
-	var spawn := SUN_COVER_SPAWN if target_team == Duelist.Team.SUN else VOID_COVER_SPAWN
+	if position == null or not position is Vector3:
+		return
 	target.apply_presentation_state({
-		"position": spawn,
+		"position": position,
 		"velocity": Vector3.ZERO,
-		"yaw": -PI * 0.5 if target_team == Duelist.Team.SUN else PI * 0.5,
+		"yaw": yaw,
 		"pitch": 0.0,
 		"health": Duelist.HEALTH,
 		"stance": int(Duelist.Stance.STAND),
 		"weapon": int(Duelist.Weapon.PULSE),
 		"eliminated": false,
 	})
-	if target == player:
+	if target == _local_duelist:
 		_pending_inputs.clear()
 
 func _restore_offline_training(message: String) -> void:
@@ -940,7 +1096,6 @@ func _restore_offline_training(message: String) -> void:
 	_lan_active = false
 	_lan_host = false
 	_lan_peer_ready = false
-	_lan_peer_id = 0
 	network.stop()
 	rift_link.hide_panel()
 	hud.set_connection_flow_active(false)
@@ -958,17 +1113,21 @@ func _sync_objective_presentation() -> void:
 	if coach != null and not _lan_active:
 		coach.observe_objective(state)
 
+func _sync_squad_hud() -> void:
+	if hud == null:
+		return
+	var actors := _all_replica_actors() if _lan_active and not _lan_host else _all_authority_actors()
+	var records: Array[Dictionary] = []
+	for actor in actors:
+		records.append({"actor_id": actor.actor_id, "team": int(actor.team), "eliminated": actor.eliminated})
+	var squad := _offline_squad_size > 1 or (network != null and network.team_size > 1) or records.size() > 2
+	hud.set_roster_state(records, int(_local_team), squad)
+
 func _gate_positions() -> Dictionary:
 	return {
 		Duelist.Team.SUN: SUN_GATE_POSITION,
 		Duelist.Team.VOID: VOID_GATE_POSITION,
 	}
-
-func _opposing_team() -> Duelist.Team:
-	return Duelist.Team.VOID if _local_team == Duelist.Team.SUN else Duelist.Team.SUN
-
-func _team_key(team: Duelist.Team) -> String:
-	return "sun" if team == Duelist.Team.SUN else "void"
 
 func _continuous_input(frame: Dictionary) -> Dictionary:
 	return {
@@ -992,24 +1151,20 @@ func _discrete_input(frame: Dictionary) -> Dictionary:
 	}
 
 func _play_shooter_fire(team: Duelist.Team, fired_weapon: Duelist.Weapon) -> void:
-	if player != null and player.team == team:
-		player.play_local_weapon_fire(fired_weapon)
-		return
-	if remote_duelist != null and remote_duelist.team == team:
-		remote_duelist.play_remote_weapon_fire(fired_weapon)
-		return
-	if bot != null and bot.team == team:
-		bot.play_remote_weapon_fire(fired_weapon)
+	for actor in _all_authority_actors():
+		if actor.team == team:
+			actor.play_local_weapon_fire(fired_weapon) if actor == _local_duelist else actor.play_remote_weapon_fire(fired_weapon)
+			return
+	for actor in _all_replica_actors():
+		if actor.team == team:
+			actor.play_local_weapon_fire(fired_weapon) if actor == _local_duelist else actor.play_remote_weapon_fire(fired_weapon)
+			return
 
 func _play_shooter_fire_by_id(actor_id: String, fired_weapon: Duelist.Weapon) -> void:
-	if player != null and player.actor_id == actor_id:
-		player.play_local_weapon_fire(fired_weapon)
+	var actor := _actor(actor_id)
+	if actor == null:
 		return
-	if remote_duelist != null and remote_duelist.actor_id == actor_id:
-		remote_duelist.play_remote_weapon_fire(fired_weapon)
-		return
-	if bot != null and bot.actor_id == actor_id:
-		bot.play_remote_weapon_fire(fired_weapon)
+	actor.play_local_weapon_fire(fired_weapon) if actor == _local_duelist else actor.play_remote_weapon_fire(fired_weapon)
 
 func _build_projectile_presentation_pool() -> void:
 	if not _presentation_enabled or _projectile_presentation_pool != null:
@@ -1352,6 +1507,14 @@ func _read_capture_arguments() -> void:
 			_capture_overview = true
 		elif argument == "--rift-link":
 			_capture_rift_link = true
+		elif argument.begins_with("--offline-squad="):
+			var requested_size := argument.trim_prefix("--offline-squad=")
+			if requested_size.is_valid_int() and requested_size.to_int() in [3, 5]:
+				_offline_squad_size = requested_size.to_int()
+		elif argument.begins_with("--squad-preview="):
+			_squad_preview = argument.trim_prefix("--squad-preview=")
+			if _squad_preview == "three-versus-three":
+				_offline_squad_size = 3
 		elif argument.begins_with("--objective-preview="):
 			_objective_preview = argument.trim_prefix("--objective-preview=")
 		elif argument.begins_with("--weapon-preview="):
@@ -1360,24 +1523,25 @@ func _read_capture_arguments() -> void:
 			_ballistics_preview = argument.trim_prefix("--ballistics-preview=")
 		elif argument.begins_with("--touch-preview="):
 			_touch_preview = argument.trim_prefix("--touch-preview=")
-	if _capture_settings:
+	if _capture_settings and hud != null:
 		hud.open_settings()
-	if _capture_hud_layout:
+	if _capture_hud_layout and hud != null:
 		hud.open_hud_layout()
-	if _capture_character:
+	if _capture_character and hud != null and _local_duelist != null:
 		# This is a renderer-only inspection hook for silhouette review, not an alternate gameplay state.
-		bot.position = Vector3(-2.0, 0.1, 0.0)
-		bot.rotation.y = PI * 0.5
-		player.camera.cull_mask = 1
-		player.camera.global_position = Vector3(-8.0, 1.65, 0.0)
-		player.camera.look_at(bot.global_position + Vector3.UP * 0.9)
-		bot.set_physics_process(false)
-	if _capture_overview:
+		var preview_actor := _preview_actor()
+		preview_actor.position = Vector3(-2.0, 0.1, 0.0)
+		preview_actor.rotation.y = PI * 0.5
+		_local_duelist.camera.cull_mask = 1
+		_local_duelist.camera.global_position = Vector3(-8.0, 1.65, 0.0)
+		_local_duelist.camera.look_at(preview_actor.global_position + Vector3.UP * 0.9)
+		preview_actor.set_physics_process(false)
+	if _capture_overview and hud != null and _local_duelist != null:
 		# A renderer-only inspection hook that lets captures verify both spawn halves at once.
-		player.camera.cull_mask = 1
-		player.camera.global_position = Vector3(0.0, 31.0, 27.0)
-		player.camera.look_at(Vector3(0.0, 0.0, 0.0))
-	if _capture_rift_link:
+		_local_duelist.camera.cull_mask = 1
+		_local_duelist.camera.global_position = Vector3(0.0, 31.0, 27.0)
+		_local_duelist.camera.look_at(Vector3(0.0, 0.0, 0.0))
+	if _capture_rift_link and hud != null:
 		hud.set_connection_flow_active(true)
 		rift_link.open_menu()
 	if not _touch_preview.is_empty():
@@ -1391,9 +1555,10 @@ func _apply_objective_preview() -> void:
 	var preview := director.objective_state()
 	match _objective_preview:
 		"sun-carried":
-			preview = {"state": int(RiftSeed.State.CARRIED), "position": player.global_position + Vector3.UP * RiftSeed.CARRIER_HEIGHT, "carrier_id": "sun", "carrier_team": int(Duelist.Team.SUN)}
+			preview = {"state": int(RiftSeed.State.CARRIED), "position": _local_duelist.global_position + Vector3.UP * RiftSeed.CARRIER_HEIGHT, "carrier_id": _local_duelist.actor_id, "carrier_team": int(Duelist.Team.SUN)}
 		"void-carried":
-			preview = {"state": int(RiftSeed.State.CARRIED), "position": bot.global_position + Vector3.UP * RiftSeed.CARRIER_HEIGHT, "carrier_id": "void", "carrier_team": int(Duelist.Team.VOID)}
+			var void_actor := _actor_for_team(Duelist.Team.VOID)
+			preview = {"state": int(RiftSeed.State.CARRIED), "position": void_actor.global_position + Vector3.UP * RiftSeed.CARRIER_HEIGHT, "carrier_id": void_actor.actor_id, "carrier_team": int(Duelist.Team.VOID)}
 		"dropped":
 			preview = {"state": int(RiftSeed.State.DROPPED), "position": Vector3(0.0, RiftSeed.HOME_HEIGHT, 0.0), "carrier_id": "", "carrier_team": -1}
 		"sun-delivery", "void-delivery":
@@ -1407,7 +1572,7 @@ func _apply_objective_preview() -> void:
 		hud.show_objective_event("objective_delivered", {"scoring_team": scoring_team, "gate_position": gate_position})
 
 func _apply_weapon_preview() -> void:
-	if player == null or _weapon_preview.is_empty():
+	if _local_duelist == null or _weapon_preview.is_empty():
 		return
 	# Freeze only the capture fixture in a clean live HUD state; it does not alter match authority.
 	if director != null:
@@ -1417,24 +1582,25 @@ func _apply_weapon_preview() -> void:
 		hud.set_combat_input_enabled(true)
 	match _weapon_preview:
 		"carbine-hip":
-			player.set_weapon_presentation(Duelist.Weapon.PULSE)
-			player.set_combat_pose(false, 1.0)
+			_local_duelist.set_weapon_presentation(Duelist.Weapon.PULSE)
+			_local_duelist.set_combat_pose(false, 1.0)
 		"carbine-ads":
-			player.set_weapon_presentation(Duelist.Weapon.PULSE)
-			player.set_combat_pose(true, 1.0)
+			_local_duelist.set_weapon_presentation(Duelist.Weapon.PULSE)
+			_local_duelist.set_combat_pose(true, 1.0)
 		"carbine-world":
-			player.camera.cull_mask = 1
-			bot.position = Vector3(-2.5, 0.1, 0.0)
-			bot.rotation.y = PI * 0.5
-			player.camera.global_position = Vector3(-6.0, 1.7, 0.0)
-			player.camera.look_at(bot.global_position + Vector3.UP * 0.95)
-			bot.set_physics_process(false)
+			var preview_actor := _preview_actor()
+			_local_duelist.camera.cull_mask = 1
+			preview_actor.position = Vector3(-2.5, 0.1, 0.0)
+			preview_actor.rotation.y = PI * 0.5
+			_local_duelist.camera.global_position = Vector3(-6.0, 1.7, 0.0)
+			_local_duelist.camera.look_at(preview_actor.global_position + Vector3.UP * 0.95)
+			preview_actor.set_physics_process(false)
 		"scatter":
-			player.set_weapon_presentation(Duelist.Weapon.SCATTER)
-			player.set_combat_pose(false, 1.0)
+			_local_duelist.set_weapon_presentation(Duelist.Weapon.SCATTER)
+			_local_duelist.set_combat_pose(false, 1.0)
 
 func _apply_ballistics_preview() -> void:
-	if _ballistics_preview.is_empty() or not _presentation_enabled or player == null:
+	if _ballistics_preview.is_empty() or not _presentation_enabled or _local_duelist == null:
 		return
 	if director != null:
 		director.set_physics_process(false)
@@ -1444,17 +1610,17 @@ func _apply_ballistics_preview() -> void:
 	# These are capture-only presenter fixtures.  They never call RiftBallistics.fire,
 	# never change health, and intentionally hold a record still so a 60ms live path
 	# can be inspected in a screenshot without slowing the real projectile.
-	var origin := player.camera.global_position + -player.camera.global_transform.basis.z * 0.7
-	var direction := -player.camera.global_transform.basis.z
-	var fixture_direction := (direction + player.camera.global_transform.basis.x * 0.7).normalized()
+	var origin := _local_duelist.camera.global_position + -_local_duelist.camera.global_transform.basis.z * 0.7
+	var direction := -_local_duelist.camera.global_transform.basis.z
+	var fixture_direction := (direction + _local_duelist.camera.global_transform.basis.x * 0.7).normalized()
 	match _ballistics_preview:
 		"carbine-tracer":
-			_show_capture_tracer(origin + fixture_direction * 0.45, fixture_direction, int(player.team))
+			_show_capture_tracer(origin + fixture_direction * 0.45, fixture_direction, int(_local_duelist.team))
 		"carbine-impact":
-			_show_capture_impact(origin + direction * 0.35, -direction, player.team, false)
+			_show_capture_impact(origin + direction * 0.35, -direction, _local_duelist.team, false)
 		"carbine-burst":
 			for distance in [0.4, 0.9, 1.4]:
-				_show_capture_tracer(origin + fixture_direction * distance, fixture_direction, int(player.team))
+				_show_capture_tracer(origin + fixture_direction * distance, fixture_direction, int(_local_duelist.team))
 
 func _show_capture_tracer(position: Vector3, direction: Vector3, team_value: int) -> void:
 	if _tracer_pool.is_empty():

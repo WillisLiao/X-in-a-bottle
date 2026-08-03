@@ -283,4 +283,8 @@ func _sync_bot_context() -> void:
 	for duelist in _all_duelists():
 		if duelist is BotDuelist:
 			var enemy_team := Duelist.Team.SUN if duelist.team == Duelist.Team.VOID else Duelist.Team.VOID
-			duelist.set_linebreak_context(state, _gate_positions.get(duelist.team, Vector3.ZERO), _gate_positions.get(enemy_team, Vector3.ZERO))
+			var friendlies: Array[Duelist] = []
+			var enemies: Array[Duelist] = []
+			for candidate in _all_duelists():
+				(friendlies if candidate.team == duelist.team else enemies).append(candidate)
+			duelist.set_squad_context(friendlies, enemies, state, _gate_positions.get(duelist.team, Vector3.ZERO), _gate_positions.get(enemy_team, Vector3.ZERO))

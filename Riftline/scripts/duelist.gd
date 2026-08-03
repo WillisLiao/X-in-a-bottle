@@ -6,7 +6,7 @@ const BALLISTICS := preload("res://scripts/rift_ballistics.gd")
 
 signal defeated(victim: Duelist, killer: Duelist)
 signal fire_requested(shooter: Duelist, weapon: Weapon, origin: Vector3, direction: Vector3)
-signal scatter_shot(origin: Vector3, end: Vector3, team: Team, weapon: Weapon, hit_target: bool)
+signal scatter_shot(shooter_id: String, origin: Vector3, end: Vector3, team: Team, weapon: Weapon, hit_target: bool)
 signal damaged(amount: float, remaining: float)
 
 enum Team { SUN, VOID }
@@ -49,6 +49,7 @@ var _muzzle_flare: MeshInstance3D
 var _rail_slots: Array[MeshInstance3D] = []
 var _signal_spine: MeshInstance3D
 var _survey_frame: MeshInstance3D
+var _friendly_pennant: MeshInstance3D
 var _left_leg: Node3D
 var _right_leg: Node3D
 var _left_arm: Node3D
@@ -105,6 +106,18 @@ func build(assigned_team: Team, local_camera: bool, render_visuals: bool = true,
 
 func set_actor_id(next_actor_id: String) -> void:
 	actor_id = next_actor_id
+
+func set_friendly_presenter(friendly: bool) -> void:
+	if not _render_visuals or _local_camera or not friendly or _friendly_pennant != null:
+		return
+	_friendly_pennant = MeshInstance3D.new()
+	var pennant_mesh := BoxMesh.new()
+	pennant_mesh.size = Vector3(0.22, 0.12, 0.035)
+	_friendly_pennant.mesh = pennant_mesh
+	_friendly_pennant.position = Vector3(-0.4, 1.42, 0.05)
+	_friendly_pennant.material_override = _material(_team_glow(), 0.42)
+	_friendly_pennant.layers = 1
+	add_child(_friendly_pennant)
 
 func set_carrying_seed(carrying: bool) -> void:
 	carrying_seed = carrying and not eliminated
@@ -502,10 +515,10 @@ func _fire_scatter_ray(origin: Vector3, direction: Vector3, damage: float, range
 	if not hit.is_empty():
 		end = hit.position
 		var collider: Object = hit.collider
-		if collider is Duelist:
+		if collider is Duelist and collider != self and collider.team != team:
 			hit_target = true
 			collider.take_damage(damage, self)
-	scatter_shot.emit(origin, end, team, weapon, hit_target)
+	scatter_shot.emit(actor_id, origin, end, team, weapon, hit_target)
 
 func _team_color() -> Color:
 	return Color("ef6b3f") if team == Team.SUN else Color("4ba9ff")
