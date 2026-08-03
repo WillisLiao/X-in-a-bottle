@@ -96,7 +96,7 @@ func _draw() -> void:
 	_button_rects.clear()
 	draw_rect(Rect2(Vector2.ZERO, size), INK, true)
 	draw_line(Vector2(48.0, 42.0), Vector2(size.x - 48.0, 42.0), Color(VOID, 0.24), 1.0)
-	draw_string(_font, Vector2(52.0, 31.0), "SOGS / FIELD DRILLS", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13, MUTED)
+	draw_string(_font, Vector2(52.0, 31.0), "WHOYOUPEEKIN / FIELD DRILLS", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13, MUTED)
 	if _board:
 		_draw_board()
 	else:

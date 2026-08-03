@@ -4,7 +4,7 @@ config_version=5
 
 [application]
 
-config/name="SOGS"
+config/name="WhoYouPeekin"
 run/main_scene="res://main.tscn"
 config/icon="res://icons/icon_1024.png"
 config/features=PackedStringArray("4.7", "Mobile")
