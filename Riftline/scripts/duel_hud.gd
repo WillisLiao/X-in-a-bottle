@@ -247,6 +247,11 @@ func show_objective_event(event_type: String, _state: Dictionary) -> void:
 	_objective_message_remaining = 1.4
 	queue_redraw()
 
+func show_practice_cue(message: String) -> void:
+	_objective_message = message
+	_objective_message_remaining = 1.8
+	queue_redraw()
+
 func set_stance(stance: Duelist.Stance) -> void:
 	_stance = stance
 

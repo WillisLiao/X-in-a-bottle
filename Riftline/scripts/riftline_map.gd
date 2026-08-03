@@ -92,6 +92,38 @@ func is_spawn_clear(point: Vector3) -> bool:
 func solid_count() -> int:
 	return _solids.size()
 
+func tactical_facts() -> Dictionary:
+	var sun_gate: Vector3 = _gates.get(Duelist.Team.SUN, Vector3.ZERO)
+	var void_gate: Vector3 = _gates.get(Duelist.Team.VOID, Vector3.ZERO)
+	var sun_home := sun_gate.lerp(_seed_position, 0.38)
+	var void_home := void_gate.lerp(_seed_position, 0.38)
+	if _map_id == Id.DUEL_YARD:
+		return {
+			"seed": _seed_position,
+			"anchors": {
+				"neutral_seed": _seed_position,
+				"center_return": {"sun": sun_home, "void": void_home},
+				"gate_escort": {"sun": void_gate, "void": sun_gate},
+				"home_approach": {"sun": sun_home, "void": void_home},
+			},
+			"lane_posts": {"center": [Vector3(-7.0, 0.1, 0.0), Vector3(7.0, 0.1, 0.0)]},
+		}
+	return {
+		"seed": _seed_position,
+		"anchors": {
+			"neutral_seed": _seed_position,
+			"center_return": {"sun": Vector3(-26.0, 0.1, 0.0), "void": Vector3(26.0, 0.1, 0.0)},
+			"gate_escort": {"sun": Vector3(40.0, 0.1, 0.0), "void": Vector3(-40.0, 0.1, 0.0)},
+			"home_approach": {"sun": Vector3(-40.0, 0.1, 0.0), "void": Vector3(40.0, 0.1, 0.0)},
+			"opposing_gate": {"sun": void_gate, "void": sun_gate},
+		},
+		"lane_posts": {
+			"windwalk": [Vector3(-34.0, 0.1, 25.0), Vector3(0.0, 0.1, 27.0), Vector3(34.0, 0.1, 25.0)],
+			"relay_basin": [Vector3(-25.0, 0.1, 0.0), Vector3(0.0, 0.1, 0.0), Vector3(25.0, 0.1, 0.0)],
+			"service_run": [Vector3(-34.0, 0.1, -25.0), Vector3(0.0, 0.1, -27.0), Vector3(34.0, 0.1, -25.0)],
+		},
+	}
+
 func _clear_layout() -> void:
 	for child in get_children():
 		child.queue_free()

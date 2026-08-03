@@ -3,6 +3,7 @@ extends Node3D
 
 const PULP_LIT := preload("res://shaders/pulp_lit.gdshader")
 const SNAPSHOT_BUFFER := preload("res://scripts/riftline_snapshot_buffer.gd")
+const PRACTICE_PANEL := preload("res://scripts/riftline_practice_panel.gd")
 const OPENING_HOLD_SECONDS := 2.5
 
 var ballistics: RiftBallistics
@@ -12,6 +13,7 @@ var director: LinebreakMatch
 var network: RiftlineNetwork
 var arena_map: RiftlineMap
 var rift_link: RiftLinkPanel
+var practice_panel: Control
 var _mouse_captured := false
 var _lan_active := false
 var _lan_host := false
@@ -51,6 +53,10 @@ var _capture_overview := false
 var _capture_rift_link := false
 var _offline_squad_size := 0
 var _squad_preview := ""
+var _tactics_preview := ""
+var _practice_preview := ""
+var _practice_drill := "solo"
+var _practice_panel_active := false
 var _capture_fixture_only := false
 var _arena_preview := ""
 var _feedback_preview := ""
@@ -96,32 +102,42 @@ func _ready() -> void:
 		_enter_lan_runtime(true, false)
 	else:
 		_build_environment()
-		_build_arena()
-		_capture_fixture_only = not _squad_preview.is_empty() or not _arena_preview.is_empty() or not _feedback_preview.is_empty() or not _rift_link_preview.is_empty()
-		_build_match()
+		_capture_fixture_only = not _squad_preview.is_empty() or not _arena_preview.is_empty() or not _feedback_preview.is_empty() or not _rift_link_preview.is_empty() or not _practice_preview.is_empty()
+		var show_practice := not command_line_lan and _should_show_practice_panel()
 		_build_hud()
 		_build_first_match_coach()
 		_build_rift_link()
-		_read_capture_arguments()
-		if command_line_lan:
-			_enter_lan_runtime(network.multiplayer.is_server(), false)
-		else:
-			if _squad_preview.is_empty() and _arena_preview.is_empty() and _feedback_preview.is_empty():
-				coach.begin_offline_match()
+		if show_practice:
+			_practice_panel_active = true
+			_build_practice_panel()
+			if _practice_preview.is_empty():
+				practice_panel.show_entry(_load_practice_drill())
 			else:
-				coach.hide()
-				if not _touch_preview.is_empty():
-					hud.set_touch_preview(_touch_preview)
+				practice_panel.apply_preview(_practice_preview)
+		else:
+			_build_arena()
+			_build_match()
+			if command_line_lan:
+				_enter_lan_runtime(network.multiplayer.is_server(), false)
+			else:
+				if _squad_preview.is_empty() and _arena_preview.is_empty() and _feedback_preview.is_empty():
+					coach.begin_offline_match()
+				else:
+					coach.hide()
+					if not _touch_preview.is_empty():
+						hud.set_touch_preview(_touch_preview)
 				if not _arena_preview.is_empty():
 					_apply_arena_preview()
-			if not _capture_fixture_only:
-				director.begin()
-		if not _lan_active:
-			if not _objective_preview.is_empty():
-				_apply_objective_preview()
-		_apply_weapon_preview()
-		_apply_ballistics_preview()
-		_apply_feedback_preview()
+				if not _tactics_preview.is_empty():
+					_apply_tactics_preview()
+				if not _capture_fixture_only:
+					director.begin()
+			if not _lan_active:
+				if not _objective_preview.is_empty():
+					_apply_objective_preview()
+			_apply_weapon_preview()
+			_apply_ballistics_preview()
+			_apply_feedback_preview()
 	if not _capture_path.is_empty():
 		_capture_after_delay()
 
@@ -244,6 +260,8 @@ func _build_match() -> void:
 	add_child(director)
 	director.configure(arena_map.seed_position(), arena_map.gate_positions(), _presentation_enabled)
 	director.set_route_finder(Callable(arena_map, "route_toward"))
+	if _offline_squad_size > 1:
+		director.configure_tactics(arena_map.tactical_facts(), true)
 	_add_spawn_points()
 	var offline_roster := RiftlineRoster.new()
 	offline_roster.configure(maxi(1, _offline_squad_size), false, _offline_squad_size > 1)
@@ -268,6 +286,7 @@ func _build_match() -> void:
 	director.match_finished.connect(_on_match_finished)
 	director.objective_changed.connect(_on_objective_changed)
 	director.objective_event.connect(_on_objective_event)
+	_build_combat_feedback()
 
 func _add_spawn_points() -> void:
 	var points := arena_map.spawn_points(Duelist.Team.SUN)
@@ -446,7 +465,8 @@ func _build_combat_feedback() -> void:
 		add_child(combat_feedback)
 		combat_feedback.damage_feedback.connect(_on_feedback_damage)
 		combat_feedback.hit_confirm_feedback.connect(_on_feedback_hit_confirm)
-	combat_feedback.objective_feedback.connect(_on_feedback_objective)
+	if not combat_feedback.objective_feedback.is_connected(_on_feedback_objective):
+		combat_feedback.objective_feedback.connect(_on_feedback_objective)
 	var listener := _local_duelist.camera if _local_duelist != null else null
 	combat_feedback.configure(true, _local_actor_id, listener)
 	if hud != null:
@@ -487,6 +507,70 @@ func _build_rift_link() -> void:
 	rift_link.retry_requested.connect(_on_join_retry_requested)
 	rift_link.ready_requested.connect(_on_lobby_ready_requested)
 	rift_link.rematch_requested.connect(_on_lobby_rematch_requested)
+
+func _build_practice_panel() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 20
+	add_child(layer)
+	practice_panel = PRACTICE_PANEL.new()
+	layer.add_child(practice_panel)
+	practice_panel.drill_requested.connect(_on_practice_drill_requested)
+	practice_panel.local_rift_requested.connect(_on_practice_local_rift_requested)
+
+func _should_show_practice_panel() -> bool:
+	if not _practice_preview.is_empty():
+		return true
+	if not _capture_path.is_empty() or _offline_squad_size > 1:
+		return false
+	return _squad_preview.is_empty() and _arena_preview.is_empty() and _feedback_preview.is_empty() and _rift_link_preview.is_empty() and _objective_preview.is_empty() and _weapon_preview.is_empty() and _ballistics_preview.is_empty() and _touch_preview.is_empty()
+
+func _load_practice_drill() -> String:
+	var config := ConfigFile.new()
+	if config.load("user://riftline_practice.cfg") == OK:
+		var stored := str(config.get_value("practice", "last_drill", "solo"))
+		if stored in ["solo", "wing", "full"]:
+			return stored
+	return "solo"
+
+func _save_practice_drill(drill: String) -> void:
+	var config := ConfigFile.new()
+	config.set_value("practice", "version", 1)
+	config.set_value("practice", "last_drill", drill)
+	config.save("user://riftline_practice.cfg")
+
+func _on_practice_drill_requested(drill: String) -> void:
+	_start_practice_drill(drill)
+
+func _on_practice_local_rift_requested() -> void:
+	if hud != null:
+		hud.set_connection_flow_active(true)
+	if rift_link != null:
+		rift_link.open_menu()
+
+func _start_practice_drill(drill: String) -> void:
+	if drill not in ["solo", "wing", "full"]:
+		drill = "solo"
+	_practice_drill = drill
+	_offline_squad_size = {"solo": 1, "wing": 3, "full": 5}.get(drill, 1)
+	_save_practice_drill(drill)
+	_practice_panel_active = false
+	if practice_panel != null:
+		practice_panel.visible = false
+	_build_arena()
+	_build_match()
+	if coach != null:
+		if drill == "solo" and _practice_preview.is_empty():
+			coach.begin_offline_match()
+		else:
+			coach.hide()
+	if director != null:
+		director.begin()
+	if hud != null:
+		hud.set_connection_flow_active(false)
+		if drill == "wing":
+			hud.show_practice_cue("TAKE THE RELAY")
+		elif drill == "full":
+			hud.show_practice_cue("SCREEN THE CARRIER")
 
 func _on_player_damaged(_amount: float, remaining: float, attacker_id: String, source_position: Vector3, enemy_team: int) -> void:
 	if hud != null:
@@ -1691,6 +1775,12 @@ func _read_capture_arguments() -> void:
 			_squad_preview = argument.trim_prefix("--squad-preview=")
 			if _squad_preview == "three-versus-three":
 				_offline_squad_size = 3
+		elif argument.begins_with("--practice-preview="):
+			_practice_preview = argument.trim_prefix("--practice-preview=")
+		elif argument.begins_with("--tactics-preview="):
+			_tactics_preview = argument.trim_prefix("--tactics-preview=")
+			_offline_squad_size = 5
+			_squad_preview = "tactics"
 		elif argument.begins_with("--arena-preview="):
 			_arena_preview = argument.trim_prefix("--arena-preview=")
 		elif argument.begins_with("--feedback-preview="):
@@ -1779,6 +1869,52 @@ func _apply_arena_preview() -> void:
 	_local_duelist.camera.global_position = camera_position
 	_local_duelist.camera.look_at(look_target)
 	for actor in _all_authority_actors():
+		actor.set_physics_process(false)
+
+func _apply_tactics_preview() -> void:
+	if _tactics_preview.is_empty() or _local_duelist == null or arena_map == null:
+		return
+	if director != null:
+		director.set_physics_process(false)
+	if hud != null:
+		hud.set_match_phase(LinebreakMatch.Phase.LIVE)
+		hud.set_combat_input_enabled(false)
+	_local_duelist.camera.cull_mask = 1
+	_local_duelist.camera.global_position = Vector3(0.0, 29.0, 41.0)
+	_local_duelist.camera.look_at(Vector3(0.0, 0.0, 0.0))
+	var sun_points: Array[Vector3] = [Vector3(-34.0, 0.1, 25.0), Vector3(0.0, 0.1, 27.0), Vector3(34.0, 0.1, -25.0), Vector3(-26.0, 0.1, 0.0)]
+	var void_points: Array[Vector3] = [Vector3(34.0, 0.1, -25.0), Vector3(0.0, 0.1, -27.0), Vector3(-34.0, 0.1, 25.0), Vector3(26.0, 0.1, 0.0), Vector3(42.0, 0.1, 0.0)]
+	match _tactics_preview:
+		"seed-race":
+			sun_points = [Vector3(-34.0, 0.1, 25.0), Vector3(-25.0, 0.1, 0.0), Vector3(-34.0, 0.1, -25.0), Vector3(-20.0, 0.1, 25.0)]
+		"friendly-escort":
+			sun_points = [Vector3(13.0, 0.1, 2.8), Vector3(18.0, 0.1, -8.0), Vector3(0.0, 0.1, 23.0), Vector3(-22.0, 0.1, 0.0)]
+			_local_duelist.position = Vector3(7.0, 0.1, 0.0)
+			_local_duelist.set_carrying_seed(true)
+			var escort_state := {"state": int(RiftSeed.State.CARRIED), "position": _local_duelist.global_position + Vector3.UP * RiftSeed.CARRIER_HEIGHT, "carrier_id": _local_duelist.actor_id, "carrier_team": int(Duelist.Team.SUN)}
+			director.seed.apply_presentation_state(escort_state, Callable(director, "_lookup_duelist"))
+			hud.set_objective_state(escort_state)
+		"enemy-sighted":
+			void_points[0] = Vector3(20.0, 0.1, 25.0)
+		"enemy-unseen":
+			void_points[0] = Vector3(20.0, 0.1, -25.0)
+		"dropped-seed":
+			var dropped_state := {"state": int(RiftSeed.State.DROPPED), "position": Vector3.ZERO + Vector3.UP * RiftSeed.HOME_HEIGHT, "carrier_id": "", "carrier_team": -1}
+			director.seed.apply_presentation_state(dropped_state, Callable(director, "_lookup_duelist"))
+			hud.set_objective_state(dropped_state)
+		"lane-spread", "full-crew":
+			pass
+	var sun_index := 0
+	var void_index := 0
+	for actor in _all_authority_actors():
+		if actor == _local_duelist:
+			continue
+		if actor.team == Duelist.Team.SUN:
+			actor.position = sun_points[mini(sun_index, sun_points.size() - 1)]
+			sun_index += 1
+		else:
+			actor.position = void_points[mini(void_index, void_points.size() - 1)]
+			void_index += 1
 		actor.set_physics_process(false)
 
 func _apply_objective_preview() -> void:

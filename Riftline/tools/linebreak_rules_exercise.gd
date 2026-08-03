@@ -100,10 +100,24 @@ func _initialize() -> void:
 		Duelist.Team.SUN: Vector3(-18.5, 0.05, 6.0),
 		Duelist.Team.VOID: Vector3(18.5, 0.05, -6.0),
 	}, false)
+	squad_rules.configure_tactics({
+		"seed": Vector3.ZERO,
+		"anchors": {
+			"neutral_seed": Vector3.ZERO,
+			"center_return": {"sun": Vector3(-5.0, 0.1, 0.0), "void": Vector3(5.0, 0.1, 0.0)},
+			"gate_escort": {"sun": Vector3(8.0, 0.1, 0.0), "void": Vector3(-8.0, 0.1, 0.0)},
+		},
+		"lane_posts": {"windwalk": [Vector3(-4.0, 0.1, 2.0)], "relay_basin": [Vector3(0.0, 0.1, 0.0)], "service_run": [Vector3(4.0, 0.1, -2.0)]},
+	}, true)
 	for index in 3:
 		squad_rules.add_spawn(Duelist.Team.SUN, Vector3(-15.0 + index, 0.1, 6.0))
 		squad_rules.add_spawn(Duelist.Team.VOID, Vector3(16.0 - index, 0.1, -6.0))
-		var squad_sun := _make_duelist(root, Duelist.Team.SUN, "sun_%d" % index, Vector3(-4.0 + index, 0.1, 0.0))
+		var squad_sun: Duelist = BotDuelist.new() if index == 0 else Duelist.new()
+		squad_sun.build(Duelist.Team.SUN, false, false, false)
+		squad_sun.set_actor_id("sun_%d" % index)
+		squad_sun.position = Vector3(-4.0 + index, 0.1, 0.0)
+		root.add_child(squad_sun)
+		squad_sun.set_match_active(true)
 		var squad_void := _make_duelist(root, Duelist.Team.VOID, "void_%d" % index, Vector3(4.0 - index, 0.1, 0.0))
 		squad_rules.register_duelist(squad_sun, squad_sun.actor_id)
 		squad_rules.register_duelist(squad_void, squad_void.actor_id)
@@ -121,6 +135,7 @@ func _initialize() -> void:
 	squad_rules.seed.tick_authority(0.016, squad_rules._all_duelists())
 	assert(int(squad_rules.scores[Duelist.Team.SUN]) == 1)
 	assert(delivery_events[0] == 1)
+	assert(not (squad_rules._lookup_duelist("sun_0") as BotDuelist)._tactical_order.is_empty())
 
 	print("Riftline Linebreak rules exercise: PASS")
 	quit()

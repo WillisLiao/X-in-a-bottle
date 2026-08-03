@@ -29,6 +29,19 @@ func _initialize() -> void:
 			assert(_has_authored_route(concourse, spawns[index], goal))
 			var enemy_team := Duelist.Team.VOID if team == Duelist.Team.SUN else Duelist.Team.SUN
 			assert(_has_authored_route(concourse, goal, concourse.gate_positions()[enemy_team]))
+	var facts := concourse.tactical_facts()
+	assert(facts.has("anchors"))
+	assert(facts.lane_posts.keys().size() == 3)
+	for anchor in facts.anchors.values():
+		if anchor is Vector3:
+			assert(concourse.is_spawn_clear(anchor))
+		elif anchor is Dictionary:
+			for point in anchor.values():
+				assert(concourse.is_spawn_clear(point))
+	for posts in facts.lane_posts.values():
+		for post in posts:
+			assert(concourse.is_spawn_clear(post))
+			assert(_has_authored_route(concourse, post, concourse.seed_position()))
 
 	var rendered := RiftlineMap.new()
 	root.add_child(rendered)

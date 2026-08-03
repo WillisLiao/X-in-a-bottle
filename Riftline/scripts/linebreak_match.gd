@@ -33,6 +33,11 @@ var _started := false
 var _winner: Duelist.Team = Duelist.Team.SUN
 var _last_replica_tick := -1
 var _route_finder := Callable()
+var _tactical_facts: Dictionary = {}
+var _tactical_planners: Dictionary = {}
+var _tactical_elapsed := 0.0
+var _tactical_refresh := true
+var _tactical_updates := 0
 
 func configure(center: Vector3, gate_positions: Dictionary, presentation_enabled: bool) -> void:
 	_center = center
@@ -55,6 +60,17 @@ func set_route_finder(route_finder: Callable) -> void:
 	_route_finder = route_finder
 	_sync_bot_context()
 
+func configure_tactics(map_facts: Dictionary, enabled: bool = true) -> void:
+	_tactical_facts = map_facts.duplicate(true) if enabled else {}
+	_tactical_planners.clear()
+	if enabled:
+		for team in [Duelist.Team.SUN, Duelist.Team.VOID]:
+			var planner := RiftlineSquadTactics.new()
+			planner.configure(_tactical_facts)
+			_tactical_planners[int(team)] = planner
+	_tactical_elapsed = 0.0
+	_tactical_refresh = true
+
 func register_duelist(duelist: Duelist, actor_id: String) -> void:
 	if not is_instance_valid(duelist) or actor_id.is_empty():
 		return
@@ -66,6 +82,7 @@ func register_duelist(duelist: Duelist, actor_id: String) -> void:
 	rosters[duelist.team].append(duelist)
 	_duelists_by_id[actor_id] = duelist
 	_respawn_generation[actor_id] = 0
+	_tactical_refresh = true
 	duelist.defeated.connect(_on_defeated)
 
 func unregister_duelist(actor_id: String) -> void:
@@ -79,6 +96,7 @@ func unregister_duelist(actor_id: String) -> void:
 		rosters[duelist.team].erase(duelist)
 	_duelists_by_id.erase(actor_id)
 	_respawn_generation.erase(actor_id)
+	_tactical_refresh = true
 	if rosters[Duelist.Team.SUN].is_empty() or rosters[Duelist.Team.VOID].is_empty():
 		_started = false
 		_cancel_respawns()
@@ -97,6 +115,7 @@ func take_rematch() -> bool:
 	if phase != Phase.FINISHED:
 		return false
 	_round_generation += 1
+	_clear_tactical_memory()
 	_cancel_respawns()
 	scores[Duelist.Team.SUN] = 0
 	scores[Duelist.Team.VOID] = 0
@@ -150,11 +169,13 @@ func _physics_process(delta: float) -> void:
 			_start_opening()
 	elif phase == Phase.LIVE:
 		seed.tick_authority(delta, _all_duelists())
+		_tactical_elapsed += delta
 		_sync_bot_context()
 		seed.apply_presentation_state(seed.authoritative_state(), Callable(self, "_lookup_duelist"))
 
 func _start_opening() -> void:
 	_round_generation += 1
+	_clear_tactical_memory()
 	_opening_remaining = OPENING_HOLD_SECONDS
 	_intermission_remaining = 0.0
 	_set_phase(Phase.OPENING)
@@ -193,20 +214,24 @@ func _respawn_duelist(victim: Duelist) -> void:
 	if index < 0 or points.is_empty():
 		return
 	victim.respawn_at(points[posmod(index, points.size())])
+	_tactical_refresh = true
 	respawn_started.emit(victim)
 
 func _on_seed_claimed(carrier: Duelist) -> void:
+	_tactical_refresh = true
 	carrier.set_carrying_seed(true)
 	objective_changed.emit(seed.authoritative_state())
 	objective_event.emit("objective_claimed", seed.authoritative_state())
 	_sync_bot_context()
 
 func _on_seed_dropped(position: Vector3) -> void:
+	_tactical_refresh = true
 	objective_changed.emit(seed.authoritative_state())
 	objective_event.emit("objective_dropped", seed.authoritative_state())
 	_sync_bot_context()
 
 func _on_seed_returned() -> void:
+	_tactical_refresh = true
 	objective_changed.emit(seed.authoritative_state())
 	objective_event.emit("objective_returned", seed.authoritative_state())
 	_sync_bot_context()
@@ -214,6 +239,7 @@ func _on_seed_returned() -> void:
 func _on_seed_delivered(carrier: Duelist, scoring_team: Duelist.Team, gate_position: Vector3) -> void:
 	if phase != Phase.LIVE or carrier == null or not carrier.is_carrying_seed():
 		return
+	_tactical_refresh = true
 	var event_state := {
 		"state": int(RiftSeed.State.CARRIED),
 		"position": gate_position + Vector3.UP * RiftSeed.HOME_HEIGHT,
@@ -238,6 +264,13 @@ func _on_seed_delivered(carrier: Duelist, scoring_team: Duelist.Team, gate_posit
 	seed.reset_to_center()
 	objective_changed.emit(seed.authoritative_state())
 	_intermission_remaining = INTERMISSION_SECONDS
+
+func _clear_tactical_memory() -> void:
+	_tactical_elapsed = 0.0
+	_tactical_refresh = true
+	for planner in _tactical_planners.values():
+		if planner is RiftlineSquadTactics:
+			planner.clear()
 
 func _set_phase(next_phase: Phase) -> void:
 	phase = next_phase
@@ -286,11 +319,84 @@ func _sync_bot_context() -> void:
 		return
 	var state := seed.authoritative_state()
 	for duelist in _all_duelists():
-		if duelist is BotDuelist:
-			var enemy_team := Duelist.Team.SUN if duelist.team == Duelist.Team.VOID else Duelist.Team.VOID
-			var friendlies: Array[Duelist] = []
-			var enemies: Array[Duelist] = []
-			for candidate in _all_duelists():
-				(friendlies if candidate.team == duelist.team else enemies).append(candidate)
-				duelist.set_squad_context(friendlies, enemies, state, _gate_positions.get(duelist.team, Vector3.ZERO), _gate_positions.get(enemy_team, Vector3.ZERO))
-				duelist.set_route_finder(_route_finder)
+		if duelist is not BotDuelist:
+			continue
+		var enemy_team := Duelist.Team.SUN if duelist.team == Duelist.Team.VOID else Duelist.Team.VOID
+		var friendlies: Array[Duelist] = []
+		var enemies: Array[Duelist] = []
+		for candidate in _all_duelists():
+			(friendlies if candidate.team == duelist.team else enemies).append(candidate)
+		var public_state := _tactical_state_for_team(state, duelist.team)
+		duelist.set_squad_context(friendlies, enemies, public_state, _gate_positions.get(duelist.team, Vector3.ZERO), _gate_positions.get(enemy_team, Vector3.ZERO))
+		duelist.set_route_finder(_route_finder)
+
+	if _tactical_planners.is_empty():
+		return
+	if not _tactical_refresh and _tactical_elapsed < 0.25:
+		return
+	_tactical_elapsed = 0.0
+	_tactical_refresh = false
+	_tactical_updates += 1
+	for team in [Duelist.Team.SUN, Duelist.Team.VOID]:
+		var planner: RiftlineSquadTactics = _tactical_planners.get(int(team), null)
+		if planner == null:
+			continue
+		var members: Array[Dictionary] = []
+		for candidate in rosters[team]:
+			if not is_instance_valid(candidate):
+				continue
+			members.append({
+				"actor_id": candidate.actor_id,
+				"human": not candidate is BotDuelist,
+				"eliminated": candidate.eliminated,
+				"position": candidate.global_position,
+				"carrying": candidate.carrying_seed,
+			})
+		var sightings: Array[Dictionary] = _carrier_sightings(team, state)
+		var orders := planner.update(team, members, _tactical_state_for_team(state, team), sightings, Time.get_ticks_msec() / 1000.0)
+		for candidate in rosters[team]:
+			if candidate is not BotDuelist:
+				continue
+			var order: Variant = orders.get(candidate.actor_id, {})
+			if order is Dictionary and not order.is_empty() and not candidate.eliminated:
+				candidate.set_tactical_order(order)
+			else:
+				candidate.clear_tactical_order()
+
+func _tactical_state_for_team(state: Dictionary, team: Duelist.Team) -> Dictionary:
+	var visible := state.duplicate(true)
+	var carrier_team := int(state.get("carrier_team", -1))
+	if carrier_team >= 0 and carrier_team != int(team):
+		visible["position"] = Vector3.ZERO
+	return visible
+
+func _carrier_sightings(team: Duelist.Team, state: Dictionary) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	var carrier_id := str(state.get("carrier_id", ""))
+	if carrier_id.is_empty():
+		return result
+	var carrier := _lookup_duelist(carrier_id)
+	if carrier == null or carrier.team == team:
+		return result
+	for observer in rosters[team]:
+		if observer is BotDuelist and not observer.eliminated and observer.has_direct_line_of_sight_to(carrier):
+			result.append({
+				"carrier_id": carrier_id,
+				"position": carrier.global_position,
+				"lane": _nearest_tactical_lane(carrier.global_position),
+				"expires_at": Time.get_ticks_msec() / 1000.0 + 0.8,
+				"direct_los": true,
+			})
+			break
+	return result
+
+func _nearest_tactical_lane(position: Vector3) -> String:
+	var best := "center"
+	var best_distance := INF
+	for lane in _tactical_facts.get("lane_posts", {}).keys():
+		for post in _tactical_facts.lane_posts[lane]:
+			var distance := position.distance_squared_to(post)
+			if distance < best_distance:
+				best_distance = distance
+				best = str(lane)
+	return best
