@@ -59,6 +59,8 @@ var _aiming := false
 var _recoil_remaining := 0.0
 var _fire_flash_remaining := 0.0
 var _damage_flash_remaining := 0.0
+var _flinch_remaining := 0.0
+var _carrier_signal_root: Node3D
 var _local_camera := false
 var _render_visuals := true
 var _authoritative_collision := true
@@ -135,14 +137,17 @@ func _process(delta: float) -> void:
 	_recoil_remaining = maxf(0.0, _recoil_remaining - delta)
 	_fire_flash_remaining = maxf(0.0, _fire_flash_remaining - delta)
 	_damage_flash_remaining = maxf(0.0, _damage_flash_remaining - delta)
+	_flinch_remaining = maxf(0.0, _flinch_remaining - delta)
 	var moving := Vector2(velocity.x, velocity.z).length() > 0.35
 	var gait := sin(_pose_distance * 1.35) if moving else 0.0
 	var gait_lag := cos(_pose_distance * 1.35) if moving else 0.0
 	var airborne := clampf(velocity.y / JUMP_SPEED, -1.0, 1.0)
 	var firing_pose := clampf(_recoil_remaining / 0.22, 0.0, 1.0)
+	var flinch_pose := clampf(_flinch_remaining / 0.18, 0.0, 1.0)
 	if _torso != null:
 		_torso.position.y = 1.03 + absf(gait) * (0.018 if moving else 0.0)
-		_torso.rotation.z = gait_lag * (0.035 if moving else 0.0)
+		_torso.rotation.z = gait_lag * (0.035 if moving else 0.0) + flinch_pose * 0.12
+		_torso.rotation.x = flinch_pose * -0.1
 	if _band != null:
 		_band.position.y = 1.18
 		_band.scale = Vector3.ONE * (1.0 + (_damage_flash_remaining / 0.16) * 0.08)
@@ -162,6 +167,9 @@ func _process(delta: float) -> void:
 		var hip := Vector3(0.42, -0.42, -1.22)
 		var ads := Vector3(0.0, -0.06, -0.96)
 		var target := ads if _aiming and _local_camera else hip
+		if reload_remaining > 0.0 and _local_camera:
+			var reload_phase := clampf(1.0 - reload_remaining / M4_RELOAD_SECONDS, 0.0, 1.0)
+			target += Vector3(-0.04, -0.12 + sin(reload_phase * PI) * 0.06, 0.08)
 		_weapon_root.position = _weapon_root.position.lerp(target, clampf(delta * 14.0, 0.0, 1.0))
 		_weapon_root.rotation.x = lerpf(_weapon_root.rotation.x, -_recoil_remaining * (0.75 if weapon == Weapon.PULSE else 1.15), clampf(delta * 20.0, 0.0, 1.0))
 	if _muzzle_flare != null:
@@ -172,6 +180,14 @@ func _process(delta: float) -> void:
 		for index in _rail_slots.size():
 			_set_material_glow(_rail_slots[index], 0.45 if index >= sequence else 1.2)
 	_set_material_glow(_band, 1.35 if _damage_flash_remaining > 0.0 else 0.6)
+	if _body_visual_root != null:
+		var powered_down := eliminated
+		_body_visual_root.rotation.z = lerpf(_body_visual_root.rotation.z, -0.92 if powered_down else 0.0, clampf(delta * (7.0 if powered_down else 9.0), 0.0, 1.0))
+		_body_visual_root.position.y = lerpf(_body_visual_root.position.y, -0.24 if powered_down else 0.0, clampf(delta * (7.0 if powered_down else 9.0), 0.0, 1.0))
+	if _carrier_signal_root != null:
+		_carrier_signal_root.visible = is_carrying_seed()
+		_carrier_signal_root.rotation.y += delta * 1.8
+		_carrier_signal_root.scale = Vector3.ONE * (1.0 + sin(Time.get_ticks_msec() * 0.006) * 0.06)
 
 func set_weapon_presentation(next_weapon: Weapon) -> void:
 	var clamped := clampi(int(next_weapon), int(Weapon.PULSE), int(Weapon.SCATTER)) as Weapon
@@ -204,6 +220,7 @@ func apply_damage_presentation(_amount: float, _remaining: float) -> void:
 	if not _render_visuals:
 		return
 	_damage_flash_remaining = 0.16
+	_flinch_remaining = 0.18
 	_set_material_glow(_band, 1.35)
 
 func apply_look(delta: Vector2) -> void:
@@ -317,7 +334,7 @@ func apply_presentation_state(state: Dictionary) -> void:
 		set_weapon_presentation(next_weapon as Weapon)
 	eliminated = bool(state.get("eliminated", eliminated))
 	set_carrying_seed(bool(state.get("carrying_seed", carrying_seed)))
-	visible = not eliminated
+	visible = _render_visuals
 	collision_layer = 0 if eliminated or not _authoritative_collision else 2
 
 func reconcile_from_authority(state: Dictionary, unacknowledged_frames: Array, delta: float) -> void:
@@ -473,7 +490,8 @@ func take_damage(amount: float, attacker: Duelist) -> void:
 	damaged.emit(amount, health)
 	if health <= 0.0:
 		eliminated = true
-		visible = false
+		carrying_seed = false
+		visible = _render_visuals
 		collision_layer = 0
 		defeated.emit(self, attacker)
 
@@ -492,6 +510,10 @@ func respawn_at(point: Vector3) -> void:
 	reserve_ammo = M4_RESERVE_AMMO
 	reload_remaining = 0.0
 	_damage_flash_remaining = 0.0
+	_flinch_remaining = 0.0
+	if _body_visual_root != null:
+		_body_visual_root.rotation = Vector3.ZERO
+		_body_visual_root.position = Vector3.ZERO
 	set_weapon_presentation(Weapon.PULSE)
 	_apply_stance(Stance.STAND)
 
@@ -552,6 +574,26 @@ func _build_character_silhouette() -> void:
 		_build_signal_hauler(cloth, dark, brass, glow)
 	else:
 		_build_storm_surveyor(cloth, dark, brass, glow)
+	_build_carrier_signal(glow)
+
+func _build_carrier_signal(glow: Material) -> void:
+	_carrier_signal_root = Node3D.new()
+	_carrier_signal_root.name = "CarrierSignal"
+	_carrier_signal_root.position = Vector3(0.0, 2.12, 0.0)
+	_carrier_signal_root.visible = false
+	add_child(_carrier_signal_root)
+	for radius in [0.22, 0.34]:
+		var ring := MeshInstance3D.new()
+		var ring_mesh := TorusMesh.new()
+		ring_mesh.inner_radius = radius
+		ring_mesh.outer_radius = radius + 0.035
+		ring_mesh.rings = 12
+		ring_mesh.ring_segments = 8
+		ring.mesh = ring_mesh
+		ring.rotation.x = PI * 0.5
+		ring.material_override = glow
+		ring.layers = 1
+		_carrier_signal_root.add_child(ring)
 
 func _build_signal_hauler(cloth: Material, dark: Material, brass: Material, glow: Material) -> void:
 	# Rejected alternative: a symmetrical chest rig. The offset coat panel and forked aerial give the courier forward motion.
