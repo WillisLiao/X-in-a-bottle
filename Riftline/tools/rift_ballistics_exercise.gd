@@ -51,6 +51,8 @@ func _initialize() -> void:
 	assert(bot.eliminated)
 	assert(impacts.size() == 5)
 	assert(impacts.all(func(fact: Dictionary) -> bool: return bool(fact.hit_duelist)))
+	assert(impacts.all(func(fact: Dictionary) -> bool: return str(fact.shooter_id) == "human" and str(fact.target_id) == "bot"))
+	assert(impacts.all(func(fact: Dictionary) -> bool: return fact.has("source_position") and is_equal_approx(float(fact.damage), BALLISTICS.M4_DAMAGE)))
 
 	# A same-team target can be crossed by a projectile but never takes damage.
 	var friendly := _make_duelist(root, Duelist.Team.SUN, "friendly", Vector3(0.0, 0.0, -4.0))

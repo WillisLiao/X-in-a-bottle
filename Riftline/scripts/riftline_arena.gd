@@ -32,6 +32,7 @@ var _actor_for_peer: Dictionary = {}
 var _ready_peers: Dictionary = {}
 var _pending_inputs: Array[Dictionary] = []
 var _local_duelist: Duelist
+var combat_feedback: RiftlineCombatFeedback
 var _local_actor_id := ""
 var _pending_actor_snapshots: Dictionary = {}
 var _snapshot_remaining := 0.0
@@ -49,7 +50,10 @@ var _offline_squad_size := 0
 var _squad_preview := ""
 var _capture_fixture_only := false
 var _arena_preview := ""
+var _feedback_preview := ""
+var _feedback_preview_elapsed := 0.0
 var _arena_perf_sample := false
+var _feedback_perf_sample := false
 var _perf_elapsed := 0.0
 var _perf_frame_times: Array[float] = []
 var _perf_logged := false
@@ -63,6 +67,7 @@ var _seen_projectile_impacts: Dictionary = {}
 var _last_projectile_fire_id := -1
 var _last_projectile_impact_id := -1
 var _pending_local_primary_predictions := 0
+var _reload_was_active := false
 var _projectile_presentation_pool: Node3D
 var _tracer_pool: Array[MeshInstance3D] = []
 var _impact_pool: Array[Node3D] = []
@@ -86,7 +91,7 @@ func _ready() -> void:
 	else:
 		_build_environment()
 		_build_arena()
-		_capture_fixture_only = not _squad_preview.is_empty() or not _arena_preview.is_empty()
+		_capture_fixture_only = not _squad_preview.is_empty() or not _arena_preview.is_empty() or not _feedback_preview.is_empty()
 		_build_match()
 		_build_hud()
 		_build_first_match_coach()
@@ -95,7 +100,7 @@ func _ready() -> void:
 		if command_line_lan:
 			_enter_lan_runtime(network.multiplayer.is_server(), false)
 		else:
-			if _squad_preview.is_empty() and _arena_preview.is_empty():
+			if _squad_preview.is_empty() and _arena_preview.is_empty() and _feedback_preview.is_empty():
 				coach.begin_offline_match()
 			else:
 				coach.hide()
@@ -108,8 +113,9 @@ func _ready() -> void:
 		if not _lan_active:
 			if not _objective_preview.is_empty():
 				_apply_objective_preview()
-			_apply_weapon_preview()
-			_apply_ballistics_preview()
+		_apply_weapon_preview()
+		_apply_ballistics_preview()
+		_apply_feedback_preview()
 	if not _capture_path.is_empty():
 		_capture_after_delay()
 
@@ -122,6 +128,7 @@ func _physics_process(delta: float) -> void:
 	_tick_perf_sample(delta)
 	_sync_objective_presentation()
 	_sync_squad_hud()
+	_tick_feedback_preview(delta)
 	if _lan_active:
 		_tick_lan_duel(delta)
 		return
@@ -166,6 +173,7 @@ func _physics_process(delta: float) -> void:
 	hud.set_stance(_local_duelist.stance)
 	hud.set_weapon(_local_duelist.weapon)
 	hud.show_ammo(_local_duelist.magazine_rounds, _local_duelist.reserve_ammo, _local_duelist.reload_remaining)
+	_sync_reload_feedback()
 	_sync_objective_presentation()
 	_sync_squad_hud()
 
@@ -419,6 +427,23 @@ func _build_hud() -> void:
 	hud = DuelHud.new()
 	layer.add_child(hud)
 	hud.rift_link_requested.connect(_on_rift_link_requested)
+	hud.feedback_preferences_changed.connect(_on_feedback_preferences_changed)
+	_build_combat_feedback()
+
+func _build_combat_feedback() -> void:
+	if not _presentation_enabled:
+		return
+	if combat_feedback == null:
+		combat_feedback = RiftlineCombatFeedback.new()
+		combat_feedback.name = "RiftlineCombatFeedback"
+		add_child(combat_feedback)
+		combat_feedback.damage_feedback.connect(_on_feedback_damage)
+		combat_feedback.hit_confirm_feedback.connect(_on_feedback_hit_confirm)
+	combat_feedback.objective_feedback.connect(_on_feedback_objective)
+	var listener := _local_duelist.camera if _local_duelist != null else null
+	combat_feedback.configure(true, _local_actor_id, listener)
+	if hud != null:
+		combat_feedback.set_preferences(hud.effects_enabled, hud.haptics_enabled)
 
 func _build_first_match_coach() -> void:
 	coach = RiftlineFirstMatchCoach.new()
@@ -454,6 +479,24 @@ func _build_rift_link() -> void:
 func _on_player_damaged(_amount: float, remaining: float) -> void:
 	if hud != null:
 		hud.show_damage(remaining)
+	if combat_feedback != null:
+		combat_feedback.set_local_health(remaining)
+
+func _on_feedback_damage(direction: Vector2, intensity: float, enemy_team: int) -> void:
+	if hud != null:
+		hud.show_damage_direction(direction, intensity, enemy_team)
+
+func _on_feedback_hit_confirm() -> void:
+	if hud != null:
+		hud.show_hit_confirm()
+
+func _on_feedback_objective(event_type: String, scoring_team: int) -> void:
+	if hud != null:
+		hud.show_objective_feedback(event_type, scoring_team)
+
+func _on_feedback_preferences_changed(effects_enabled: bool, haptics_enabled: bool) -> void:
+	if combat_feedback != null:
+		combat_feedback.set_preferences(effects_enabled, haptics_enabled)
 
 func _on_score_changed(sun: int, void_score: int) -> void:
 	if hud != null:
@@ -472,6 +515,9 @@ func _on_objective_event(event_type: String, state: Dictionary) -> void:
 			coach.observe_delivery()
 	if hud != null:
 		hud.show_objective_event(event_type, state)
+	if combat_feedback != null:
+		var local_event := str(state.get("carrier_id", "")) == _local_actor_id or event_type == "objective_delivered" and int(state.get("scoring_team", -1)) == int(_local_team)
+		combat_feedback.objective_event(event_type, state, local_event)
 	if event_type == "objective_delivered" and _presentation_enabled:
 		var gate_position: Vector3 = state.get("gate_position", Vector3.ZERO)
 		var scoring_team := int(state.get("scoring_team", int(Duelist.Team.SUN))) as Duelist.Team
@@ -482,6 +528,8 @@ func _on_objective_event(event_type: String, state: Dictionary) -> void:
 func _on_match_finished(winner: Duelist.Team) -> void:
 	_clear_ballistics()
 	_clear_presentation_effects()
+	if combat_feedback != null:
+		combat_feedback.stop_all()
 	if hud != null:
 		hud.show_match_result(winner)
 	if _lan_host:
@@ -491,6 +539,8 @@ func _on_phase_changed(phase: LinebreakMatch.Phase) -> void:
 	if phase != LinebreakMatch.Phase.LIVE:
 		_clear_ballistics()
 		_clear_presentation_effects()
+		if combat_feedback != null:
+			combat_feedback.stop_all()
 	_lan_phase = phase
 	if phase != LinebreakMatch.Phase.LIVE:
 		_continuous_inputs.clear()
@@ -539,8 +589,20 @@ func _on_local_fire_requested(_shooter: Duelist, fired_weapon: Duelist.Weapon, _
 	# Joining clients predict only local presentation.  Combat remains authority-owned.
 	_pending_local_primary_predictions = mini(_pending_local_primary_predictions + 1, 8)
 	_play_shooter_fire(_local_team, fired_weapon)
+	if combat_feedback != null:
+		combat_feedback.weapon_fired(_local_actor_id, fired_weapon, _origin, true)
 	if hud != null:
 		hud.show_primary_fire_feedback()
+
+func _sync_reload_feedback() -> void:
+	if _local_duelist == null or combat_feedback == null:
+		return
+	var active := _local_duelist.reload_remaining > 0.0
+	if active and not _reload_was_active:
+		combat_feedback.reload_started(true)
+	elif _reload_was_active and not active:
+		combat_feedback.reload_completed(true)
+	_reload_was_active = active
 
 func _on_projectile_fired(fact: Dictionary) -> void:
 	var projectile_id := int(fact.get("id", -1))
@@ -557,6 +619,8 @@ func _on_projectile_fired(fact: Dictionary) -> void:
 	if _presentation_enabled:
 		if not local_prediction:
 			_play_shooter_fire_by_id(shooter_id, Duelist.Weapon.PULSE)
+			if combat_feedback != null:
+				combat_feedback.weapon_fired(shooter_id, Duelist.Weapon.PULSE, fact.get("origin", Vector3.ZERO), shooter_id == _local_actor_id)
 			if _local_duelist != null and shooter_id == _local_duelist.actor_id and hud != null:
 				hud.show_primary_fire_feedback()
 		_spawn_projectile_tracer(fact)
@@ -575,8 +639,8 @@ func _on_projectile_impacted(fact: Dictionary) -> void:
 	if _presentation_enabled:
 		var team := int(fact.get("team", int(Duelist.Team.SUN))) as Duelist.Team
 		_spawn_projectile_impact(fact.get("position", Vector3.ZERO), fact.get("normal", Vector3.UP), team, bool(fact.get("hit_duelist", false)))
-		if team == _local_team and bool(fact.get("hit_duelist", false)) and hud != null:
-			hud.show_hit_confirm()
+		if combat_feedback != null:
+			combat_feedback.projectile_impacted(fact, _local_duelist.global_position if _local_duelist != null else Vector3.ZERO)
 	if _lan_host:
 		network.publish_event(fact)
 
@@ -587,6 +651,8 @@ func _trim_projectile_cache(cache: Dictionary) -> void:
 func _on_scatter_shot(shooter_id: String, origin: Vector3, end: Vector3, team: Duelist.Team, fired_weapon: Duelist.Weapon, hit_target: bool) -> void:
 	if _presentation_enabled:
 		_show_scatter_shot(shooter_id, origin, end, team, fired_weapon, hit_target)
+		if combat_feedback != null:
+			combat_feedback.scatter_fired(shooter_id, origin, end, fired_weapon, shooter_id == _local_actor_id, hit_target)
 	if _lan_host:
 		network.publish_event({"type": "shot", "shooter_id": shooter_id, "origin": origin, "end": end, "team": int(team), "weapon": int(fired_weapon), "hit": hit_target})
 
@@ -594,8 +660,6 @@ func _show_scatter_shot(shooter_id: String, origin: Vector3, end: Vector3, team:
 	if not _presentation_enabled:
 		return
 	_play_shooter_fire_by_id(shooter_id, fired_weapon)
-	if team == _local_team and hit_target and hud != null:
-		hud.show_hit_confirm()
 	var accent := Color("ffb15c") if team == Duelist.Team.SUN else Color("75dbff")
 	_spawn_beam(origin, end, accent.lerp(Color("f4e3ff"), 0.35), 0.036, 0.09)
 	_spawn_impact(end, accent, 0.15, 0.12)
@@ -767,7 +831,15 @@ func _on_network_event(event: Dictionary, sender_id: int) -> void:
 		"projectile_impacted":
 			_on_projectile_impacted(event)
 		"shot":
-			_show_scatter_shot(str(event.get("shooter_id", "")), event.get("origin", Vector3.ZERO), event.get("end", Vector3.ZERO), int(event.get("team", int(Duelist.Team.SUN))) as Duelist.Team, int(event.get("weapon", int(Duelist.Weapon.SCATTER))) as Duelist.Weapon, bool(event.get("hit", false)))
+			var shot_id := str(event.get("shooter_id", ""))
+			var shot_origin: Vector3 = event.get("origin", Vector3.ZERO)
+			var shot_end: Vector3 = event.get("end", Vector3.ZERO)
+			var shot_team := int(event.get("team", int(Duelist.Team.SUN))) as Duelist.Team
+			var shot_weapon := int(event.get("weapon", int(Duelist.Weapon.SCATTER))) as Duelist.Weapon
+			var shot_hit := bool(event.get("hit", false))
+			_show_scatter_shot(shot_id, shot_origin, shot_end, shot_team, shot_weapon, shot_hit)
+			if combat_feedback != null:
+				combat_feedback.scatter_fired(shot_id, shot_origin, shot_end, shot_weapon, shot_id == _local_actor_id, shot_hit)
 		"spawn":
 			_apply_client_spawn(str(event.get("actor_id", "")), event.get("position", null), float(event.get("yaw", 0.0)))
 		"roster":
@@ -945,6 +1017,7 @@ func _tick_lan_duel(delta: float) -> void:
 	hud.set_stance(_local_duelist.stance)
 	hud.set_weapon(_local_duelist.weapon)
 	hud.show_ammo(_local_duelist.magazine_rounds, _local_duelist.reserve_ammo, _local_duelist.reload_remaining)
+	_sync_reload_feedback()
 	hud.show_damage(_local_duelist.health)
 	if not _lan_host:
 		_smooth_remote_presentation()
@@ -1114,6 +1187,8 @@ func _apply_client_spawn(actor_id: String, position: Variant = null, yaw: float 
 func _restore_offline_training(message: String) -> void:
 	_clear_ballistics()
 	_clear_presentation_effects()
+	if combat_feedback != null:
+		combat_feedback.stop_all()
 	if coach != null:
 		coach.hide()
 	_lan_active = false
@@ -1147,7 +1222,7 @@ func _sync_objective_presentation() -> void:
 		coach.observe_objective(state)
 
 func _tick_perf_sample(delta: float) -> void:
-	if not _arena_perf_sample or _perf_logged:
+	if (not _arena_perf_sample and not _feedback_perf_sample) or _perf_logged:
 		return
 	_perf_elapsed += delta
 	if _perf_elapsed < 2.0:
@@ -1162,7 +1237,11 @@ func _tick_perf_sample(delta: float) -> void:
 		total += frame_time
 		minimum = minf(minimum, frame_time)
 		maximum = maxf(maximum, frame_time)
-	print("Riftline arena perf sample: map=%s frames=%d avg_ms=%.2f min_ms=%.2f max_ms=%.2f" % [arena_map.map_id(), _perf_frame_times.size(), total / _perf_frame_times.size() * 1000.0, minimum * 1000.0, maximum * 1000.0])
+	if _feedback_perf_sample:
+		var diagnostics := combat_feedback.diagnostics() if combat_feedback != null else {}
+		print("Riftline feedback perf sample: map=%s frames=%d avg_ms=%.2f min_ms=%.2f max_ms=%.2f active_voices=%d world_pool=%d local_pool=%d seen_events=%d skipped_low_priority=%d" % [arena_map.map_id(), _perf_frame_times.size(), total / _perf_frame_times.size() * 1000.0, minimum * 1000.0, maximum * 1000.0, int(diagnostics.get("active_voices", 0)), int(diagnostics.get("world_pool", 0)), int(diagnostics.get("local_pool", 0)), int(diagnostics.get("seen_events", 0)), int(diagnostics.get("skipped_low_priority", 0))])
+	else:
+		print("Riftline arena perf sample: map=%s frames=%d avg_ms=%.2f min_ms=%.2f max_ms=%.2f" % [arena_map.map_id(), _perf_frame_times.size(), total / _perf_frame_times.size() * 1000.0, minimum * 1000.0, maximum * 1000.0])
 	_perf_logged = true
 
 func _update_carrier_navigation(state: Dictionary) -> void:
@@ -1202,7 +1281,8 @@ func _sync_squad_hud() -> void:
 	for actor in actors:
 		records.append({"actor_id": actor.actor_id, "team": int(actor.team), "eliminated": actor.eliminated})
 	var squad := _offline_squad_size > 1 or (network != null and network.team_size > 1) or records.size() > 2
-	hud.set_roster_state(records, int(_local_team), squad)
+	var hud_team := Duelist.Team.VOID if _feedback_preview == "hud-void" else _local_team
+	hud.set_roster_state(records, int(hud_team), squad)
 
 func _continuous_input(frame: Dictionary) -> Dictionary:
 	return {
@@ -1496,8 +1576,15 @@ func _read_capture_arguments() -> void:
 				_offline_squad_size = 3
 		elif argument.begins_with("--arena-preview="):
 			_arena_preview = argument.trim_prefix("--arena-preview=")
+		elif argument.begins_with("--feedback-preview="):
+			_feedback_preview = argument.trim_prefix("--feedback-preview=")
+			if _feedback_preview == "squad-motion":
+				_offline_squad_size = 3
 		elif argument == "--arena-perf-sample":
 			_arena_perf_sample = true
+			_offline_squad_size = 5
+		elif argument == "--feedback-perf-sample":
+			_feedback_perf_sample = true
 			_offline_squad_size = 5
 		elif argument.begins_with("--objective-preview="):
 			_objective_preview = argument.trim_prefix("--objective-preview=")
@@ -1646,6 +1733,78 @@ func _apply_ballistics_preview() -> void:
 		"carbine-burst":
 			for distance in [0.4, 0.9, 1.4]:
 				_show_capture_tracer(origin + fixture_direction * distance, fixture_direction, int(_local_duelist.team))
+
+func _apply_feedback_preview() -> void:
+	if _feedback_preview.is_empty() or _local_duelist == null or hud == null:
+		return
+	if director != null and _feedback_preview != "squad-motion":
+		director.set_physics_process(false)
+	hud.set_match_phase(LinebreakMatch.Phase.LIVE)
+	hud.set_combat_input_enabled(true)
+	if _feedback_preview == "squad-motion":
+		_local_duelist.camera.cull_mask = 1
+		_local_duelist.camera.global_position = Vector3(0.0, 7.5, 14.0)
+		_local_duelist.camera.look_at(Vector3(0.0, 1.0, 2.0))
+		var preview_positions := [Vector3(-4.0, 0.1, 2.0), Vector3(3.5, 0.1, 4.0), Vector3(0.0, 0.1, 7.0)]
+		var preview_index := 0
+		for actor in _all_authority_actors():
+			if actor == _local_duelist:
+				continue
+			actor.global_position = preview_positions[mini(preview_index, preview_positions.size() - 1)]
+			actor.velocity = Vector3(1.6 if actor.team == Duelist.Team.SUN else -1.6, 0.0, 0.0)
+			preview_index += 1
+	elif _feedback_preview == "hud-void":
+		_local_team = Duelist.Team.VOID
+		_sync_squad_hud()
+	elif _feedback_preview == "coach-move":
+		hud.set_touch_preview("coach-move")
+	_tick_feedback_preview(0.0)
+
+func _tick_feedback_preview(delta: float) -> void:
+	if _feedback_preview.is_empty() or _local_duelist == null or hud == null:
+		return
+	_feedback_preview_elapsed += delta
+	var repeat_interval := 0.18 if _feedback_preview in ["damage-left", "damage-right", "low-health", "hit-confirm"] else 0.42
+	if _feedback_preview_elapsed < repeat_interval and delta > 0.0:
+		return
+	_feedback_preview_elapsed = 0.0
+	var enemy_team := Duelist.Team.VOID if _local_team == Duelist.Team.SUN else Duelist.Team.SUN
+	match _feedback_preview:
+		"carbine-fire":
+			_local_duelist.set_weapon_presentation(Duelist.Weapon.PULSE)
+			_local_duelist.play_local_weapon_fire(Duelist.Weapon.PULSE)
+			combat_feedback.weapon_fired(_local_actor_id, Duelist.Weapon.PULSE, _local_duelist.global_position, true)
+			hud.show_primary_fire_feedback()
+		"scatter-fire":
+			_local_duelist.set_weapon_presentation(Duelist.Weapon.SCATTER)
+			_local_duelist.play_local_weapon_fire(Duelist.Weapon.SCATTER)
+			combat_feedback.weapon_fired(_local_actor_id, Duelist.Weapon.SCATTER, _local_duelist.global_position, true)
+		"reload":
+			hud.set_weapon(Duelist.Weapon.PULSE)
+			hud.set_touch_preview("reloading")
+			hud.show_ammo(4, 24, Duelist.M4_RELOAD_SECONDS * 0.5)
+			combat_feedback.reload_started(true)
+		"hit-confirm":
+			hud.show_hit_confirm()
+			combat_feedback.hit_confirm_feedback.emit()
+		"damage-left":
+			hud.show_damage(22.0)
+			hud.show_damage_direction(Vector2.LEFT, 1.0, int(enemy_team))
+		"damage-right":
+			hud.show_damage(22.0)
+			hud.show_damage_direction(Vector2.RIGHT, 1.0, int(enemy_team))
+		"low-health":
+			hud.show_damage(22.0)
+		"seed-claimed":
+			hud.show_objective_event("objective_claimed", {})
+			hud.show_objective_feedback("objective_claimed", int(_local_team))
+			combat_feedback.objective_event("objective_claimed", {"event_id": "preview-claimed", "position": _local_duelist.global_position}, true)
+		"seed-delivered":
+			hud.show_objective_event("objective_delivered", {"scoring_team": int(_local_team)})
+			hud.show_objective_feedback("objective_delivered", int(_local_team))
+			combat_feedback.objective_event("objective_delivered", {"event_id": "preview-delivered", "scoring_team": int(_local_team), "position": _local_duelist.global_position}, true)
+		"hud-default", "hud-void", "squad-motion", "coach-move":
+			pass
 
 func _show_capture_tracer(position: Vector3, direction: Vector3, team_value: int) -> void:
 	if _tracer_pool.is_empty():

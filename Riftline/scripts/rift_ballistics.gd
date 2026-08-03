@@ -40,6 +40,7 @@ func fire(shooter: Duelist, weapon: Duelist.Weapon, origin: Vector3, direction: 
 		"team": int(shooter.team),
 		"weapon": int(weapon),
 		"position": origin,
+		"source_position": origin,
 		"velocity": velocity,
 		"remaining_range": M4_MAX_RANGE,
 	}
@@ -113,14 +114,20 @@ func _handle_impact(projectile: Dictionary, hit: Dictionary) -> void:
 	var shooter: Duelist = projectile.shooter
 	var collider: Object = hit.get("collider", null)
 	var hit_duelist := false
+	var target_id := ""
 	if collider is Duelist and collider != shooter and not collider.eliminated and collider.match_active and collider.team != shooter.team:
 		hit_duelist = true
+		target_id = collider.actor_id
 		collider.take_damage(M4_DAMAGE, shooter)
 	projectile_impacted.emit({
 		"type": "projectile_impacted",
 		"session_id": _session_id,
 		"id": int(projectile.id),
 		"team": int(projectile.team),
+		"shooter_id": str(projectile.get("shooter_id", "")),
+		"target_id": target_id,
+		"source_position": projectile.get("source_position", projectile.get("position", Vector3.ZERO)),
+		"damage": M4_DAMAGE if hit_duelist else 0.0,
 		"position": hit.get("position", projectile.position),
 		"normal": hit.get("normal", Vector3.UP),
 		"hit_duelist": hit_duelist,
