@@ -52,6 +52,8 @@ var _roster_state: Array[Dictionary] = []
 var _roster_local_team := int(Duelist.Team.SUN)
 var _squad_readability := false
 var _objective_state: Dictionary = {"state": int(RiftSeed.State.HOME), "carrier_id": "", "carrier_team": -1}
+var _carrier_chevron_active := false
+var _carrier_chevron_direction := Vector2.RIGHT
 var _objective_message := ""
 var _objective_message_remaining := 0.0
 var _score_pulse := 0.0
@@ -195,6 +197,15 @@ func set_objective_state(state: Dictionary) -> void:
 	else:
 		_objective_state = state.duplicate(true)
 	queue_redraw()
+
+func set_carrier_navigation(active: bool, direction: Vector2 = Vector2.RIGHT) -> void:
+	_carrier_chevron_active = active
+	if direction.length_squared() > 0.01:
+		_carrier_chevron_direction = direction.normalized()
+	queue_redraw()
+
+func safe_area_rect() -> Rect2:
+	return _safe_rect()
 
 func show_objective_event(event_type: String, _state: Dictionary) -> void:
 	match event_type:
@@ -506,6 +517,7 @@ func _draw_gameplay_hud() -> void:
 	draw_rect(Rect2(safe.position + Vector2(10, 10), Vector2(health_width, 8)), Color("03101f", 0.72))
 	draw_rect(Rect2(safe.position + Vector2(10, 10), Vector2(health_width * health / 100.0, 8)), Color(friendly, 0.92))
 	_draw_objective_strip(safe, friendly, enemy)
+	_draw_carrier_chevron(safe, friendly)
 	if _squad_readability:
 		_draw_team_life_strip(safe, friendly, enemy)
 	if damage_flash > 0.0:
@@ -545,6 +557,22 @@ func _draw_objective_strip(safe: Rect2, friendly: Color, enemy: Color) -> void:
 	if state == RiftSeed.State.DROPPED:
 		objective_accent = Color("fff0b0")
 	_draw_seed_glyph(center, objective_accent, state == RiftSeed.State.CARRIED)
+
+func _draw_carrier_chevron(safe: Rect2, color: Color) -> void:
+	if not _carrier_chevron_active:
+		return
+	var direction := _carrier_chevron_direction
+	var center := Vector2(safe.position.x + safe.size.x * 0.5, safe.position.y + safe.size.y * 0.42)
+	if absf(direction.x) >= absf(direction.y):
+		center.x = safe.end.x - 30.0 if direction.x >= 0.0 else safe.position.x + 30.0
+	if absf(direction.x) < absf(direction.y):
+		center.y = safe.position.y + 86.0 if direction.y < 0.0 else safe.end.y - 164.0
+	var tip := center + direction * 15.0
+	var wing := Vector2(-direction.y, direction.x) * 9.0
+	var chevron := PackedVector2Array([tip, center - direction * 8.0 + wing, center - direction * 8.0 - wing])
+	var pulse := 0.75 + sin(Time.get_ticks_msec() * 0.006) * 0.15
+	draw_colored_polygon(chevron, Color(color, 0.16 * pulse))
+	draw_polyline(PackedVector2Array([tip, center - direction * 8.0 + wing, center - direction * 8.0 - wing, tip]), Color(color, 0.92 * pulse), 2.4)
 
 func _draw_team_life_strip(safe: Rect2, friendly: Color, enemy: Color) -> void:
 	var center := Vector2(size.x * 0.5, safe.position.y + 45.0)

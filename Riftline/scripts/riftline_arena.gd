@@ -48,6 +48,7 @@ var _capture_rift_link := false
 var _offline_squad_size := 0
 var _squad_preview := ""
 var _capture_fixture_only := false
+var _arena_preview := ""
 var _objective_preview := ""
 var _weapon_preview := ""
 var _ballistics_preview := ""
@@ -77,7 +78,7 @@ func _ready() -> void:
 	else:
 		_build_environment()
 		_build_arena()
-		_capture_fixture_only = not _squad_preview.is_empty()
+		_capture_fixture_only = not _squad_preview.is_empty() or not _arena_preview.is_empty()
 		_build_match()
 		_build_hud()
 		_build_first_match_coach()
@@ -86,12 +87,14 @@ func _ready() -> void:
 		if command_line_lan:
 			_enter_lan_runtime(network.multiplayer.is_server(), false)
 		else:
-			if _squad_preview.is_empty():
+			if _squad_preview.is_empty() and _arena_preview.is_empty():
 				coach.begin_offline_match()
 			else:
 				coach.hide()
-			if not _touch_preview.is_empty():
-				hud.set_touch_preview(_touch_preview)
+				if not _touch_preview.is_empty():
+					hud.set_touch_preview(_touch_preview)
+				if not _arena_preview.is_empty():
+					_apply_arena_preview()
 			if not _capture_fixture_only:
 				director.begin()
 		if not _lan_active:
@@ -204,7 +207,7 @@ func _build_arena() -> void:
 	arena_map.name = "RiftlineMap"
 	add_child(arena_map)
 	var selected_map := RiftlineMap.Id.CONCOURSE if _offline_squad_size > 1 else RiftlineMap.Id.DUEL_YARD
-	if network != null:
+	if network != null and (_offline_squad_size <= 1 or network.arena_override_set):
 		selected_map = network.arena_id as RiftlineMap.Id
 	arena_map.configure(selected_map, _presentation_enabled)
 	if _presentation_enabled:
@@ -1127,8 +1130,38 @@ func _sync_objective_presentation() -> void:
 	var state := director.objective_state()
 	if hud != null:
 		hud.set_objective_state(state)
+		_update_carrier_navigation(state)
 	if coach != null and not _lan_active:
 		coach.observe_objective(state)
+
+func _update_carrier_navigation(state: Dictionary) -> void:
+	if hud == null or _local_duelist == null or arena_map == null:
+		hud.set_carrier_navigation(false)
+		return
+	var carrier_id := str(state.get("carrier_id", ""))
+	if int(state.get("state", int(RiftSeed.State.HOME))) != int(RiftSeed.State.CARRIED) or carrier_id != _local_duelist.actor_id:
+		hud.set_carrier_navigation(false)
+		return
+	var gates := arena_map.gate_positions()
+	var enemy_team := Duelist.Team.VOID if _local_duelist.team == Duelist.Team.SUN else Duelist.Team.SUN
+	var gate_position: Vector3 = gates.get(enemy_team, Vector3.ZERO)
+	var camera := _local_duelist.camera
+	if camera == null:
+		hud.set_carrier_navigation(false)
+		return
+	var screen_position := camera.unproject_position(gate_position)
+	var safe := hud.safe_area_rect()
+	var on_screen := not camera.is_position_behind(gate_position) and safe.grow(-20.0).has_point(screen_position)
+	if on_screen:
+		hud.set_carrier_navigation(false)
+		return
+	var local_gate := camera.to_local(gate_position)
+	var direction := Vector2(local_gate.x, -local_gate.y)
+	if local_gate.z > 0.0:
+		direction = -direction
+	if direction.length_squared() < 0.01:
+		direction = Vector2.RIGHT if local_gate.x >= 0.0 else Vector2.LEFT
+	hud.set_carrier_navigation(true, direction)
 
 func _sync_squad_hud() -> void:
 	if hud == null:
@@ -1430,6 +1463,10 @@ func _read_capture_arguments() -> void:
 			_squad_preview = argument.trim_prefix("--squad-preview=")
 			if _squad_preview == "three-versus-three":
 				_offline_squad_size = 3
+		elif argument.begins_with("--arena-preview="):
+			_arena_preview = argument.trim_prefix("--arena-preview=")
+			if _arena_preview in ["concourse-overview", "windwalk", "relay-basin", "service-run", "sun-bay", "void-bay", "carrier-gate"]:
+				_offline_squad_size = 5
 		elif argument.begins_with("--objective-preview="):
 			_objective_preview = argument.trim_prefix("--objective-preview=")
 		elif argument.begins_with("--weapon-preview="):
@@ -1461,6 +1498,47 @@ func _read_capture_arguments() -> void:
 		rift_link.open_menu()
 	if not _touch_preview.is_empty():
 		hud.set_touch_preview(_touch_preview)
+
+func _apply_arena_preview() -> void:
+	if _local_duelist == null or _local_duelist.camera == null:
+		return
+	_local_duelist.camera.cull_mask = 1
+	var camera_position := Vector3(0.0, 31.0, 27.0)
+	var look_target := Vector3.ZERO
+	match _arena_preview:
+		"windwalk":
+			camera_position = Vector3(-16.0, 6.5, 31.0)
+			look_target = Vector3(-8.0, 0.5, 24.0)
+		"relay-basin":
+			camera_position = Vector3(0.0, 8.5, 16.0)
+			look_target = Vector3(0.0, 0.8, 0.0)
+		"service-run":
+			camera_position = Vector3(12.0, 6.5, -31.0)
+			look_target = Vector3(8.0, 0.6, -24.0)
+		"sun-bay":
+			camera_position = Vector3(-51.0, 5.5, 10.0)
+			look_target = Vector3(-43.0, 1.2, 0.0)
+		"void-bay":
+			camera_position = Vector3(51.0, 5.5, -10.0)
+			look_target = Vector3(43.0, 1.2, 0.0)
+		"carrier-gate":
+			camera_position = Vector3(35.0, 4.0, 7.0)
+			look_target = Vector3(55.0, 1.4, 0.0)
+			_local_duelist.position = Vector3(38.0, 0.1, 5.0)
+			_local_duelist.rotation.y = -0.9
+			_local_duelist.set_carrying_seed(true)
+			var gate: Vector3 = arena_map.gate_positions()[Duelist.Team.VOID]
+			var preview_state := {"state": int(RiftSeed.State.CARRIED), "position": gate + Vector3.UP * RiftSeed.CARRIER_HEIGHT, "carrier_id": _local_duelist.actor_id, "carrier_team": int(_local_duelist.team)}
+			if director != null:
+				director.set_physics_process(false)
+				director.seed.apply_presentation_state(preview_state, Callable(director, "_lookup_duelist"))
+			if hud != null:
+				hud.set_objective_state(preview_state)
+				_update_carrier_navigation(preview_state)
+	_local_duelist.camera.global_position = camera_position
+	_local_duelist.camera.look_at(look_target)
+	for actor in _all_authority_actors():
+		actor.set_physics_process(false)
 
 func _apply_objective_preview() -> void:
 	if _lan_active or director == null or director.seed == null:

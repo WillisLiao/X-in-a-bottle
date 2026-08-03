@@ -42,6 +42,7 @@ var _last_input_view: Dictionary = {}
 var roster: RiftlineRoster
 var team_size := 1
 var arena_id: RiftlineMap.Id = RiftlineMap.Id.DUEL_YARD
+var arena_override_set := false
 var discovered_session: Dictionary = {}
 var session_descriptor: Dictionary = {}
 var _configuration_valid := true
@@ -471,6 +472,7 @@ func _read_command_line_options() -> void:
 				_configuration_valid = false
 			else:
 				arena_override = requested_arena
+				arena_override_set = true
 		elif argument.begins_with("--net-sim-latency-ms="):
 			_sim_latency = maxf(0.0, argument.trim_prefix("--net-sim-latency-ms=").to_float() / 1000.0)
 		elif argument.begins_with("--net-sim-jitter-ms="):
