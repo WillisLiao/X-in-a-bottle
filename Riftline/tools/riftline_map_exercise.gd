@@ -51,6 +51,10 @@ func _initialize() -> void:
 	assert(rendered.ambient_motion_count() >= 6)
 	for landmark_name in ["SunDock", "VoidDock", "RelayBasin", "Windwalk", "ServiceRun", "StormHorizon"]:
 		assert(_find_named_node(rendered, landmark_name) != null)
+	var rendered_duel := RiftlineMap.new()
+	root.add_child(rendered_duel)
+	rendered_duel.configure(RiftlineMap.Id.DUEL_YARD, true)
+	assert(_find_named_node(rendered_duel, "DuelYardLandmarkFrame") == null)
 
 	assert(RiftlineNetwork.default_arena_for_team_size(1) == RiftlineMap.Id.DUEL_YARD)
 	assert(RiftlineNetwork.default_arena_for_team_size(3) == RiftlineMap.Id.CONCOURSE)

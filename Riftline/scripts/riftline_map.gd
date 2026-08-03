@@ -316,13 +316,6 @@ func _build_duel_landmarks() -> void:
 	_add_emissive_rail(Vector3(0, 0.06, 10), Vector3(28, 0.08, 0.08), Color("f4a55e"))
 	_add_emissive_rail(Vector3(-15, 0.06, 0), Vector3(0.08, 0.08, 20), Color("a7dced"))
 	_add_emissive_rail(Vector3(15, 0.06, 0), Vector3(0.08, 0.08, 20), Color("f4a55e"))
-	var frame_a := Node3D.new()
-	frame_a.position = Vector3(-1.8, 0.0, 1.8)
-	frame_a.rotation.y = -0.12
-	add_child(frame_a)
-	_add_landmark_part(frame_a, _box_mesh(Vector3(0.1, 4.0, 0.1)), Vector3(-0.75, 1.8, 0.0), Color("a7dced"))
-	_add_landmark_part(frame_a, _box_mesh(Vector3(0.1, 4.0, 0.1)), Vector3(0.75, 1.8, 0.0), Color("f4a55e"))
-	_add_landmark_part(frame_a, _box_mesh(Vector3(1.65, 0.1, 0.1)), Vector3(0.0, 3.72, 0.0), Color("dce9ef"), Vector3.ZERO, 0.8)
 
 func _build_concourse_landmarks() -> void:
 	# No vertex colors are needed for this authored layer; every new part uses

@@ -34,6 +34,13 @@ const MOBILITY_FACTS := {
 	Weapon.PULSE: {"class": "ar", "hip_forward": 1.0, "hip_strafe": 0.76, "ads_allowed": true},
 	Weapon.KNIFE: {"class": "knife", "hip_forward": 1.15, "hip_strafe": 0.93, "ads_allowed": false},
 }
+
+static func first_person_kunai_position() -> Vector3:
+	return Vector3(0.31, -0.14, -0.88)
+
+static func first_person_kunai_rotation() -> Vector3:
+	return Vector3(-0.28, 0.0, 0.30)
+
 const GRAVITY := 26.0
 const JUMP_SPEED := 9.3
 const CARRY_SPEED_MULTIPLIER := 0.88
@@ -258,6 +265,8 @@ func _process(delta: float) -> void:
 		_survey_frame.rotation.z = -gait_lag * 0.025
 	if _weapon_root != null:
 		var hip := Vector3(0.42, -0.42, -1.22)
+		if weapon == Weapon.KNIFE:
+			hip = first_person_kunai_position()
 		var target := _ads_weapon_anchor() if _aiming and _local_camera else hip
 		if _local_camera:
 			var breathing := sin(Time.get_ticks_msec() * 0.0017) * (0.004 if _aiming else 0.009)
@@ -265,7 +274,9 @@ func _process(delta: float) -> void:
 			target += Vector3(0.0, breathing + walking * (0.012 if not _aiming else 0.004), 0.0)
 			if _obstruction_remaining > 0.0 or _local_muzzle_obstructed():
 				target += Vector3(-0.12, 0.07, 0.22)
-			_weapon_root.rotation.z = lerpf(_weapon_root.rotation.z, 0.08 if _obstruction_remaining > 0.0 or _local_muzzle_obstructed() else 0.0, clampf(delta * 18.0, 0.0, 1.0))
+			var obstruction_tilt := 0.08 if _obstruction_remaining > 0.0 or _local_muzzle_obstructed() else 0.0
+			var base_tilt := first_person_kunai_rotation().z if weapon == Weapon.KNIFE else 0.0
+			_weapon_root.rotation.z = lerpf(_weapon_root.rotation.z, base_tilt + obstruction_tilt, clampf(delta * 18.0, 0.0, 1.0))
 			if _swap_motion > 0.0:
 				target += Vector3(0.0, -0.16 * sin(_swap_motion * PI), 0.18 * sin(_swap_motion * PI))
 		if reload_remaining > 0.0 and _local_camera:
@@ -937,6 +948,10 @@ func _build_world_weapon() -> void:
 func _rebuild_weapon_models() -> void:
 	if _weapon_root == null:
 		return
+	if _local_camera:
+		_weapon_root.position = first_person_kunai_position() if weapon == Weapon.KNIFE else Vector3(0.42, -0.42, -1.22)
+		_weapon_root.rotation = first_person_kunai_rotation() if weapon == Weapon.KNIFE else Vector3.ZERO
+		_weapon_root.scale = Vector3.ONE * 0.38
 	for child in _weapon_root.get_children():
 		child.queue_free()
 	_weapon_mesh = null
@@ -975,15 +990,15 @@ func _rebuild_weapon_models() -> void:
 	else:
 		# Simple procedural kunai: ring pommel, wrapped handle, broad
 		# faceted blade, and a single bright center spine.
-		_weapon_mesh = _add_weapon_part(_kunai_blade_mesh(), Vector3(0.0, -0.02, -0.72), ceramic)
-		_weapon_core = _add_weapon_part(_box(Vector3(0.026, 0.72, 0.045)), Vector3(0.0, -0.28, -0.77), hot)
-		_add_weapon_part(_box(Vector3(0.16, 0.10, 0.06)), Vector3(0.0, 0.18, -0.25), dark)
-		_add_weapon_part(_cylinder(0.055, 0.055, 0.42), Vector3(0.0, 0.03, 0.05), ceramic, Vector3(PI * 0.5, 0.0, 0.0))
+		_weapon_mesh = _add_weapon_part(_kunai_blade_mesh(), Vector3(0.0, 0.0, -0.55), ceramic)
+		_weapon_core = _add_weapon_part(_box(Vector3(0.026, 0.78, 0.045)), Vector3(0.0, 0.42, -0.64), hot)
+		_add_weapon_part(_box(Vector3(0.18, 0.08, 0.07)), Vector3(0.0, -0.03, -0.44), dark)
+		_add_weapon_part(_cylinder(0.055, 0.055, 0.42), Vector3(0.0, -0.28, -0.42), ceramic)
 		for index in 4:
-			_add_weapon_part(_torus(0.047, 0.012), Vector3(0.0, 0.03, -0.1 + index * 0.1), accent, Vector3(0.0, 0.0, 0.0))
-		_add_weapon_part(_torus(0.105, 0.035), Vector3(0.0, 0.03, 0.33), dark, Vector3(0.0, 0.0, 0.0))
-		_add_weapon_part(_torus(0.072, 0.018), Vector3(0.0, 0.03, 0.335), accent, Vector3(0.0, 0.0, 0.0))
-		_muzzle_flare = _add_weapon_part(_box(Vector3(0.035, 0.04, 0.04)), Vector3(0.0, -0.62, -0.72), hot)
+			_add_weapon_part(_torus(0.047, 0.012), Vector3(0.0, -0.12 - index * 0.09, -0.42), accent)
+		_add_weapon_part(_torus(0.105, 0.035), Vector3(0.0, -0.57, -0.42), dark)
+		_add_weapon_part(_torus(0.072, 0.018), Vector3(0.0, -0.57, -0.42), accent)
+		_muzzle_flare = _add_weapon_part(_box(Vector3(0.035, 0.04, 0.04)), Vector3(0.0, 0.9, -0.7), hot)
 	_muzzle_flare.scale = Vector3.ONE * 0.001
 
 func _add_weapon_part(mesh: Mesh, position: Vector3, material: Material, rotation: Vector3 = Vector3.ZERO) -> MeshInstance3D:
@@ -1033,8 +1048,8 @@ func _kunai_blade_mesh() -> ArrayMesh:
 	var front_z := -0.07
 	var back_z := 0.07
 	var vertices := PackedVector3Array([
-		Vector3(-0.2, 0.08, front_z), Vector3(0.0, 0.27, front_z), Vector3(0.2, 0.08, front_z), Vector3(0.0, -0.62, front_z),
-		Vector3(-0.2, 0.08, back_z), Vector3(0.0, 0.27, back_z), Vector3(0.2, 0.08, back_z), Vector3(0.0, -0.62, back_z),
+		Vector3(-0.2, 0.0, front_z), Vector3(0.0, 0.18, front_z), Vector3(0.2, 0.0, front_z), Vector3(0.0, 0.88, front_z),
+		Vector3(-0.2, 0.0, back_z), Vector3(0.0, 0.18, back_z), Vector3(0.2, 0.0, back_z), Vector3(0.0, 0.88, back_z),
 	])
 	var indices := PackedInt32Array([
 		0, 1, 2, 0, 2, 3,
