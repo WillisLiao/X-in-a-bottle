@@ -2,9 +2,11 @@ class_name Duelist
 extends CharacterBody3D
 
 const PULP_LIT := preload("res://shaders/pulp_lit.gdshader")
+const BALLISTICS := preload("res://scripts/rift_ballistics.gd")
 
 signal defeated(victim: Duelist, killer: Duelist)
-signal shot(origin: Vector3, end: Vector3, team: Team, weapon: Weapon, hit_target: bool)
+signal fire_requested(shooter: Duelist, weapon: Weapon, origin: Vector3, direction: Vector3)
+signal scatter_shot(origin: Vector3, end: Vector3, team: Team, weapon: Weapon, hit_target: bool)
 signal damaged(amount: float, remaining: float)
 
 enum Team { SUN, VOID }
@@ -13,10 +15,12 @@ enum Weapon { PULSE, SCATTER }
 
 const HEALTH := 100.0
 const WALK_SPEED := 7.2
-const FIRE_COOLDOWN := 0.26
-const FIRE_RANGE := 48.0
-# Four rifle hits leave eight health, so a clean five-hit exchange decides a duel.
-const FIRE_DAMAGE := 23.0
+const M4_MAGAZINE_SIZE := 30
+const M4_RESERVE_AMMO := 90
+const M4_RELOAD_SECONDS := 1.55
+const SCATTER_COOLDOWN := 0.72
+const SCATTER_RANGE := 17.0
+const SCATTER_DAMAGE := 13.0
 const GRAVITY := 26.0
 const JUMP_SPEED := 9.3
 const CARRY_SPEED_MULTIPLIER := 0.88
@@ -28,6 +32,9 @@ var eliminated := false
 var carrying_seed := false
 var stance: Stance = Stance.STAND
 var weapon: Weapon = Weapon.PULSE
+var magazine_rounds := M4_MAGAZINE_SIZE
+var reserve_ammo := M4_RESERVE_AMMO
+var reload_remaining := 0.0
 var match_active := false
 var _fire_remaining := 0.0
 var _collision: CollisionShape3D
@@ -39,7 +46,7 @@ var _weapon_root: Node3D
 var _weapon_mesh: MeshInstance3D
 var _weapon_core: MeshInstance3D
 var _muzzle_flare: MeshInstance3D
-var _pressure_ports: Array[MeshInstance3D] = []
+var _rail_slots: Array[MeshInstance3D] = []
 var _signal_spine: MeshInstance3D
 var _survey_frame: MeshInstance3D
 var _left_leg: Node3D
@@ -139,20 +146,18 @@ func _process(delta: float) -> void:
 	if _survey_frame != null:
 		_survey_frame.rotation.z = -gait_lag * 0.025
 	if _weapon_root != null:
-		var hip := Vector3(0.28, -0.27, -1.12)
-		var ads := Vector3(0.075, -0.19, -1.05)
+		var hip := Vector3(0.42, -0.42, -1.22)
+		var ads := Vector3(0.0, -0.06, -0.96)
 		var target := ads if _aiming and _local_camera else hip
 		_weapon_root.position = _weapon_root.position.lerp(target, clampf(delta * 14.0, 0.0, 1.0))
 		_weapon_root.rotation.x = lerpf(_weapon_root.rotation.x, -_recoil_remaining * (0.75 if weapon == Weapon.PULSE else 1.15), clampf(delta * 20.0, 0.0, 1.0))
 	if _muzzle_flare != null:
 		var flare := clampf(_fire_flash_remaining / 0.075, 0.0, 1.0)
 		_muzzle_flare.scale = Vector3.ONE * flare
-	if _weapon_core != null and weapon == Weapon.PULSE:
-		_weapon_core.position.z = -0.08 - (_recoil_remaining / 0.12) * 0.08
-	if not _pressure_ports.is_empty():
+	if not _rail_slots.is_empty():
 		var sequence := clampf((0.12 - _fire_flash_remaining) / 0.12 * 6.0, 0.0, 6.0)
-		for index in _pressure_ports.size():
-			_set_material_glow(_pressure_ports[index], 0.45 if index >= sequence else 2.0)
+		for index in _rail_slots.size():
+			_set_material_glow(_rail_slots[index], 0.45 if index >= sequence else 1.2)
 	_set_material_glow(_band, 1.35 if _damage_flash_remaining > 0.0 else 0.6)
 
 func set_weapon_presentation(next_weapon: Weapon) -> void:
@@ -200,9 +205,10 @@ func set_match_active(active: bool) -> void:
 		velocity.x = 0.0
 		velocity.z = 0.0
 		_fire_remaining = 0.0
+		reload_remaining = 0.0
 		_pending_jump = false
 
-func make_input_frame(sequence: int, move_input: Vector2, aiming: bool, firing: bool, wants_jump: bool, crouch_edge: bool, prone_edge: bool, weapon_switch_edge: bool) -> Dictionary:
+func make_input_frame(sequence: int, move_input: Vector2, aiming: bool, firing: bool, wants_jump: bool, crouch_edge: bool, prone_edge: bool, weapon_switch_edge: bool, reload_edge: bool) -> Dictionary:
 	return {
 		"sequence": sequence,
 		"move_x": clampf(move_input.x, -1.0, 1.0),
@@ -215,6 +221,7 @@ func make_input_frame(sequence: int, move_input: Vector2, aiming: bool, firing: 
 		"crouch": crouch_edge,
 		"prone": prone_edge,
 		"weapon_switch": weapon_switch_edge,
+		"reload": reload_edge,
 	}
 
 func authoritative_state(server_tick: int, last_input_sequence: int) -> Dictionary:
@@ -226,6 +233,9 @@ func authoritative_state(server_tick: int, last_input_sequence: int) -> Dictiona
 		"yaw": rotation.y,
 		"pitch": head.rotation.x if head != null else 0.0,
 		"health": health,
+		"magazine_rounds": magazine_rounds,
+		"reserve_ammo": reserve_ammo,
+		"reload_remaining": reload_remaining,
 		"stance": int(stance),
 		"weapon": int(weapon),
 		"eliminated": eliminated,
@@ -251,6 +261,8 @@ func apply_discrete_input(frame: Dictionary) -> void:
 		toggle_prone()
 	if bool(frame.get("weapon_switch", false)):
 		switch_weapon()
+	if bool(frame.get("reload", false)):
+		reload_weapon()
 	if bool(frame.get("jump", false)):
 		_pending_jump = true
 
@@ -281,6 +293,9 @@ func apply_presentation_state(state: Dictionary) -> void:
 	if head != null:
 		head.rotation.x = clampf(float(state.get("pitch", head.rotation.x)), -1.05, 0.9)
 	health = clampf(float(state.get("health", health)), 0.0, HEALTH)
+	magazine_rounds = clampi(int(state.get("magazine_rounds", magazine_rounds)), 0, M4_MAGAZINE_SIZE)
+	reserve_ammo = clampi(int(state.get("reserve_ammo", reserve_ammo)), 0, M4_RESERVE_AMMO)
+	reload_remaining = maxf(0.0, float(state.get("reload_remaining", reload_remaining)))
 	var next_stance := clampi(int(state.get("stance", int(stance))), int(Stance.STAND), int(Stance.PRONE))
 	if stance != next_stance:
 		_apply_stance(next_stance as Stance)
@@ -318,6 +333,12 @@ func _apply_replay_frame(frame: Dictionary, delta: float) -> void:
 
 func _simulate_motion(move_input: Vector2, wants_jump: bool, delta: float) -> void:
 	_fire_remaining = maxf(0.0, _fire_remaining - delta)
+	if reload_remaining > 0.0:
+		reload_remaining = maxf(0.0, reload_remaining - delta)
+		if reload_remaining <= 0.0:
+			var transfer := mini(M4_MAGAZINE_SIZE - magazine_rounds, reserve_ammo)
+			magazine_rounds += transfer
+			reserve_ammo -= transfer
 	if eliminated or not match_active:
 		velocity.x = 0.0
 		velocity.z = 0.0
@@ -388,30 +409,48 @@ func drive(move_input: Vector2, wants_fire: bool, wants_jump: bool, delta: float
 		fire_forward()
 
 func fire_forward() -> void:
-	if eliminated or not match_active or _fire_remaining > 0.0:
+	if eliminated or not match_active or _fire_remaining > 0.0 or reload_remaining > 0.0:
 		return
-	_fire_remaining = FIRE_COOLDOWN if weapon == Weapon.PULSE else 0.72
-	var origin := head.global_position + -head.global_transform.basis.z * 0.46
+	if weapon == Weapon.PULSE and magazine_rounds <= 0:
+		reload_weapon()
+		return
+	_fire_remaining = BALLISTICS.M4_FIRE_INTERVAL if weapon == Weapon.PULSE else SCATTER_COOLDOWN
+	var origin := _fire_origin()
 	var direction := -head.global_transform.basis.z
 	if weapon == Weapon.PULSE:
-		_fire_ray(origin, direction, FIRE_DAMAGE)
+		magazine_rounds -= 1
+		fire_requested.emit(self, weapon, origin, direction)
 		return
-	# The scatter weapon trades range and pace for decisive close-range pressure.
-	for spread in [Vector2(-0.07, -0.035), Vector2(-0.035, 0.05), Vector2(0.0, 0.0), Vector2(0.04, -0.045), Vector2(0.075, 0.025)]:
-		var pellet: Vector3 = (direction + head.global_transform.basis.x * spread.x + head.global_transform.basis.y * spread.y).normalized()
-		_fire_ray(origin, pellet, 13.0, 17.0)
+	_fire_scatter(origin, direction)
 
 func fire_at(target: Vector3) -> void:
-	if eliminated or not match_active or _fire_remaining > 0.0:
+	if eliminated or not match_active or _fire_remaining > 0.0 or reload_remaining > 0.0:
 		return
-	_fire_remaining = FIRE_COOLDOWN
-	var origin := head.global_position + Vector3.UP * 0.03
-	_fire_ray(origin, (target - origin).normalized(), FIRE_DAMAGE)
+	if weapon == Weapon.PULSE and magazine_rounds <= 0:
+		reload_weapon()
+		return
+	_fire_remaining = BALLISTICS.M4_FIRE_INTERVAL if weapon == Weapon.PULSE else SCATTER_COOLDOWN
+	var origin := _fire_origin()
+	var direction := (target - origin).normalized()
+	if weapon == Weapon.PULSE:
+		magazine_rounds -= 1
+		fire_requested.emit(self, weapon, origin, direction)
+		return
+	_fire_scatter(origin, direction)
 
 func switch_weapon() -> void:
 	if eliminated or not match_active:
 		return
 	set_weapon_presentation(Weapon.SCATTER if weapon == Weapon.PULSE else Weapon.PULSE)
+
+func reload_weapon() -> bool:
+	if eliminated or not match_active or weapon != Weapon.PULSE or reload_remaining > 0.0:
+		return false
+	if magazine_rounds >= M4_MAGAZINE_SIZE or reserve_ammo <= 0:
+		return false
+	reload_remaining = M4_RELOAD_SECONDS
+	_fire_remaining = maxf(_fire_remaining, 0.12)
+	return true
 
 func take_damage(amount: float, attacker: Duelist) -> void:
 	if eliminated or not match_active:
@@ -436,11 +475,25 @@ func respawn_at(point: Vector3) -> void:
 	_aiming = false
 	_recoil_remaining = 0.0
 	_fire_flash_remaining = 0.0
+	magazine_rounds = M4_MAGAZINE_SIZE
+	reserve_ammo = M4_RESERVE_AMMO
+	reload_remaining = 0.0
 	_damage_flash_remaining = 0.0
 	set_weapon_presentation(Weapon.PULSE)
 	_apply_stance(Stance.STAND)
 
-func _fire_ray(origin: Vector3, direction: Vector3, damage: float, range: float = FIRE_RANGE) -> void:
+func _fire_origin() -> Vector3:
+	if is_instance_valid(_muzzle_flare):
+		return _muzzle_flare.global_position
+	return head.global_position + -head.global_transform.basis.z * 0.46
+
+func _fire_scatter(origin: Vector3, direction: Vector3) -> void:
+	# The scatter weapon intentionally keeps its existing close-range ray behavior.
+	for spread in [Vector2(-0.07, -0.035), Vector2(-0.035, 0.05), Vector2(0.0, 0.0), Vector2(0.04, -0.045), Vector2(0.075, 0.025)]:
+		var pellet: Vector3 = (direction + head.global_transform.basis.x * spread.x + head.global_transform.basis.y * spread.y).normalized()
+		_fire_scatter_ray(origin, pellet, SCATTER_DAMAGE, SCATTER_RANGE)
+
+func _fire_scatter_ray(origin: Vector3, direction: Vector3, damage: float, range: float) -> void:
 	var query := PhysicsRayQueryParameters3D.create(origin, origin + direction * range, 1 | 2)
 	query.exclude = [get_rid()]
 	var hit := get_world_3d().direct_space_state.intersect_ray(query)
@@ -452,7 +505,7 @@ func _fire_ray(origin: Vector3, direction: Vector3, damage: float, range: float 
 		if collider is Duelist:
 			hit_target = true
 			collider.take_damage(damage, self)
-	shot.emit(origin, end, team, weapon, hit_target)
+	scatter_shot.emit(origin, end, team, weapon, hit_target)
 
 func _team_color() -> Color:
 	return Color("ef6b3f") if team == Team.SUN else Color("4ba9ff")
@@ -508,8 +561,8 @@ func _build_storm_surveyor(cloth: Material, dark: Material, brass: Material, glo
 func _build_first_person_weapon() -> void:
 	_weapon_root = Node3D.new()
 	_weapon_root.name = "FirstPersonWeapon"
-	_weapon_root.position = Vector3(0.28, -0.27, -1.12)
-	_weapon_root.scale = Vector3.ONE * 0.5
+	_weapon_root.position = Vector3(0.42, -0.42, -1.22)
+	_weapon_root.scale = Vector3.ONE * 0.38
 	camera.add_child(_weapon_root)
 
 func _build_world_weapon() -> void:
@@ -517,6 +570,7 @@ func _build_world_weapon() -> void:
 	_weapon_root.name = "WorldWeapon"
 	_weapon_root.position = Vector3(0.38, -0.27, -0.64)
 	_weapon_root.rotation_degrees = Vector3(-8.0, 0.0, 0.0)
+	_weapon_root.scale = Vector3.ONE * 0.72
 	head.add_child(_weapon_root)
 
 func _rebuild_weapon_models() -> void:
@@ -527,29 +581,44 @@ func _rebuild_weapon_models() -> void:
 	_weapon_mesh = null
 	_weapon_core = null
 	_muzzle_flare = null
-	_pressure_ports.clear()
-	var ceramic := _material(Color("71818a") if weapon == Weapon.PULSE else Color("687386"), 0.08)
+	_rail_slots.clear()
+	var ceramic := _material(Color("3f4b55") if weapon == Weapon.PULSE else Color("687386"), 0.08)
 	var dark := _material(Color("17263e"), 0.0)
-	var accent := _material(Color("ffc05b") if weapon == Weapon.PULSE else Color("b479ff"), 0.6)
+	var accent := _material(Color("e6a25b") if weapon == Weapon.PULSE else Color("b479ff"), 0.6)
 	var hot := _material(Color("fff0b0") if weapon == Weapon.PULSE else Color("d3b2ff"), 3.2)
 	if weapon == Weapon.PULSE:
-		_weapon_mesh = _add_weapon_part(_box(Vector3(0.16, 0.14, 0.74)), Vector3(0.0, 0.0, 0.0), ceramic)
-		_add_weapon_part(_box(Vector3(0.12, 0.18, 0.42)), Vector3(0.0, -0.03, 0.27), dark)
-		_weapon_core = _add_weapon_part(_cylinder(0.055, 0.055, 0.34), Vector3(0.0, 0.0, -0.08), hot, Vector3(PI * 0.5, 0.0, 0.0))
-		_add_weapon_part(_box(Vector3(0.06, 0.08, 0.26)), Vector3(-0.075, 0.0, -0.39), accent, Vector3(0.0, 0.0, -0.12))
-		_add_weapon_part(_box(Vector3(0.06, 0.08, 0.26)), Vector3(0.075, 0.0, -0.39), accent, Vector3(0.0, 0.0, 0.12))
+		# Original Rift Carbine silhouette: stock, split receiver, rail handguard, magazine, barrel, sights.
+		_weapon_mesh = _add_weapon_part(_box(Vector3(0.30, 0.20, 0.44)), Vector3(0.0, 0.0, 0.06), ceramic)
+		_add_weapon_part(_box(Vector3(0.28, 0.13, 0.48)), Vector3(0.0, 0.10, -0.29), dark)
+		_add_weapon_part(_box(Vector3(0.035, 0.11, 0.23)), Vector3(0.16, 0.04, -0.17), dark)
+		var buffer_tube := _add_weapon_part(_cylinder(0.055, 0.055, 0.45), Vector3(0.0, 0.05, 0.52), dark, Vector3(PI * 0.5, 0.0, 0.0))
+		buffer_tube.scale.x = 0.9
+		_add_weapon_part(_box(Vector3(0.22, 0.16, 0.32)), Vector3(0.0, 0.05, 0.86), ceramic)
+		_add_weapon_part(_box(Vector3(0.24, 0.18, 0.07)), Vector3(0.0, 0.05, 1.03), dark)
+		_add_weapon_part(_box(Vector3(0.14, 0.28, 0.16)), Vector3(0.0, -0.21, 0.23), dark, Vector3(-0.18, 0.0, 0.0))
+		_add_weapon_part(_box(Vector3(0.15, 0.32, 0.18)), Vector3(0.0, -0.23, -0.04), ceramic, Vector3(-0.12, 0.0, 0.0))
+		_add_weapon_part(_box(Vector3(0.18, 0.05, 0.20)), Vector3(0.0, -0.40, -0.04), dark)
+		_add_weapon_part(_box(Vector3(0.24, 0.17, 0.70)), Vector3(0.0, 0.03, -0.72), ceramic)
+		_add_weapon_part(_box(Vector3(0.27, 0.045, 0.72)), Vector3(0.0, 0.14, -0.72), dark)
+		for index in 6:
+			_rail_slots.append(_add_weapon_part(_box(Vector3(0.29, 0.035, 0.055)), Vector3(0.0, 0.18, -0.42 - index * 0.12), dark))
+		_add_weapon_part(_box(Vector3(0.27, 0.09, 0.12)), Vector3(0.0, 0.02, -1.10), dark)
+		_add_weapon_part(_cylinder(0.035, 0.035, 0.52), Vector3(0.0, 0.02, -1.28), dark, Vector3(PI * 0.5, 0.0, 0.0))
+		_add_weapon_part(_cylinder(0.067, 0.067, 0.13), Vector3(0.0, 0.02, -1.57), ceramic, Vector3(PI * 0.5, 0.0, 0.0))
+		_add_weapon_part(_box(Vector3(0.05, 0.12, 0.10)), Vector3(0.0, 0.22, -0.24), dark)
+		_add_weapon_part(_box(Vector3(0.055, 0.15, 0.09)), Vector3(0.0, 0.22, -1.06), dark)
+		# A small team-neutral signal component is the only warm accent on the carbine.
+		_weapon_core = _add_weapon_part(_box(Vector3(0.10, 0.08, 0.14)), Vector3(0.16, 0.08, -0.54), accent)
+		_muzzle_flare = _add_weapon_part(_box(Vector3(0.11, 0.11, 0.16)), Vector3(0.0, 0.02, -1.65), hot)
 	else:
 		_weapon_mesh = _add_weapon_part(_box(Vector3(0.27, 0.25, 0.58)), Vector3(0.0, 0.0, 0.05), ceramic)
 		_add_weapon_part(_box(Vector3(0.34, 0.12, 0.32)), Vector3(0.0, 0.0, -0.32), dark, Vector3(0.0, 0.0, 0.12))
 		_weapon_core = _add_weapon_part(_cylinder(0.045, 0.045, 0.2), Vector3(0.0, 0.0, -0.46), hot, Vector3(PI * 0.5, 0.0, 0.0))
 		for index in 5:
-			_pressure_ports.append(_add_weapon_part(_cylinder(0.026, 0.026, 0.1), Vector3(-0.1 + index * 0.05, -0.15, -0.23), accent, Vector3(PI * 0.5, 0.0, 0.0)))
+			_rail_slots.append(_add_weapon_part(_cylinder(0.026, 0.026, 0.1), Vector3(-0.1 + index * 0.05, -0.15, -0.23), accent, Vector3(PI * 0.5, 0.0, 0.0)))
 		_add_weapon_part(_box(Vector3(0.07, 0.3, 0.08)), Vector3(0.14, 0.0, -0.04), accent, Vector3(0.0, 0.0, 0.32))
-	_muzzle_flare = _add_weapon_part(_box(Vector3(0.18, 0.18, 0.08)), Vector3(0.0, 0.0, -0.65), hot)
+		_muzzle_flare = _add_weapon_part(_box(Vector3(0.18, 0.18, 0.08)), Vector3(0.0, 0.0, -0.65), hot)
 	_muzzle_flare.scale = Vector3.ONE * 0.001
-	if weapon == Weapon.PULSE:
-		_muzzle_flare = _add_weapon_part(_box(Vector3(0.12, 0.12, 0.12)), Vector3(0.0, 0.0, -0.57), hot)
-		_muzzle_flare.scale = Vector3.ONE * 0.001
 
 func _add_weapon_part(mesh: Mesh, position: Vector3, material: Material, rotation: Vector3 = Vector3.ZERO) -> MeshInstance3D:
 	var instance := MeshInstance3D.new()

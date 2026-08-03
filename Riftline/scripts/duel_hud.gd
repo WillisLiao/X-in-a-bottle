@@ -13,8 +13,12 @@ var movement := Vector2.ZERO
 var fire_held := false
 var aim_held := false
 var health := 100.0
+var magazine_rounds := Duelist.M4_MAGAZINE_SIZE
+var reserve_ammo := Duelist.M4_RESERVE_AMMO
+var reload_remaining := 0.0
 var damage_flash := 0.0
 var hit_confirm := 0.0
+var primary_fire_bloom := 0.0
 var camera_sensitivity := 1.0
 var ads_sensitivity := 0.72
 var gyro_enabled := false
@@ -24,6 +28,7 @@ var _jump_requested := false
 var _crouch_requested := false
 var _prone_requested := false
 var _weapon_switch_requested := false
+var _reload_requested := false
 var _left_touch := -1
 var _right_touch := -1
 var _left_fire_touch := -1
@@ -72,6 +77,7 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	damage_flash = maxf(0.0, damage_flash - delta * 2.8)
 	hit_confirm = maxf(0.0, hit_confirm - delta * 6.5)
+	primary_fire_bloom = maxf(0.0, primary_fire_bloom - delta * 8.5)
 	_objective_message_remaining = maxf(0.0, _objective_message_remaining - delta)
 	_score_pulse = maxf(0.0, _score_pulse - delta * 2.8)
 	if _objective_message_remaining <= 0.0:
@@ -104,6 +110,11 @@ func take_prone() -> bool:
 func take_weapon_switch() -> bool:
 	var requested := _weapon_switch_requested
 	_weapon_switch_requested = false
+	return requested
+
+func take_reload() -> bool:
+	var requested := _reload_requested
+	_reload_requested = false
 	return requested
 
 func set_score(sun: int, void_score: int) -> void:
@@ -140,6 +151,12 @@ func set_stance(stance: Duelist.Stance) -> void:
 
 func set_weapon(weapon: Duelist.Weapon) -> void:
 	_weapon = weapon
+
+func show_ammo(magazine: int, reserve: int, reload_time: float) -> void:
+	magazine_rounds = clampi(magazine, 0, Duelist.M4_MAGAZINE_SIZE)
+	reserve_ammo = clampi(reserve, 0, Duelist.M4_RESERVE_AMMO)
+	reload_remaining = maxf(0.0, reload_time)
+	queue_redraw()
 
 func open_settings() -> void:
 	_release_all_touch_ownership()
@@ -202,6 +219,10 @@ func show_hit_confirm() -> void:
 	hit_confirm = 1.0
 	queue_redraw()
 
+func show_primary_fire_feedback() -> void:
+	primary_fire_bloom = minf(1.0, primary_fire_bloom + 0.72)
+	queue_redraw()
+
 func _gui_input(event: InputEvent) -> void:
 	if _connection_flow_active:
 		return
@@ -231,7 +252,11 @@ func _gui_input(event: InputEvent) -> void:
 		elif _settings_open:
 			_handle_settings_touch(event.position, event.pressed)
 		else:
-			fire_held = event.pressed
+			if event.pressed and _pressed_circle(event.position, _reload_center(), _reload_radius() + 12.0):
+				_reload_requested = true
+				fire_held = false
+			else:
+				fire_held = event.pressed
 	elif event is InputEventMouseMotion:
 		if _layout_editor and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 			_handle_editor_drag(0, event.position)
@@ -246,6 +271,9 @@ func _handle_touch(index: int, point: Vector2, pressed: bool) -> void:
 		open_settings()
 		return
 	if not _combat_input_enabled:
+		return
+	if _pressed_circle(point, _reload_center(), _reload_radius() + 12.0):
+		_reload_requested = true
 		return
 	var key := _layout_key_at(point)
 	if key == "move":
@@ -340,6 +368,7 @@ func _release_all_touch_ownership() -> void:
 	_crouch_requested = false
 	_prone_requested = false
 	_weapon_switch_requested = false
+	_reload_requested = false
 
 func _draw() -> void:
 	if _layout_editor:
@@ -354,11 +383,14 @@ func _draw_gameplay_hud() -> void:
 	var enemy := Color("71cfff")
 	var center := size * 0.5
 
-	# The reticle stays clean so that finger controls never compete with target acquisition.
-	draw_arc(center, 14.0, 0.12, 1.24, 12, Color(friendly, 0.9), 2.0)
-	draw_arc(center, 14.0, 3.26, 4.38, 12, Color(friendly, 0.9), 2.0)
-	draw_line(center + Vector2(-25, 0), center + Vector2(-10, 0), Color(friendly, 0.86), 2.0)
-	draw_line(center + Vector2(10, 0), center + Vector2(25, 0), Color(friendly, 0.86), 2.0)
+	# The reticle stays clean for touch aiming, with a short directional bloom that recovers quickly.
+	var bloom_radius := 14.0 + primary_fire_bloom * 3.0
+	var bloom_gap := 10.0 + primary_fire_bloom * 4.0
+	var bloom_span := 25.0 + primary_fire_bloom * 6.0
+	draw_arc(center, bloom_radius, 0.12, 1.24, 12, Color(friendly, 0.9), 2.0)
+	draw_arc(center, bloom_radius, 3.26, 4.38, 12, Color(friendly, 0.9), 2.0)
+	draw_line(center + Vector2(-bloom_span, 0), center + Vector2(-bloom_gap, 0), Color(friendly, 0.86), 2.0)
+	draw_line(center + Vector2(bloom_gap, 0), center + Vector2(bloom_span, 0), Color(friendly, 0.86), 2.0)
 	if hit_confirm > 0.0:
 		var confirm_color := Color("fff0b0", 0.95 * hit_confirm)
 		var confirm_radius := 23.0 + (1.0 - hit_confirm) * 7.0
@@ -383,6 +415,8 @@ func _draw_gameplay_hud() -> void:
 	_draw_button("crouch", friendly, _stance == Duelist.Stance.CROUCH)
 	_draw_button("prone", friendly, _stance == Duelist.Stance.PRONE)
 	_draw_button("swap", Color("c292ff"), _switch_touch >= 0)
+	if _weapon == Duelist.Weapon.PULSE:
+		_draw_button_fixed(_reload_center(), _reload_radius(), Color("e6a25b"), reload_remaining > 0.0, "RELOAD")
 	_draw_weapon_indicator(friendly)
 	_draw_button_fixed(_settings_center(), 24.0, enemy, _settings_open, "SET")
 
@@ -459,6 +493,12 @@ func _draw_weapon_indicator(color: Color) -> void:
 		draw_line(center + Vector2(14, -4), center + Vector2(23, -11), color, 3.0)
 		draw_line(center + Vector2(14, 4), center + Vector2(23, 11), color, 3.0)
 		draw_circle(center + Vector2(-8, 0), 3.0, Color("fff0b0"))
+		var font := ThemeDB.fallback_font
+		var ammo_label := "%02d / %02d" % [magazine_rounds, reserve_ammo]
+		var ammo_width := font.get_string_size(ammo_label, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
+		draw_string(font, center + Vector2(-ammo_width * 0.5, -29.0), ammo_label, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(color, 0.96))
+		if reload_remaining > 0.0:
+			draw_string(font, center + Vector2(-32.0, 43.0), "LOADING", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("fff0b0", 0.94))
 	else:
 		for offset in [-10.0, -5.0, 0.0, 5.0, 10.0]:
 			draw_circle(center + Vector2(offset, 0), 3.8, Color("c292ff"))
@@ -745,6 +785,13 @@ func _safe_rect() -> Rect2:
 func _settings_center() -> Vector2:
 	var safe := _safe_rect()
 	return Vector2(safe.end.x - 42.0, safe.position.y + 42.0)
+
+func _reload_center() -> Vector2:
+	var safe := _safe_rect()
+	return Vector2(safe.end.x - 390.0, safe.end.y - 84.0)
+
+func _reload_radius() -> float:
+	return 34.0
 
 func _control_specs() -> Dictionary:
 	return {

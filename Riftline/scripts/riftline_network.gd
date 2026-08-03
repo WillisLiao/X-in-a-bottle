@@ -350,7 +350,7 @@ func _validate_input(peer_id: int, frame: Dictionary) -> Dictionary:
 	var pitch := clampf(float(frame.pitch), -1.05, 0.9)
 	if _last_input_view.has(peer_id) and absf(angle_difference(float(_last_input_view[peer_id]), yaw)) > MAX_VIEW_TURN_PER_FRAME:
 		return {}
-	for key in ["aim", "fire", "jump", "crouch", "prone", "weapon_switch"]:
+	for key in ["aim", "fire", "jump", "crouch", "prone", "weapon_switch", "reload"]:
 		if not frame.has(key) or typeof(frame[key]) != TYPE_BOOL:
 			return {}
 	return {
@@ -365,6 +365,7 @@ func _validate_input(peer_id: int, frame: Dictionary) -> Dictionary:
 		"crouch": bool(frame.crouch),
 		"prone": bool(frame.prone),
 		"weapon_switch": bool(frame.weapon_switch),
+		"reload": bool(frame.reload),
 	}
 
 func _is_finite_number(value: Variant) -> bool:
