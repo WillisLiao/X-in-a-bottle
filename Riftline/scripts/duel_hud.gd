@@ -14,6 +14,7 @@ var fire_held := false
 var aim_held := false
 var health := 100.0
 var damage_flash := 0.0
+var hit_confirm := 0.0
 var camera_sensitivity := 1.0
 var ads_sensitivity := 0.72
 var gyro_enabled := false
@@ -65,6 +66,7 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	damage_flash = maxf(0.0, damage_flash - delta * 2.8)
+	hit_confirm = maxf(0.0, hit_confirm - delta * 6.5)
 	_connection_message_remaining = maxf(0.0, _connection_message_remaining - delta)
 	if _connection_message_remaining <= 0.0:
 		_connection_message = ""
@@ -161,6 +163,10 @@ func take_rematch() -> bool:
 func show_damage(current_health: float) -> void:
 	health = current_health
 	damage_flash = 1.0
+
+func show_hit_confirm() -> void:
+	hit_confirm = 1.0
+	queue_redraw()
 
 func _gui_input(event: InputEvent) -> void:
 	if _connection_flow_active:
@@ -319,6 +325,14 @@ func _draw_gameplay_hud() -> void:
 	draw_arc(center, 14.0, 3.26, 4.38, 12, Color(friendly, 0.9), 2.0)
 	draw_line(center + Vector2(-25, 0), center + Vector2(-10, 0), Color(friendly, 0.86), 2.0)
 	draw_line(center + Vector2(10, 0), center + Vector2(25, 0), Color(friendly, 0.86), 2.0)
+	if hit_confirm > 0.0:
+		var confirm_color := Color("fff0b0", 0.95 * hit_confirm)
+		var confirm_radius := 23.0 + (1.0 - hit_confirm) * 7.0
+		for angle in [0.0, PI * 0.5, PI, PI * 1.5]:
+			var direction := Vector2.RIGHT.rotated(angle)
+			var inner := center + direction * (confirm_radius - 7.0)
+			var outer := center + direction * confirm_radius
+			draw_line(inner, outer, confirm_color, 2.5)
 
 	var stick_center := _control_center("move")
 	var stick_radius := _control_radius("move")
@@ -379,10 +393,14 @@ func _draw_weapon_indicator(color: Color) -> void:
 	draw_rect(Rect2(center - Vector2(34, 20), Vector2(68, 40)), Color("071126", 0.58), true)
 	draw_arc(center, 30.0, 0.0, TAU, 24, Color(color, 0.92), 2.0)
 	if _weapon == Duelist.Weapon.PULSE:
-		draw_rect(Rect2(center - Vector2(16, 4), Vector2(32, 8)), color)
+		draw_rect(Rect2(center - Vector2(15, 4), Vector2(30, 8)), color)
+		draw_line(center + Vector2(14, -4), center + Vector2(23, -11), color, 3.0)
+		draw_line(center + Vector2(14, 4), center + Vector2(23, 11), color, 3.0)
+		draw_circle(center + Vector2(-8, 0), 3.0, Color("fff0b0"))
 	else:
-		for offset in [-10.0, 0.0, 10.0]:
-			draw_circle(center + Vector2(offset, 0), 5.0, Color("c292ff"))
+		for offset in [-10.0, -5.0, 0.0, 5.0, 10.0]:
+			draw_circle(center + Vector2(offset, 0), 3.8, Color("c292ff"))
+		draw_line(center + Vector2(15, -10), center + Vector2(15, 10), Color("d8c4ff"), 3.0)
 
 func _draw_match_result() -> void:
 	var accent := Color("ffad5d") if _match_result_victory else Color("71cfff")

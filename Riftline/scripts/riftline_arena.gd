@@ -47,6 +47,7 @@ var _capture_hud_layout := false
 var _capture_character := false
 var _capture_overview := false
 var _capture_rift_link := false
+var _presentation_effects: Node3D
 
 func _ready() -> void:
 	_build_network()
@@ -150,6 +151,10 @@ func _build_environment() -> void:
 	add_child(fill)
 
 func _build_arena() -> void:
+	if _presentation_enabled:
+		_presentation_effects = Node3D.new()
+		_presentation_effects.name = "PresentationEffects"
+		add_child(_presentation_effects)
 	_add_solid_box(Vector3(0, -0.5, 0), Vector3(44, 1, 32), Color("3d547c"), 0.0)
 	_add_solid_box(Vector3(0, 3, -16), Vector3(44, 6, 1), Color("28496e"), 0.0)
 	_add_solid_box(Vector3(0, 3, 16), Vector3(44, 6, 1), Color("28496e"), 0.0)
@@ -167,6 +172,7 @@ func _build_arena() -> void:
 	_add_emissive_rail(Vector3(0, 0.06, 10), Vector3(28, 0.08, 0.08), Color("f4a55e"))
 	_add_emissive_rail(Vector3(-15, 0.06, 0), Vector3(0.08, 0.08, 20), Color("a7dced"))
 	_add_emissive_rail(Vector3(15, 0.06, 0), Vector3(0.08, 0.08, 20), Color("f4a55e"))
+	_build_landmarks()
 
 func _build_match() -> void:
 	director = MatchDirector.new()
@@ -242,12 +248,15 @@ func _on_score_changed(sun: int, void_score: int) -> void:
 		network.publish_event({"type": "score", "sun": sun, "void": void_score})
 
 func _on_match_finished(winner: Duelist.Team) -> void:
+	_clear_presentation_effects()
 	if hud != null:
 		hud.show_match_result(winner)
 	if _lan_host:
 		network.publish_event({"type": "finished", "winner": int(winner)})
 
 func _on_phase_changed(phase: MatchDirector.Phase) -> void:
+	if phase != MatchDirector.Phase.LIVE:
+		_clear_presentation_effects()
 	_lan_phase = phase
 	if phase != MatchDirector.Phase.LIVE:
 		_remote_input.clear()
@@ -259,19 +268,22 @@ func _on_phase_changed(phase: MatchDirector.Phase) -> void:
 	if _lan_host:
 		network.publish_event({"type": "phase", "phase": int(phase)})
 
-func _show_shot(origin: Vector3, end: Vector3, team: Duelist.Team) -> void:
-	var beam := MeshInstance3D.new()
-	var mesh := CylinderMesh.new()
-	mesh.top_radius = 0.025
-	mesh.bottom_radius = 0.025
-	mesh.height = origin.distance_to(end)
-	beam.mesh = mesh
-	beam.material_override = _pulp_material(Color("ffb15c") if team == Duelist.Team.SUN else Color("75dbff"), 6.0)
-	beam.position = origin.lerp(end, 0.5)
-	add_child(beam)
-	beam.look_at(end, Vector3.UP)
-	beam.rotate_object_local(Vector3.RIGHT, PI * 0.5)
-	_remove_beam(beam)
+func _show_shot(origin: Vector3, end: Vector3, team: Duelist.Team, fired_weapon: Duelist.Weapon, hit_target: bool) -> void:
+	if not _presentation_enabled:
+		return
+	_play_shooter_fire(team, fired_weapon)
+	if team == _local_team and hit_target and hud != null:
+		hud.show_hit_confirm()
+	var accent := Color("ffb15c") if team == Duelist.Team.SUN else Color("75dbff")
+	if fired_weapon == Duelist.Weapon.PULSE:
+		for segment in 3:
+			var start := origin.lerp(end, float(segment) / 3.0)
+			var finish := origin.lerp(end, float(segment + 1) / 3.0)
+			_spawn_beam(start, finish, accent, 0.018, 0.065)
+		_spawn_impact(end, accent, 0.075, 0.08)
+	else:
+		_spawn_beam(origin, end, accent.lerp(Color("f4e3ff"), 0.35), 0.036, 0.09)
+		_spawn_impact(end, accent, 0.15, 0.12)
 
 func _on_rift_link_requested() -> void:
 	hud.set_connection_flow_active(true)
@@ -429,7 +441,7 @@ func _on_network_event(event: Dictionary, sender_id: int) -> void:
 		"defeat":
 			_apply_client_defeat(int(event.get("victim", int(Duelist.Team.SUN))))
 		"shot":
-			_show_shot(event.get("origin", Vector3.ZERO), event.get("end", Vector3.ZERO), int(event.get("team", int(Duelist.Team.SUN))) as Duelist.Team)
+			_show_shot(event.get("origin", Vector3.ZERO), event.get("end", Vector3.ZERO), int(event.get("team", int(Duelist.Team.SUN))) as Duelist.Team, int(event.get("weapon", int(Duelist.Weapon.PULSE))) as Duelist.Weapon, bool(event.get("hit", false)))
 		"spawn":
 			_apply_client_spawn(int(event.get("team", int(Duelist.Team.SUN))))
 
@@ -690,16 +702,17 @@ func _on_team_assigned(team_value: int) -> void:
 	if _lan_active and not _lan_host and not _dedicated_server and player != null and player.team != _local_team:
 		_replace_match_for_lan(false)
 
-func _on_authoritative_shot(origin: Vector3, end: Vector3, team: Duelist.Team) -> void:
+func _on_authoritative_shot(origin: Vector3, end: Vector3, team: Duelist.Team, fired_weapon: Duelist.Weapon, hit_target: bool) -> void:
 	if _presentation_enabled:
-		_show_shot(origin, end, team)
-	network.publish_event({"type": "shot", "origin": origin, "end": end, "team": int(team)})
+		_show_shot(origin, end, team, fired_weapon, hit_target)
+	network.publish_event({"type": "shot", "origin": origin, "end": end, "team": int(team), "weapon": int(fired_weapon), "hit": hit_target})
 
 func _on_lan_defeat(victim: Duelist, killer: Duelist) -> void:
 	if _lan_host:
 		network.publish_event({"type": "defeat", "victim": int(victim.team), "killer": int(killer.team)})
 
 func _on_lan_respawn_started(victim: Duelist) -> void:
+	_clear_presentation_effects()
 	if _lan_host:
 		network.publish_event({"type": "spawn", "team": int(victim.team)})
 
@@ -709,6 +722,7 @@ func _apply_client_defeat(team_value: int) -> void:
 		victim.apply_presentation_state({"health": 0.0, "eliminated": true})
 
 func _apply_client_spawn(team_value: int) -> void:
+	_clear_presentation_effects()
 	var target_team := team_value as Duelist.Team
 	var target := player if target_team == _local_team else remote_duelist
 	if target == null:
@@ -728,6 +742,7 @@ func _apply_client_spawn(team_value: int) -> void:
 		_pending_inputs.clear()
 
 func _restore_offline_training(message: String) -> void:
+	_clear_presentation_effects()
 	_lan_active = false
 	_lan_host = false
 	_lan_peer_ready = false
@@ -766,9 +781,107 @@ func _discrete_input(frame: Dictionary) -> Dictionary:
 		"weapon_switch": bool(frame.get("weapon_switch", false)),
 	}
 
-func _remove_beam(beam: MeshInstance3D) -> void:
-	await get_tree().create_timer(0.055).timeout
-	beam.queue_free()
+func _play_shooter_fire(team: Duelist.Team, fired_weapon: Duelist.Weapon) -> void:
+	if player != null and player.team == team:
+		player.play_local_weapon_fire(fired_weapon)
+		return
+	if remote_duelist != null and remote_duelist.team == team:
+		remote_duelist.play_remote_weapon_fire(fired_weapon)
+		return
+	if bot != null and bot.team == team:
+		bot.play_remote_weapon_fire(fired_weapon)
+
+func _spawn_beam(origin: Vector3, end: Vector3, color: Color, radius: float, lifetime: float) -> void:
+	if _presentation_effects == null or origin.distance_squared_to(end) < 0.0001:
+		return
+	var beam := MeshInstance3D.new()
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = radius
+	mesh.bottom_radius = radius
+	mesh.height = origin.distance_to(end)
+	beam.mesh = mesh
+	beam.material_override = _pulp_material(color, 5.5)
+	beam.position = origin.lerp(end, 0.5)
+	_presentation_effects.add_child(beam)
+	beam.look_at(end, Vector3.UP)
+	beam.rotate_object_local(Vector3.RIGHT, PI * 0.5)
+	_remove_presentation_node(beam, lifetime)
+
+func _spawn_impact(point: Vector3, color: Color, radius: float, lifetime: float) -> void:
+	if _presentation_effects == null:
+		return
+	var impact := MeshInstance3D.new()
+	var mesh := SphereMesh.new()
+	mesh.radius = radius
+	mesh.height = radius * 2.0
+	impact.mesh = mesh
+	impact.material_override = _pulp_material(color, 5.0)
+	impact.position = point
+	impact.scale = Vector3(1.0, 1.0, 0.42)
+	_presentation_effects.add_child(impact)
+	_remove_presentation_node(impact, lifetime)
+
+func _remove_presentation_node(node: Node, lifetime: float) -> void:
+	await get_tree().create_timer(lifetime).timeout
+	if is_instance_valid(node):
+		node.queue_free()
+
+func _clear_presentation_effects() -> void:
+	if _presentation_effects == null:
+		return
+	for child in _presentation_effects.get_children():
+		child.queue_free()
+
+func _build_landmarks() -> void:
+	if not _presentation_enabled:
+		return
+	# These are callout shapes, not cover. Their narrow footprint keeps the proven collision and sight-line layout intact.
+	var sun_root := Node3D.new()
+	sun_root.position = Vector3(-17.0, 0.0, -10.5)
+	add_child(sun_root)
+	_add_landmark_part(sun_root, _box_mesh(Vector3(0.16, 5.2, 0.16)), Vector3.ZERO, Color("d6ad67"), Vector3(0.0, 0.0, -0.12))
+	_add_landmark_part(sun_root, _box_mesh(Vector3(1.65, 0.08, 0.08)), Vector3(0.35, 2.45, 0.0), Color("d6ad67"), Vector3(0.0, 0.0, 0.18))
+	_add_landmark_part(sun_root, _box_mesh(Vector3(0.08, 1.3, 0.08)), Vector3(0.72, 2.12, 0.0), Color("ffb15c"), Vector3(0.0, 0.0, -0.26), 2.8)
+	_add_landmark_part(sun_root, _cylinder_mesh(0.72, 0.72, 0.06), Vector3(0.38, 1.85, 0.0), Color("ffb15c"), Vector3.ZERO, 3.2)
+
+	var void_root := Node3D.new()
+	void_root.position = Vector3(17.0, 0.0, 10.5)
+	add_child(void_root)
+	_add_landmark_part(void_root, _box_mesh(Vector3(0.16, 5.0, 0.16)), Vector3.ZERO, Color("91b8d3"), Vector3(0.0, 0.0, 0.16))
+	_add_landmark_part(void_root, _box_mesh(Vector3(1.9, 0.1, 0.08)), Vector3(-0.32, 2.4, 0.0), Color("91b8d3"), Vector3(0.0, 0.0, -0.22))
+	_add_landmark_part(void_root, _box_mesh(Vector3(0.72, 0.05, 0.42)), Vector3(-0.86, 2.42, 0.0), Color("75dbff"), Vector3(0.0, 0.0, 0.08), 2.4)
+	_add_landmark_part(void_root, _cylinder_mesh(0.13, 0.13, 0.36), Vector3(0.0, 1.2, 0.0), Color("75dbff"), Vector3(PI * 0.5, 0.0, 0.0), 3.0)
+
+	for frame_data in [[Vector3(-1.8, 0.0, 1.8), -0.12], [Vector3(1.8, 0.0, -1.8), 0.12]]:
+		var frame := Node3D.new()
+		frame.position = frame_data[0]
+		frame.rotation.y = float(frame_data[1])
+		add_child(frame)
+		_add_landmark_part(frame, _box_mesh(Vector3(0.1, 4.0, 0.1)), Vector3(-0.75, 1.8, 0.0), Color("a7dced"))
+		_add_landmark_part(frame, _box_mesh(Vector3(0.1, 4.0, 0.1)), Vector3(0.75, 1.8, 0.0), Color("f4a55e"))
+		_add_landmark_part(frame, _box_mesh(Vector3(1.65, 0.1, 0.1)), Vector3(0.0, 3.72, 0.0), Color("dce9ef"), Vector3.ZERO, 0.8)
+	_add_emissive_rail(Vector3(0.0, 0.065, -7.0), Vector3(25.0, 0.035, 0.035), Color("8bb8d5"))
+	_add_emissive_rail(Vector3(0.0, 0.068, 7.0), Vector3(25.0, 0.035, 0.035), Color("d39a52"))
+
+func _add_landmark_part(parent: Node3D, mesh: Mesh, position: Vector3, color: Color, rotation: Vector3 = Vector3.ZERO, glow: float = 0.0) -> void:
+	var instance := MeshInstance3D.new()
+	instance.mesh = mesh
+	instance.position = position
+	instance.rotation = rotation
+	instance.material_override = _pulp_material(color, glow)
+	parent.add_child(instance)
+
+func _box_mesh(dimensions: Vector3) -> BoxMesh:
+	var mesh := BoxMesh.new()
+	mesh.size = dimensions
+	return mesh
+
+func _cylinder_mesh(top_radius: float, bottom_radius: float, height: float) -> CylinderMesh:
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = top_radius
+	mesh.bottom_radius = bottom_radius
+	mesh.height = height
+	return mesh
 
 func _add_solid_box(position: Vector3, dimensions: Vector3, color: Color, emission: float) -> void:
 	var body := StaticBody3D.new()
@@ -844,11 +957,15 @@ func _read_capture_arguments() -> void:
 		hud.open_hud_layout()
 	if _capture_character:
 		# This is a renderer-only inspection hook for silhouette review, not an alternate gameplay state.
-		bot.position = Vector3(-6.0, 0.1, 0.0)
+		bot.position = Vector3(-2.0, 0.1, 0.0)
+		bot.rotation.y = PI * 0.5
+		player.camera.cull_mask = 1
+		player.camera.global_position = Vector3(-8.0, 1.65, 0.0)
+		player.camera.look_at(bot.global_position + Vector3.UP * 0.9)
 		bot.set_physics_process(false)
 	if _capture_overview:
 		# A renderer-only inspection hook that lets captures verify both spawn halves at once.
-		player.camera.cull_mask = 1 | 2
+		player.camera.cull_mask = 1
 		player.camera.global_position = Vector3(0.0, 31.0, 27.0)
 		player.camera.look_at(Vector3(0.0, 0.0, 0.0))
 	if _capture_rift_link:

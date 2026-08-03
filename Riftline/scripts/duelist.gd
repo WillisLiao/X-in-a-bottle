@@ -4,7 +4,7 @@ extends CharacterBody3D
 const PULP_LIT := preload("res://shaders/pulp_lit.gdshader")
 
 signal defeated(victim: Duelist, killer: Duelist)
-signal shot(origin: Vector3, end: Vector3, team: Team)
+signal shot(origin: Vector3, end: Vector3, team: Team, weapon: Weapon, hit_target: bool)
 signal damaged(amount: float, remaining: float)
 
 enum Team { SUN, VOID }
@@ -31,7 +31,23 @@ var _collision: CollisionShape3D
 var _capsule: CapsuleShape3D
 var _torso: MeshInstance3D
 var _band: MeshInstance3D
+var _body_visual_root: Node3D
+var _weapon_root: Node3D
 var _weapon_mesh: MeshInstance3D
+var _weapon_core: MeshInstance3D
+var _muzzle_flare: MeshInstance3D
+var _pressure_ports: Array[MeshInstance3D] = []
+var _signal_spine: MeshInstance3D
+var _survey_frame: MeshInstance3D
+var _left_leg: Node3D
+var _right_leg: Node3D
+var _left_arm: Node3D
+var _right_arm: Node3D
+var _pose_distance := 0.0
+var _aiming := false
+var _recoil_remaining := 0.0
+var _fire_flash_remaining := 0.0
+var _damage_flash_remaining := 0.0
 var _local_camera := false
 var _render_visuals := true
 var _authoritative_collision := true
@@ -56,51 +72,106 @@ func build(assigned_team: Team, local_camera: bool, render_visuals: bool = true,
 	_collision.position.y = 0.9
 	add_child(_collision)
 
-	if _render_visuals:
-		_torso = MeshInstance3D.new()
-		var torso_mesh := BoxMesh.new()
-		torso_mesh.size = Vector3(0.66, 0.98, 0.42)
-		_torso.mesh = torso_mesh
-		_torso.position.y = 1.1
-		_torso.material_override = _material(_team_color(), 0.07)
-		_torso.layers = 2 if _local_camera else 1
-		add_child(_torso)
-
-		# The bright band makes opponents readable against the dark arena before any HUD is learned.
-		_band = MeshInstance3D.new()
-		var band_mesh := CylinderMesh.new()
-		band_mesh.top_radius = 0.51
-		band_mesh.bottom_radius = 0.51
-		band_mesh.height = 0.13
-		_band.mesh = band_mesh
-		_band.position.y = 1.18
-		_band.material_override = _material(_team_glow(), 0.6)
-		_band.layers = 2 if _local_camera else 1
-		add_child(_band)
-
 	head = Node3D.new()
 	head.name = "Head"
 	head.position = Vector3(0.0, 1.46, 0.0)
 	add_child(head)
 
-	if _render_visuals:
-		_weapon_mesh = MeshInstance3D.new()
-		var weapon_mesh := BoxMesh.new()
-		weapon_mesh.size = Vector3(0.13, 0.12, 0.56)
-		_weapon_mesh.mesh = weapon_mesh
-		_weapon_mesh.position = Vector3(0.38, -0.3, -0.82)
-		_weapon_mesh.material_override = _material(Color("304769"), 0.35)
-		head.add_child(_weapon_mesh)
-
 	if local_camera and _render_visuals:
 		camera = Camera3D.new()
 		camera.fov = 78.0
-		camera.cull_mask = 1
+		# World silhouettes live on layer 1; the local view model gets its own layer so it never leaks to another client.
+		camera.cull_mask = 1 | 2
 		camera.current = true
 		head.add_child(camera)
 
 	if _render_visuals:
-		_build_character_silhouette(local_camera)
+		if local_camera:
+			_build_first_person_weapon()
+		else:
+			_build_character_silhouette()
+			_build_world_weapon()
+		_rebuild_weapon_models()
+
+func _process(delta: float) -> void:
+	if not _render_visuals:
+		return
+	_pose_distance += Vector2(velocity.x, velocity.z).length() * delta
+	_recoil_remaining = maxf(0.0, _recoil_remaining - delta)
+	_fire_flash_remaining = maxf(0.0, _fire_flash_remaining - delta)
+	_damage_flash_remaining = maxf(0.0, _damage_flash_remaining - delta)
+	var moving := Vector2(velocity.x, velocity.z).length() > 0.35
+	var gait := sin(_pose_distance * 1.35) if moving else 0.0
+	var gait_lag := cos(_pose_distance * 1.35) if moving else 0.0
+	var airborne := clampf(velocity.y / JUMP_SPEED, -1.0, 1.0)
+	var firing_pose := clampf(_recoil_remaining / 0.22, 0.0, 1.0)
+	if _torso != null:
+		_torso.position.y = 1.03 + absf(gait) * (0.018 if moving else 0.0)
+		_torso.rotation.z = gait_lag * (0.035 if moving else 0.0)
+	if _band != null:
+		_band.position.y = 1.18
+		_band.scale = Vector3.ONE * (1.0 + (_damage_flash_remaining / 0.16) * 0.08)
+	if _left_leg != null:
+		_left_leg.rotation.x = gait * (0.17 if stance == Stance.STAND else 0.07)
+	if _right_leg != null:
+		_right_leg.rotation.x = -gait * (0.17 if stance == Stance.STAND else 0.07)
+	if _left_arm != null:
+		_left_arm.rotation.x = -gait * 0.09
+		_left_arm.rotation.z = airborne * 0.08 - firing_pose * 0.05
+	if _right_arm != null:
+		_right_arm.rotation.x = gait * 0.09
+		_right_arm.rotation.z = -airborne * 0.08 + firing_pose * 0.05
+	if _survey_frame != null:
+		_survey_frame.rotation.z = -gait_lag * 0.025
+	if _weapon_root != null:
+		var hip := Vector3(0.28, -0.27, -1.12)
+		var ads := Vector3(0.075, -0.19, -1.05)
+		var target := ads if _aiming and _local_camera else hip
+		_weapon_root.position = _weapon_root.position.lerp(target, clampf(delta * 14.0, 0.0, 1.0))
+		_weapon_root.rotation.x = lerpf(_weapon_root.rotation.x, -_recoil_remaining * (0.75 if weapon == Weapon.PULSE else 1.15), clampf(delta * 20.0, 0.0, 1.0))
+	if _muzzle_flare != null:
+		var flare := clampf(_fire_flash_remaining / 0.075, 0.0, 1.0)
+		_muzzle_flare.scale = Vector3.ONE * flare
+	if _weapon_core != null and weapon == Weapon.PULSE:
+		_weapon_core.position.z = -0.08 - (_recoil_remaining / 0.12) * 0.08
+	if not _pressure_ports.is_empty():
+		var sequence := clampf((0.12 - _fire_flash_remaining) / 0.12 * 6.0, 0.0, 6.0)
+		for index in _pressure_ports.size():
+			_set_material_glow(_pressure_ports[index], 0.45 if index >= sequence else 2.0)
+	_set_material_glow(_band, 1.35 if _damage_flash_remaining > 0.0 else 0.6)
+
+func set_weapon_presentation(next_weapon: Weapon) -> void:
+	var clamped := clampi(int(next_weapon), int(Weapon.PULSE), int(Weapon.SCATTER)) as Weapon
+	if weapon == clamped and _weapon_mesh != null:
+		return
+	weapon = clamped
+	_recoil_remaining = 0.0
+	_fire_flash_remaining = 0.0
+	_rebuild_weapon_models()
+
+func play_local_weapon_fire(fired_weapon: Weapon) -> void:
+	_play_weapon_fire(fired_weapon)
+
+func play_remote_weapon_fire(fired_weapon: Weapon) -> void:
+	_play_weapon_fire(fired_weapon)
+
+func _play_weapon_fire(fired_weapon: Weapon) -> void:
+	if not _render_visuals:
+		return
+	if weapon != fired_weapon:
+		set_weapon_presentation(fired_weapon)
+	_recoil_remaining = 0.12 if fired_weapon == Weapon.PULSE else 0.22
+	_fire_flash_remaining = 0.075 if fired_weapon == Weapon.PULSE else 0.12
+	if _weapon_core != null:
+		_set_material_glow(_weapon_core, 5.0 if fired_weapon == Weapon.PULSE else 2.8)
+	if _muzzle_flare != null:
+		_set_material_glow(_muzzle_flare, 8.0 if fired_weapon == Weapon.PULSE else 4.0)
+
+func apply_damage_presentation(_amount: float, _remaining: float) -> void:
+	if not _render_visuals:
+		return
+	_damage_flash_remaining = 0.16
+	_set_material_glow(_band, 1.35)
 
 func apply_look(delta: Vector2) -> void:
 	if eliminated:
@@ -199,8 +270,7 @@ func apply_presentation_state(state: Dictionary) -> void:
 		_apply_stance(next_stance as Stance)
 	var next_weapon := clampi(int(state.get("weapon", int(weapon))), int(Weapon.PULSE), int(Weapon.SCATTER))
 	if weapon != next_weapon:
-		weapon = next_weapon as Weapon
-		_update_weapon_mesh()
+		set_weapon_presentation(next_weapon as Weapon)
 	eliminated = bool(state.get("eliminated", eliminated))
 	visible = not eliminated
 	collision_layer = 0 if eliminated or not _authoritative_collision else 2
@@ -272,11 +342,8 @@ func _apply_stance(next_stance: Stance) -> void:
 	_capsule.height = body_height
 	_capsule.radius = body_radius
 	_collision.position.y = body_height * 0.5
-	if _torso != null:
-		_torso.position.y = body_height * 0.61
-		_torso.scale.y = body_height / 1.75
-	if _band != null:
-		_band.position.y = body_height * 0.63
+	if _body_visual_root != null:
+		_body_visual_root.scale.y = body_height / 1.8
 	head.position.y = body_height - 0.34
 
 func toggle_crouch() -> void:
@@ -288,6 +355,7 @@ func toggle_prone() -> void:
 func set_combat_pose(aiming: bool, delta: float) -> void:
 	if eliminated:
 		return
+	_aiming = aiming
 	if camera != null:
 		camera.fov = lerpf(camera.fov, 56.0 if aiming else 78.0, minf(1.0, delta * 13.0))
 
@@ -325,19 +393,13 @@ func fire_at(target: Vector3) -> void:
 func switch_weapon() -> void:
 	if eliminated or not match_active:
 		return
-	weapon = Weapon.SCATTER if weapon == Weapon.PULSE else Weapon.PULSE
-	_update_weapon_mesh()
-
-func _update_weapon_mesh() -> void:
-	if _weapon_mesh == null:
-		return
-	var color := Color("ffc05b") if weapon == Weapon.PULSE else Color("b479ff")
-	_weapon_mesh.material_override = _material(color, 0.65)
+	set_weapon_presentation(Weapon.SCATTER if weapon == Weapon.PULSE else Weapon.PULSE)
 
 func take_damage(amount: float, attacker: Duelist) -> void:
 	if eliminated or not match_active:
 		return
 	health = maxf(0.0, health - amount)
+	apply_damage_presentation(amount, health)
 	damaged.emit(amount, health)
 	if health <= 0.0:
 		eliminated = true
@@ -352,6 +414,11 @@ func respawn_at(point: Vector3) -> void:
 	eliminated = false
 	visible = true
 	collision_layer = 2
+	_aiming = false
+	_recoil_remaining = 0.0
+	_fire_flash_remaining = 0.0
+	_damage_flash_remaining = 0.0
+	set_weapon_presentation(Weapon.PULSE)
 	_apply_stance(Stance.STAND)
 
 func _fire_ray(origin: Vector3, direction: Vector3, damage: float, range: float = FIRE_RANGE) -> void:
@@ -359,12 +426,14 @@ func _fire_ray(origin: Vector3, direction: Vector3, damage: float, range: float 
 	query.exclude = [get_rid()]
 	var hit := get_world_3d().direct_space_state.intersect_ray(query)
 	var end := origin + direction * range
+	var hit_target := false
 	if not hit.is_empty():
 		end = hit.position
 		var collider: Object = hit.collider
 		if collider is Duelist:
+			hit_target = true
 			collider.take_damage(damage, self)
-	shot.emit(origin, end, team)
+	shot.emit(origin, end, team, weapon, hit_target)
 
 func _team_color() -> Color:
 	return Color("ef6b3f") if team == Team.SUN else Color("4ba9ff")
@@ -372,26 +441,27 @@ func _team_color() -> Color:
 func _team_glow() -> Color:
 	return Color("ffb15c") if team == Team.SUN else Color("7bdbff")
 
-func _build_character_silhouette(local_camera: bool) -> void:
-	# The body is a normal adult runner's frame, not an oversized mascot or a real-world military uniform.
+func _build_character_silhouette() -> void:
+	# Broad value groups and one asymmetric expedition tool make the adult frame readable without armor language.
+	_body_visual_root = Node3D.new()
+	_body_visual_root.name = "ExpeditionSilhouette"
+	add_child(_body_visual_root)
 	var cloth := _material(_team_color(), 0.0)
 	var dark := _material(Color("17263e"), 0.0)
 	var brass := _material(Color("d6ad67"), 0.0)
 	var glow := _material(_team_glow(), 1.4)
-	_add_body_part(_cylinder(0.15, 0.17, 0.76), Vector3(-0.19, 0.37, 0.02), dark, Vector3(0.0, 0.0, 0.02))
-	_add_body_part(_cylinder(0.15, 0.17, 0.76), Vector3(0.19, 0.37, 0.02), dark, Vector3(0.0, 0.0, -0.02))
-	_add_body_part(_box(Vector3(0.3, 0.16, 0.5)), Vector3(-0.19, 0.05, -0.08), dark)
-	_add_body_part(_box(Vector3(0.3, 0.16, 0.5)), Vector3(0.19, 0.05, -0.08), dark)
-	_add_body_part(_cylinder(0.11, 0.12, 0.72), Vector3(-0.48, 1.08, 0.0), cloth, Vector3(0.0, 0.0, -0.2))
-	_add_body_part(_cylinder(0.11, 0.12, 0.72), Vector3(0.48, 1.08, 0.0), cloth, Vector3(0.0, 0.0, 0.2))
-
-	if not local_camera:
-		var head_mesh := SphereMesh.new()
-		head_mesh.radius = 0.27
-		head_mesh.height = 0.52
-		_add_head_part(head_mesh, Vector3.ZERO, dark)
-		_add_head_part(_cylinder(0.33, 0.33, 0.08), Vector3(0.0, 0.22, 0.0), cloth)
-		_add_head_part(_box(Vector3(0.38, 0.1, 0.08)), Vector3(0.0, 0.0, -0.24), brass)
+	_torso = _add_body_part(_box(Vector3(0.68, 0.92, 0.42)), Vector3(0.0, 1.03, 0.03), cloth)
+	_left_leg = _add_body_part(_cylinder(0.15, 0.17, 0.76), Vector3(-0.19, 0.37, 0.02), dark, Vector3(0.0, 0.0, 0.02))
+	_right_leg = _add_body_part(_cylinder(0.15, 0.17, 0.76), Vector3(0.19, 0.37, 0.02), dark, Vector3(0.0, 0.0, -0.02))
+	_left_arm = _add_body_part(_cylinder(0.11, 0.12, 0.72), Vector3(-0.48, 1.08, 0.0), cloth, Vector3(0.0, 0.0, -0.2))
+	_right_arm = _add_body_part(_cylinder(0.11, 0.12, 0.72), Vector3(0.48, 1.08, 0.0), cloth, Vector3(0.0, 0.0, 0.2))
+	_band = _add_body_part(_cylinder(0.51, 0.51, 0.13), Vector3(0.0, 1.18, 0.0), glow)
+	var head_mesh := SphereMesh.new()
+	head_mesh.radius = 0.27
+	head_mesh.height = 0.52
+	_add_head_part(head_mesh, Vector3.ZERO, dark)
+	_add_head_part(_cylinder(0.33, 0.33, 0.08), Vector3(0.0, 0.22, 0.0), cloth)
+	_add_head_part(_box(Vector3(0.38, 0.1, 0.08)), Vector3(0.0, 0.0, -0.24), brass)
 
 	if team == Team.SUN:
 		_build_signal_hauler(cloth, dark, brass, glow)
@@ -399,28 +469,91 @@ func _build_character_silhouette(local_camera: bool) -> void:
 		_build_storm_surveyor(cloth, dark, brass, glow)
 
 func _build_signal_hauler(cloth: Material, dark: Material, brass: Material, glow: Material) -> void:
-	# The Sun courier carries a ceramic relay, with a long asymmetric coat panel that reads at combat distance.
+	# Rejected alternative: a symmetrical chest rig. The offset coat panel and forked aerial give the courier forward motion.
 	_add_body_part(_box(Vector3(0.66, 0.7, 0.09)), Vector3(-0.08, 0.91, -0.37), cloth, Vector3(0.0, 0.0, 0.08))
-	_add_body_part(_box(Vector3(0.58, 0.55, 0.2)), Vector3(0.0, 1.12, 0.34), dark)
-	_add_body_part(_cylinder(0.13, 0.13, 0.38), Vector3(0.0, 1.18, -0.42), glow, Vector3(PI * 0.5, 0.0, 0.0))
-	_add_body_part(_box(Vector3(0.1, 0.44, 0.12)), Vector3(-0.32, 1.14, 0.32), brass, Vector3(0.0, 0.0, 0.2))
+	_signal_spine = _add_body_part(_box(Vector3(0.12, 0.78, 0.16)), Vector3(0.0, 1.16, 0.34), dark)
+	_add_body_part(_box(Vector3(0.1, 0.5, 0.12)), Vector3(-0.32, 1.18, 0.33), brass, Vector3(0.0, 0.0, 0.2))
+	_add_body_part(_box(Vector3(0.08, 0.38, 0.08)), Vector3(0.0, 1.72, 0.36), brass, Vector3(0.0, 0.0, -0.28))
+	_add_body_part(_box(Vector3(0.42, 0.06, 0.08)), Vector3(0.0, 1.88, 0.36), brass, Vector3(0.0, 0.0, 0.18))
+	_add_body_part(_cylinder(0.13, 0.13, 0.38), Vector3(0.0, 1.17, -0.43), glow, Vector3(PI * 0.5, 0.0, 0.0))
 
 func _build_storm_surveyor(cloth: Material, dark: Material, brass: Material, glow: Material) -> void:
-	# The Void surveyor maps dangerous weather with a folded wind array, not a backpack or conventional armor.
+	# Rejected alternative: a tall hood. The lateral mantle and folded wind-array frame read as precise survey gear.
 	_add_body_part(_cylinder(0.16, 0.43, 0.82), Vector3(0.0, 0.88, -0.02), cloth)
-	_add_body_part(_box(Vector3(0.56, 0.52, 0.24)), Vector3(0.0, 1.2, 0.34), dark)
-	_add_body_part(_box(Vector3(0.08, 0.92, 0.36)), Vector3(0.0, 1.37, 0.47), cloth, Vector3(0.0, 0.0, 0.16))
+	_add_body_part(_box(Vector3(0.92, 0.12, 0.26)), Vector3(0.0, 1.36, 0.36), cloth, Vector3(0.0, 0.0, 0.08))
+	_survey_frame = _add_body_part(_box(Vector3(0.08, 0.92, 0.36)), Vector3(0.0, 1.37, 0.47), dark, Vector3(0.0, 0.0, 0.16))
 	_add_body_part(_box(Vector3(0.82, 0.08, 0.16)), Vector3(0.0, 1.62, 0.48), brass, Vector3(0.0, 0.0, 0.11))
+	_add_body_part(_box(Vector3(0.52, 0.05, 0.11)), Vector3(0.0, 1.87, 0.48), brass, Vector3(0.0, 0.0, -0.18))
 	_add_body_part(_cylinder(0.1, 0.1, 0.28), Vector3(0.0, 1.1, -0.43), glow, Vector3(PI * 0.5, 0.0, 0.0))
 
-func _add_body_part(mesh: Mesh, position: Vector3, material: Material, rotation: Vector3 = Vector3.ZERO) -> void:
+func _build_first_person_weapon() -> void:
+	_weapon_root = Node3D.new()
+	_weapon_root.name = "FirstPersonWeapon"
+	_weapon_root.position = Vector3(0.28, -0.27, -1.12)
+	_weapon_root.scale = Vector3.ONE * 0.5
+	camera.add_child(_weapon_root)
+
+func _build_world_weapon() -> void:
+	_weapon_root = Node3D.new()
+	_weapon_root.name = "WorldWeapon"
+	_weapon_root.position = Vector3(0.38, -0.27, -0.64)
+	_weapon_root.rotation_degrees = Vector3(-8.0, 0.0, 0.0)
+	head.add_child(_weapon_root)
+
+func _rebuild_weapon_models() -> void:
+	if _weapon_root == null:
+		return
+	for child in _weapon_root.get_children():
+		child.queue_free()
+	_weapon_mesh = null
+	_weapon_core = null
+	_muzzle_flare = null
+	_pressure_ports.clear()
+	var ceramic := _material(Color("71818a") if weapon == Weapon.PULSE else Color("687386"), 0.08)
+	var dark := _material(Color("17263e"), 0.0)
+	var accent := _material(Color("ffc05b") if weapon == Weapon.PULSE else Color("b479ff"), 0.6)
+	var hot := _material(Color("fff0b0") if weapon == Weapon.PULSE else Color("d3b2ff"), 3.2)
+	if weapon == Weapon.PULSE:
+		_weapon_mesh = _add_weapon_part(_box(Vector3(0.16, 0.14, 0.74)), Vector3(0.0, 0.0, 0.0), ceramic)
+		_add_weapon_part(_box(Vector3(0.12, 0.18, 0.42)), Vector3(0.0, -0.03, 0.27), dark)
+		_weapon_core = _add_weapon_part(_cylinder(0.055, 0.055, 0.34), Vector3(0.0, 0.0, -0.08), hot, Vector3(PI * 0.5, 0.0, 0.0))
+		_add_weapon_part(_box(Vector3(0.06, 0.08, 0.26)), Vector3(-0.075, 0.0, -0.39), accent, Vector3(0.0, 0.0, -0.12))
+		_add_weapon_part(_box(Vector3(0.06, 0.08, 0.26)), Vector3(0.075, 0.0, -0.39), accent, Vector3(0.0, 0.0, 0.12))
+	else:
+		_weapon_mesh = _add_weapon_part(_box(Vector3(0.27, 0.25, 0.58)), Vector3(0.0, 0.0, 0.05), ceramic)
+		_add_weapon_part(_box(Vector3(0.34, 0.12, 0.32)), Vector3(0.0, 0.0, -0.32), dark, Vector3(0.0, 0.0, 0.12))
+		_weapon_core = _add_weapon_part(_cylinder(0.045, 0.045, 0.2), Vector3(0.0, 0.0, -0.46), hot, Vector3(PI * 0.5, 0.0, 0.0))
+		for index in 5:
+			_pressure_ports.append(_add_weapon_part(_cylinder(0.026, 0.026, 0.1), Vector3(-0.1 + index * 0.05, -0.15, -0.23), accent, Vector3(PI * 0.5, 0.0, 0.0)))
+		_add_weapon_part(_box(Vector3(0.07, 0.3, 0.08)), Vector3(0.14, 0.0, -0.04), accent, Vector3(0.0, 0.0, 0.32))
+	_muzzle_flare = _add_weapon_part(_box(Vector3(0.18, 0.18, 0.08)), Vector3(0.0, 0.0, -0.65), hot)
+	_muzzle_flare.scale = Vector3.ONE * 0.001
+	if weapon == Weapon.PULSE:
+		_muzzle_flare = _add_weapon_part(_box(Vector3(0.12, 0.12, 0.12)), Vector3(0.0, 0.0, -0.57), hot)
+		_muzzle_flare.scale = Vector3.ONE * 0.001
+
+func _add_weapon_part(mesh: Mesh, position: Vector3, material: Material, rotation: Vector3 = Vector3.ZERO) -> MeshInstance3D:
 	var instance := MeshInstance3D.new()
 	instance.mesh = mesh
 	instance.position = position
 	instance.rotation = rotation
 	instance.material_override = material
 	instance.layers = 2 if _local_camera else 1
-	add_child(instance)
+	_weapon_root.add_child(instance)
+	return instance
+
+func _add_body_part(mesh: Mesh, position: Vector3, material: Material, rotation: Vector3 = Vector3.ZERO) -> MeshInstance3D:
+	var instance := MeshInstance3D.new()
+	instance.mesh = mesh
+	instance.position = position
+	instance.rotation = rotation
+	instance.material_override = material
+	instance.layers = 1
+	if _body_visual_root != null:
+		_body_visual_root.add_child(instance)
+	else:
+		add_child(instance)
+	return instance
 
 func _add_head_part(mesh: Mesh, position: Vector3, material: Material) -> void:
 	var instance := MeshInstance3D.new()
@@ -451,3 +584,8 @@ func _material(color: Color, emission_energy: float) -> ShaderMaterial:
 	material.set_shader_parameter("glow_strength", emission_energy)
 	material.set_shader_parameter("brush_scale", 2.4)
 	return material
+
+func _set_material_glow(instance: MeshInstance3D, glow: float) -> void:
+	if instance == null or not (instance.material_override is ShaderMaterial):
+		return
+	(instance.material_override as ShaderMaterial).set_shader_parameter("glow_strength", glow)
