@@ -48,6 +48,9 @@ var _prone_touch := -1
 var _switch_touch := -1
 var _sun_score := 0
 var _void_score := 0
+var _roster_state: Array[Dictionary] = []
+var _roster_local_team := int(Duelist.Team.SUN)
+var _squad_readability := false
 var _objective_state: Dictionary = {"state": int(RiftSeed.State.HOME), "carrier_id": "", "carrier_team": -1}
 var _objective_message := ""
 var _objective_message_remaining := 0.0
@@ -176,6 +179,14 @@ func set_touch_preview(preview: String) -> void:
 func set_score(sun: int, void_score: int) -> void:
 	_sun_score = clampi(sun, 0, 3)
 	_void_score = clampi(void_score, 0, 3)
+	queue_redraw()
+
+func set_roster_state(records: Array[Dictionary], local_team: int, squad_readability: bool) -> void:
+	_roster_state.clear()
+	for record in records:
+		_roster_state.append(record.duplicate(true))
+	_roster_local_team = local_team
+	_squad_readability = squad_readability
 	queue_redraw()
 
 func set_objective_state(state: Dictionary) -> void:
@@ -495,6 +506,8 @@ func _draw_gameplay_hud() -> void:
 	draw_rect(Rect2(safe.position + Vector2(10, 10), Vector2(health_width, 8)), Color("03101f", 0.72))
 	draw_rect(Rect2(safe.position + Vector2(10, 10), Vector2(health_width * health / 100.0, 8)), Color(friendly, 0.92))
 	_draw_objective_strip(safe, friendly, enemy)
+	if _squad_readability:
+		_draw_team_life_strip(safe, friendly, enemy)
 	if damage_flash > 0.0:
 		draw_rect(Rect2(Vector2.ZERO, size), Color(1.0, 0.18, 0.1, damage_flash * 0.16), false, 22.0)
 	if _match_result_visible:
@@ -532,6 +545,38 @@ func _draw_objective_strip(safe: Rect2, friendly: Color, enemy: Color) -> void:
 	if state == RiftSeed.State.DROPPED:
 		objective_accent = Color("fff0b0")
 	_draw_seed_glyph(center, objective_accent, state == RiftSeed.State.CARRIED)
+
+func _draw_team_life_strip(safe: Rect2, friendly: Color, enemy: Color) -> void:
+	var center := Vector2(size.x * 0.5, safe.position.y + 45.0)
+	var sun_index := 0
+	var void_index := 0
+	for record in _roster_state:
+		var team := int(record.get("team", -1))
+		var eliminated := bool(record.get("eliminated", false))
+		var is_local_team := team == _roster_local_team
+		var color := friendly if team == int(Duelist.Team.SUN) else enemy
+		var slot := sun_index if team == int(Duelist.Team.SUN) else void_index
+		var direction := -1.0 if team == int(Duelist.Team.SUN) else 1.0
+		var point := center + Vector2(direction * (34.0 + slot * 15.0), 0.0)
+		_draw_team_marker(point, color, not eliminated, is_local_team)
+		if team == int(Duelist.Team.SUN):
+			sun_index += 1
+		else:
+			void_index += 1
+
+func _draw_team_marker(center: Vector2, color: Color, living: bool, friendly_marker: bool) -> void:
+	var half_width := 5.0 if friendly_marker else 4.0
+	var height := 5.0 if living else 4.0
+	var chevron := PackedVector2Array([
+		center + Vector2(-half_width, -height),
+		center + Vector2(half_width, 0.0),
+		center + Vector2(-half_width, height),
+	])
+	if living:
+		draw_colored_polygon(chevron, Color(color, 0.72))
+	else:
+		draw_polyline(chevron, Color(color, 0.72), 1.4)
+		draw_line(center + Vector2(-half_width * 0.5, 0.0), center + Vector2(half_width * 0.5, 0.0), Color("f1f6ff", 0.76), 1.0)
 
 func _draw_seed_glyph(center: Vector2, color: Color, filled: bool) -> void:
 	var diamond := PackedVector2Array([center + Vector2(0, -6), center + Vector2(6, 0), center + Vector2(0, 6), center + Vector2(-6, 0)])

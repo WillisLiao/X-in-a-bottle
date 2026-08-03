@@ -13,6 +13,7 @@ var _status := "CHOOSE A LINK"
 var _has_discovered_session := false
 var _press_feedback := ""
 var _feedback_remaining := 0.0
+var _squad_mode := false
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -49,6 +50,10 @@ func hide_panel() -> void:
 
 func set_status(status: String) -> void:
 	_status = status
+	queue_redraw()
+
+func set_squad_mode(enabled: bool) -> void:
+	_squad_mode = enabled
 	queue_redraw()
 
 func set_discovered_session(found: bool) -> void:
@@ -106,7 +111,9 @@ func _draw() -> void:
 	draw_line(panel.position, panel.position + Vector2(panel.size.x, 0), accent if _view != View.JOIN else cool, 3.0)
 	var font := ThemeDB.fallback_font
 	draw_string(font, panel.position + Vector2(34, 42), "RIFT LINK", HORIZONTAL_ALIGNMENT_LEFT, -1, 26, Color("f1f6ff"))
-	draw_string(font, panel.position + Vector2(36, 70), "ONE RIFT. TWO DUELISTS. SAME AIR.", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("a9bfe2"))
+	draw_string(font, panel.position + Vector2(36, 70), "SQUAD RIFT" if _squad_mode else "ONE RIFT. TWO DUELISTS. SAME AIR.", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("a9bfe2"))
+	if _squad_mode:
+		_draw_squad_slots(panel.position + Vector2(panel.size.x - 170, 62), accent if _view != View.JOIN else cool)
 	_draw_status(panel, font, cool if _view == View.JOIN else accent)
 	if _view == View.MENU:
 		_draw_action(_host_rect(), "OPEN RIFT", accent, true)
@@ -114,13 +121,13 @@ func _draw() -> void:
 	elif _view == View.HOST:
 		_draw_icon(panel.position + Vector2(panel.size.x * 0.5, 185), accent, false)
 		draw_string(font, panel.position + Vector2(0, 232), "THE RIFT IS OPEN", HORIZONTAL_ALIGNMENT_CENTER, panel.size.x, 20, Color("f1f6ff"))
-		draw_string(font, panel.position + Vector2(0, 258), "WAITING FOR ONE RIVAL", HORIZONTAL_ALIGNMENT_CENTER, panel.size.x, 13, Color(accent, 0.9))
+		draw_string(font, panel.position + Vector2(0, 258), "WAITING FOR THE SQUAD" if _squad_mode else "WAITING FOR ONE RIVAL", HORIZONTAL_ALIGNMENT_CENTER, panel.size.x, 13, Color(accent, 0.9))
 		_draw_action(_host_rect(), "OPEN RIFT", accent, true)
 	elif _view == View.JOIN:
 		_draw_icon(panel.position + Vector2(panel.size.x * 0.5, 185), cool, _has_discovered_session)
 		if _has_discovered_session:
 			draw_string(font, panel.position + Vector2(0, 232), "A RIFT IS NEAR", HORIZONTAL_ALIGNMENT_CENTER, panel.size.x, 20, Color("f1f6ff"))
-			draw_string(font, panel.position + Vector2(0, 258), "STEP THROUGH TO DUEL", HORIZONTAL_ALIGNMENT_CENTER, panel.size.x, 13, Color(cool, 0.9))
+			draw_string(font, panel.position + Vector2(0, 258), "STEP INTO THE SQUAD RIFT" if _squad_mode else "STEP THROUGH TO DUEL", HORIZONTAL_ALIGNMENT_CENTER, panel.size.x, 13, Color(cool, 0.9))
 			_draw_action(_join_rect(), "ENTER RIFT", cool, true)
 		else:
 			draw_string(font, panel.position + Vector2(0, 232), "LISTENING FOR A RIFT", HORIZONTAL_ALIGNMENT_CENTER, panel.size.x, 20, Color("f1f6ff"))
@@ -152,6 +159,11 @@ func _draw_icon(center: Vector2, color: Color, active: bool) -> void:
 	draw_arc(center, 26.0, -1.1, 1.2, 16, color, 3.0)
 	draw_arc(center, 26.0, 2.0, 4.3, 16, color, 3.0)
 	draw_line(center + Vector2(-10, 0), center + Vector2(10, 0), color, 2.0)
+
+func _draw_squad_slots(origin: Vector2, color: Color) -> void:
+	for index in 5:
+		var center := origin + Vector2(index * 18.0, 0.0)
+		draw_arc(center, 5.0, 0.0, TAU, 12, Color(color, 0.72), 1.3)
 
 func _host_rect() -> Rect2:
 	var panel := _panel_rect()
