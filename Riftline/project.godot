@@ -18,6 +18,7 @@ size/window_width_override=1280
 size/window_height_override=588
 size/resizable=true
 stretch/mode="canvas_items"
+stretch/aspect="expand"
 ; Follow the device sensor while remaining landscape-only, including reverse landscape grip.
 handheld/orientation=4
 

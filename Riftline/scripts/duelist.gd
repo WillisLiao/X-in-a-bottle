@@ -26,6 +26,9 @@ const MIN_HORIZONTAL_FOV := 70.0
 const MAX_HORIZONTAL_FOV := 90.0
 const ADS_HORIZONTAL_FOV_RATIO := 0.74
 const ADS_MOVEMENT_MULTIPLIER := 0.82
+const FIRST_PERSON_WEAPON_SCALE := 0.38
+const M4_IRON_SIGHT_FRONT_TIP_LOCAL := Vector3(0.0, 0.295, -1.06)
+const M4_ADS_WEAPON_ANCHOR := Vector3(0.0, -0.1121, -0.96)
 const M4_HIP_STRAFE_MULTIPLIER := 0.76
 const KNIFE_HIP_FORWARD_MULTIPLIER := 1.15
 const KNIFE_HIP_STRAFE_MULTIPLIER := 0.93
@@ -564,7 +567,28 @@ func set_combat_pose(aiming: bool, delta: float) -> void:
 
 func _ads_weapon_anchor() -> Vector3:
 	# One calibration seam keeps the front post on the camera's center aim ray.
-	return Vector3(0.0, -0.06, -0.96)
+	return M4_ADS_WEAPON_ANCHOR
+
+static func ads_iron_sight_tip_head_offset() -> Vector3:
+	return M4_ADS_WEAPON_ANCHOR + M4_IRON_SIGHT_FRONT_TIP_LOCAL * FIRST_PERSON_WEAPON_SCALE
+
+static func shot_origin_for(eye: Vector3, basis: Basis, aiming: bool, weapon: Weapon) -> Vector3:
+	if aiming and weapon == Weapon.PULSE:
+		# ADS bullets leave the centered front iron-sight tip. The physical muzzle
+		# remains a separate obstruction probe, while aim direction stays on the
+		# sight's center ray.
+		return eye + basis * ads_iron_sight_tip_head_offset()
+	return eye
+
+func authoritative_ads_iron_sight_tip() -> Vector3:
+	var eye := authoritative_eye_origin()
+	var basis := head.global_transform.basis if head != null else global_transform.basis
+	return eye + basis * ads_iron_sight_tip_head_offset()
+
+func authoritative_shot_origin() -> Vector3:
+	var eye := authoritative_eye_origin()
+	var basis := head.global_transform.basis if head != null else global_transform.basis
+	return shot_origin_for(eye, basis, _aiming, weapon)
 
 func drive(move_input: Vector2, wants_fire: bool, wants_jump: bool, delta: float) -> void:
 	if eliminated or not match_active:
@@ -597,7 +621,7 @@ func fire_at(target: Vector3) -> void:
 		reload_weapon()
 		return
 	_fire_remaining = BALLISTICS.M4_FIRE_INTERVAL if weapon == Weapon.PULSE else KNIFE_COOLDOWN
-	var plan := _accept_shot_plan((target - authoritative_eye_origin()).normalized())
+	var plan := _accept_shot_plan((target - authoritative_shot_origin()).normalized())
 	if weapon == Weapon.PULSE:
 		magazine_rounds -= 1
 		fire_requested.emit(self, weapon, plan.eye_origin, plan.direction)
@@ -688,7 +712,7 @@ func play_weapon_obstruction() -> void:
 	_obstruction_remaining = 0.2
 
 func _accept_shot_plan(forced_direction: Vector3 = Vector3.ZERO) -> Dictionary:
-	var eye := authoritative_eye_origin()
+	var eye := authoritative_shot_origin()
 	var direction := authoritative_aim_direction()
 	var deliberate := forced_direction.length_squared() > 0.0001
 	if deliberate:
@@ -834,7 +858,7 @@ func _build_first_person_weapon() -> void:
 	_weapon_root = Node3D.new()
 	_weapon_root.name = "FirstPersonWeapon"
 	_weapon_root.position = Vector3(0.42, -0.42, -1.22)
-	_weapon_root.scale = Vector3.ONE * 0.38
+	_weapon_root.scale = Vector3.ONE * FIRST_PERSON_WEAPON_SCALE
 	camera.add_child(_weapon_root)
 
 func _build_world_weapon() -> void:
@@ -851,7 +875,7 @@ func _rebuild_weapon_models() -> void:
 	if _local_camera:
 		_weapon_root.position = first_person_kunai_position() if weapon == Weapon.KNIFE else Vector3(0.42, -0.42, -1.22)
 		_weapon_root.rotation = first_person_kunai_rotation() if weapon == Weapon.KNIFE else Vector3.ZERO
-		_weapon_root.scale = Vector3.ONE * 0.38
+		_weapon_root.scale = Vector3.ONE * FIRST_PERSON_WEAPON_SCALE
 	for child in _weapon_root.get_children():
 		child.queue_free()
 	_weapon_mesh = null
