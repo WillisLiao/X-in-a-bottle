@@ -2,9 +2,12 @@ class_name DuelHud
 extends Control
 
 signal rift_link_requested
+signal feedback_preferences_changed(effects_enabled: bool, haptics_enabled: bool)
 
 const CONFIG_PATH := "user://riftline_controls.cfg"
 const LAYOUT_SECTION := "hud_layout_v1"
+const FEEDBACK_SECTION := "feedback_v1"
+const LAYOUT_VERSION := 2
 const SNAP_POINTS := 8.0
 const DRAG_THRESHOLD := 10.0
 const MOVABLE_KEYS := ["move", "left_fire", "right_fire", "ads", "jump", "crouch", "prone", "swap"]
@@ -19,9 +22,16 @@ var reload_remaining := 0.0
 var damage_flash := 0.0
 var hit_confirm := 0.0
 var primary_fire_bloom := 0.0
+var damage_direction := Vector2.ZERO
+var damage_direction_intensity := 0.0
+var damage_enemy_team := int(Duelist.Team.VOID)
+var objective_feedback_pulse := 0.0
+var objective_feedback_team := -1
 var camera_sensitivity := 1.0
 var ads_sensitivity := 0.72
 var gyro_enabled := false
+var effects_enabled := true
+var haptics_enabled := true
 var _stick_mode := MobileTouchRouter.StickMode.FLOATING
 var _touch_router := MobileTouchRouter.new()
 var _stick_visual_opacity := 0.0
@@ -92,6 +102,8 @@ func _process(delta: float) -> void:
 	damage_flash = maxf(0.0, damage_flash - delta * 2.8)
 	hit_confirm = maxf(0.0, hit_confirm - delta * 6.5)
 	primary_fire_bloom = maxf(0.0, primary_fire_bloom - delta * 8.5)
+	damage_direction_intensity = maxf(0.0, damage_direction_intensity - delta * 4.0)
+	objective_feedback_pulse = maxf(0.0, objective_feedback_pulse - delta * 3.0)
 	_objective_message_remaining = maxf(0.0, _objective_message_remaining - delta)
 	_score_pulse = maxf(0.0, _score_pulse - delta * 2.8)
 	if _objective_message_remaining <= 0.0:
@@ -280,7 +292,7 @@ func set_match_phase(phase: LinebreakMatch.Phase) -> void:
 	queue_redraw()
 
 func show_match_result(winner: Duelist.Team) -> void:
-	_match_result_victory = winner == Duelist.Team.SUN
+	_match_result_victory = int(winner) == _roster_local_team
 	_match_result_visible = true
 	_rematch_requested = false
 	_release_all_touch_ownership()
@@ -293,7 +305,14 @@ func take_rematch() -> bool:
 
 func show_damage(current_health: float) -> void:
 	health = current_health
-	damage_flash = 1.0
+	damage_flash = maxf(damage_flash, 1.0)
+	queue_redraw()
+
+func show_damage_direction(direction: Vector2, intensity: float, enemy_team: int) -> void:
+	damage_direction = direction
+	damage_direction_intensity = clampf(intensity, 0.0, 1.0)
+	damage_enemy_team = enemy_team
+	queue_redraw()
 
 func show_hit_confirm() -> void:
 	hit_confirm = 1.0
@@ -301,6 +320,11 @@ func show_hit_confirm() -> void:
 
 func show_primary_fire_feedback() -> void:
 	primary_fire_bloom = minf(1.0, primary_fire_bloom + 0.72)
+	queue_redraw()
+
+func show_objective_feedback(event_type: String, scoring_team: int) -> void:
+	objective_feedback_pulse = 1.0
+	objective_feedback_team = scoring_team
 	queue_redraw()
 
 func _gui_input(event: InputEvent) -> void:
@@ -447,11 +471,11 @@ func _draw() -> void:
 		return
 	_draw_gameplay_hud()
 	if _settings_open:
-		_draw_settings_panel(Color("ffad5d"), Color("71cfff"))
+		_draw_settings_panel(_friendly_color(), _enemy_color())
 
 func _draw_gameplay_hud() -> void:
-	var friendly := Color("ffad5d")
-	var enemy := Color("71cfff")
+	var friendly := _friendly_color()
+	var enemy := _enemy_color()
 	var center := size * 0.5
 	_draw_coach_cue(friendly, enemy)
 
@@ -501,7 +525,7 @@ func _draw_gameplay_hud() -> void:
 	_draw_button("prone", friendly, _stance == Duelist.Stance.PRONE)
 	_draw_button("swap", Color("c292ff"), _switch_touch >= 0)
 	if _weapon == Duelist.Weapon.PULSE:
-		_draw_button_fixed(_reload_center(), _reload_radius(), Color("e6a25b"), reload_remaining > 0.0, "RELOAD")
+		_draw_button_fixed(_reload_center(), _reload_radius(), Color("e6a25b"), reload_remaining > 0.0, "reload")
 	_draw_weapon_indicator(friendly)
 	_draw_button_fixed(_settings_center(), 24.0, enemy, _settings_open, "SET")
 	if _touch_preview in ["two-thumb", "four-finger"]:
@@ -515,13 +539,21 @@ func _draw_gameplay_hud() -> void:
 	var safe := _safe_rect()
 	var health_width := 210.0
 	draw_rect(Rect2(safe.position + Vector2(10, 10), Vector2(health_width, 8)), Color("03101f", 0.72))
-	draw_rect(Rect2(safe.position + Vector2(10, 10), Vector2(health_width * health / 100.0, 8)), Color(friendly, 0.92))
+	var health_color := friendly
+	if health <= 30.0:
+		var low_pulse := 0.65 + sin(Time.get_ticks_msec() * 0.012) * 0.35
+		health_color = Color("ef8b78", low_pulse)
+	draw_rect(Rect2(safe.position + Vector2(10, 10), Vector2(health_width * health / 100.0, 8)), health_color)
 	_draw_objective_strip(safe, friendly, enemy)
 	_draw_carrier_chevron(safe, friendly)
 	if _squad_readability:
 		_draw_team_life_strip(safe, friendly, enemy)
-	if damage_flash > 0.0:
-		draw_rect(Rect2(Vector2.ZERO, size), Color(1.0, 0.18, 0.1, damage_flash * 0.16), false, 22.0)
+	if damage_direction_intensity > 0.0:
+		var damage_color := _team_color(damage_enemy_team)
+		var direction := damage_direction if damage_direction.length_squared() > 0.01 else Vector2.DOWN
+		var edge_radius := minf(size.x, size.y) * 0.44
+		var edge_angle := atan2(direction.y, direction.x)
+		draw_arc(center, edge_radius, edge_angle - 0.18, edge_angle + 0.18, 14, Color(damage_color, damage_direction_intensity * 0.9), 7.0)
 	if _match_result_visible:
 		_draw_match_result()
 	elif _match_phase == LinebreakMatch.Phase.OPENING:
@@ -534,13 +566,15 @@ func _draw_gameplay_hud() -> void:
 		draw_line(message_rect.position, message_rect.position + Vector2(message_rect.size.x, 0), enemy, 2.0)
 		var font := ThemeDB.fallback_font
 		draw_string(font, message_rect.get_center() + Vector2(-font.get_string_size(_connection_message, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x * 0.5, 5), _connection_message, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("f1f6ff"))
-	if not _objective_message.is_empty():
-		var objective_rect := Rect2(Vector2(size.x * 0.5 - 110.0, safe.position.y + 52.0), Vector2(220.0, 32.0))
-		draw_rect(objective_rect, Color("071126", 0.82))
-		draw_line(objective_rect.position, objective_rect.position + Vector2(objective_rect.size.x, 0), friendly, 1.5)
-		var objective_font := ThemeDB.fallback_font
-		var objective_width := objective_font.get_string_size(_objective_message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
-		draw_string(objective_font, objective_rect.get_center() + Vector2(-objective_width * 0.5, 4), _objective_message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f1f6ff"))
+
+func _friendly_color() -> Color:
+	return _team_color(_roster_local_team)
+
+func _enemy_color() -> Color:
+	return _team_color(Duelist.Team.VOID if _roster_local_team == int(Duelist.Team.SUN) else Duelist.Team.SUN)
+
+func _team_color(team: int) -> Color:
+	return Color("ffad5d") if team == int(Duelist.Team.SUN) else Color("71cfff")
 
 func _draw_objective_strip(safe: Rect2, friendly: Color, enemy: Color) -> void:
 	var center := Vector2(size.x * 0.5, safe.position.y + 18.0)
@@ -553,10 +587,14 @@ func _draw_objective_strip(safe: Rect2, friendly: Color, enemy: Color) -> void:
 			var score_center := center + Vector2(-42.0 - (score - 1) * 16.0, 0.0) if _score_pulse_team == int(Duelist.Team.SUN) else center + Vector2(42.0 + (score - 1) * 16.0, 0.0)
 			draw_arc(score_center, 8.0 + (1.0 - _score_pulse) * 9.0, 0.0, TAU, 24, Color("fff4c7", _score_pulse * 0.85), 2.0)
 	var state := int(_objective_state.get("state", int(RiftSeed.State.HOME)))
-	var objective_accent := friendly if int(_objective_state.get("carrier_team", -1)) == int(Duelist.Team.SUN) else enemy
+	var carrier_team := int(_objective_state.get("carrier_team", -1))
+	var objective_accent := _team_color(carrier_team) if carrier_team >= 0 else Color("fff0b0")
 	if state == RiftSeed.State.DROPPED:
 		objective_accent = Color("fff0b0")
 	_draw_seed_glyph(center, objective_accent, state == RiftSeed.State.CARRIED)
+	if objective_feedback_pulse > 0.0:
+		var feedback_color := _team_color(objective_feedback_team) if objective_feedback_team >= 0 else Color("fff0b0")
+		draw_arc(center, 10.0 + (1.0 - objective_feedback_pulse) * 18.0, 0.0, TAU, 24, Color(feedback_color, objective_feedback_pulse * 0.9), 2.5)
 
 func _draw_carrier_chevron(safe: Rect2, color: Color) -> void:
 	if not _carrier_chevron_active:
@@ -616,15 +654,49 @@ func _draw_seed_glyph(center: Vector2, color: Color, filled: bool) -> void:
 
 func _draw_button(key: String, color: Color, active: bool) -> void:
 	var spec: Dictionary = _control_specs()[key]
-	_draw_button_fixed(_control_center(key), _control_radius(key), color, active, str(spec.label), _control_opacity(key))
+	_draw_button_fixed(_control_center(key), _control_radius(key), color, active, key, _control_opacity(key))
 
 func _draw_button_fixed(center: Vector2, radius: float, color: Color, active: bool, label: String, opacity: float = 1.0) -> void:
 	draw_circle(center, radius, Color("071126", 0.58 * opacity))
 	draw_arc(center, radius, 0.0, TAU, 32, Color(color, (0.95 if active else 0.6) * opacity), 2.5 if active else 1.8)
+	if _control_specs().has(label) or label == "reload":
+		_draw_control_glyph(center, radius, color, label, active, opacity)
+		return
 	var font := ThemeDB.fallback_font
 	var font_size := 13 if label.length() > 1 else 20
 	var text_width := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
 	draw_string(font, center + Vector2(-text_width * 0.5, font_size * 0.36), label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(color, 0.98 * opacity))
+
+func _draw_control_glyph(center: Vector2, radius: float, color: Color, key: String, active: bool, opacity: float) -> void:
+	var glyph_color := Color(color, (0.98 if active else 0.86) * opacity)
+	var weight := 3.0 if active else 2.2
+	match key:
+		"left_fire", "right_fire":
+			draw_circle(center, radius * 0.18, glyph_color)
+			draw_arc(center, radius * 0.48, -0.9, 0.9, 12, glyph_color, weight)
+			draw_arc(center, radius * 0.48, PI - 0.9, PI + 0.9, 12, glyph_color, weight)
+		"ads":
+			draw_arc(center + Vector2(0, 4), radius * 0.34, PI, TAU, 12, glyph_color, weight)
+			draw_line(center + Vector2(-radius * 0.38, 4), center + Vector2(radius * 0.38, 4), glyph_color, weight)
+		"jump":
+			draw_polyline(PackedVector2Array([center + Vector2(-radius * 0.34, 5), center, center + Vector2(radius * 0.34, 5)]), glyph_color, weight)
+			draw_line(center, center + Vector2(0, -radius * 0.38), glyph_color, weight)
+		"crouch":
+			draw_circle(center + Vector2(-radius * 0.16, -radius * 0.18), radius * 0.13, glyph_color)
+			draw_line(center + Vector2(-radius * 0.28, 0), center + Vector2(radius * 0.22, 0), glyph_color, weight)
+			draw_line(center + Vector2(-radius * 0.2, 0), center + Vector2(-radius * 0.34, radius * 0.3), glyph_color, weight)
+			draw_line(center + Vector2(radius * 0.18, 0), center + Vector2(radius * 0.34, radius * 0.3), glyph_color, weight)
+		"prone":
+			draw_circle(center + Vector2(-radius * 0.28, -radius * 0.1), radius * 0.12, glyph_color)
+			draw_line(center + Vector2(-radius * 0.18, 0), center + Vector2(radius * 0.34, 0), glyph_color, weight)
+			draw_line(center + Vector2(radius * 0.2, 0), center + Vector2(radius * 0.38, radius * 0.22), glyph_color, weight)
+		"swap":
+			draw_line(center + Vector2(-radius * 0.34, -5), center + Vector2(radius * 0.3, -5), glyph_color, weight)
+			draw_line(center + Vector2(radius * 0.3, -5), center + Vector2(radius * 0.14, -radius * 0.18), glyph_color, weight)
+			draw_line(center + Vector2(radius * 0.34, 5), center + Vector2(-radius * 0.3, 5), glyph_color, weight)
+			draw_line(center + Vector2(-radius * 0.3, 5), center + Vector2(-radius * 0.14, radius * 0.18), glyph_color, weight)
+		"reload":
+			_draw_reload_sweep(center, radius * 0.58, glyph_color)
 
 func _draw_weapon_indicator(color: Color) -> void:
 	var safe := _safe_rect()
@@ -687,11 +759,9 @@ func _draw_coach_cue(friendly: Color, enemy: Color) -> void:
 	var region := str(_coach_display_cue.get("region", ""))
 	var accent := enemy if region == "right" else friendly
 	if region == "left":
-		draw_rect(Rect2(safe.position, Vector2(safe.size.x * 0.5, safe.size.y)), Color(accent, 0.025 * cue_alpha), true)
-		draw_line(Vector2(safe.get_center().x, safe.position.y + 66.0), Vector2(safe.get_center().x, safe.end.y - 18.0), Color(accent, 0.28 * cue_alpha), 1.0)
+		draw_arc(_control_center("move"), _control_radius("move") + 12.0, 0.0, TAU, 32, Color(accent, 0.5 * cue_alpha), 2.5)
 	elif region == "right":
-		draw_rect(Rect2(Vector2(safe.get_center().x, safe.position.y), Vector2(safe.size.x * 0.5, safe.size.y)), Color(accent, 0.025 * cue_alpha), true)
-		draw_line(Vector2(safe.get_center().x, safe.position.y + 66.0), Vector2(safe.get_center().x, safe.end.y - 18.0), Color(accent, 0.28 * cue_alpha), 1.0)
+		draw_arc(Vector2(safe.end.x - 76.0, safe.position.y + 118.0), 36.0, -PI * 0.8, PI * 0.8, 20, Color(accent, 0.5 * cue_alpha), 2.5)
 	elif region == "fire":
 		var pulse := 0.38 + 0.32 * (0.5 + 0.5 * sin(Time.get_ticks_msec() / 180.0))
 		for key in ["left_fire", "right_fire"]:
@@ -707,7 +777,7 @@ func _draw_coach_cue(friendly: Color, enemy: Color) -> void:
 	draw_string(font, rect.get_center() + Vector2(-width * 0.5, 5.0), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f1f6ff", 0.95 * cue_alpha))
 
 func _draw_match_result() -> void:
-	var accent := Color("ffad5d") if _match_result_victory else Color("71cfff")
+	var accent := _friendly_color() if _match_result_victory else _enemy_color()
 	var card := _match_result_card()
 	draw_rect(Rect2(Vector2.ZERO, size), Color("020612", 0.78))
 	draw_rect(card, Color("0b1730", 0.99))
@@ -781,6 +851,16 @@ func _handle_settings_touch(point: Vector2, pressed: bool) -> void:
 		gyro_enabled = not gyro_enabled
 		_save_control_settings()
 		return
+	if _effects_rect(panel).has_point(point):
+		effects_enabled = not effects_enabled
+		_save_control_settings()
+		feedback_preferences_changed.emit(effects_enabled, haptics_enabled)
+		return
+	if _haptics_rect(panel).has_point(point):
+		haptics_enabled = not haptics_enabled
+		_save_control_settings()
+		feedback_preferences_changed.emit(effects_enabled, haptics_enabled)
+		return
 	if _stick_mode_rect(panel).has_point(point):
 		_stick_mode = MobileTouchRouter.StickMode.FIXED if _stick_mode == MobileTouchRouter.StickMode.FLOATING else MobileTouchRouter.StickMode.FLOATING
 		_touch_router.configure(_stick_mode, _control_center("move"), _stick_radius())
@@ -813,6 +893,8 @@ func _draw_settings_panel(friendly: Color, enemy: Color) -> void:
 	_draw_setting_chip(Rect2(panel.position + Vector2(24, 168), Vector2(142, 44)), "AIM %s" % ("TAP" if _aim_toggle else "HOLD"), friendly, _aim_toggle)
 	_draw_setting_chip(Rect2(panel.position + Vector2(184, 168), Vector2(142, 44)), "GYRO %s" % ("ON" if gyro_enabled else "OFF"), Color("c292ff"), gyro_enabled)
 	_draw_setting_chip(Rect2(panel.position + Vector2(344, 168), Vector2(142, 44)), "QUICK SWAP", Color("c292ff"), true)
+	_draw_setting_chip(_effects_rect(panel), "EFFECTS %s" % ("ON" if effects_enabled else "OFF"), friendly, effects_enabled)
+	_draw_setting_chip(_haptics_rect(panel), "HAPTICS %s" % ("ON" if haptics_enabled else "OFF"), Color("c292ff"), haptics_enabled)
 	_draw_setting_chip(_stick_mode_rect(panel), "STICK %s" % ("FLOAT" if _stick_mode == MobileTouchRouter.StickMode.FLOATING else "FIXED"), friendly, _stick_mode == MobileTouchRouter.StickMode.FLOATING)
 	_draw_setting_chip(_hud_layout_rect(panel), "HUD LAYOUT", enemy, true)
 	_draw_setting_chip(_reset_training_rect(panel), "RESET TRAINING", Color("e57c70"), false)
@@ -833,8 +915,8 @@ func _draw_setting_chip(rect: Rect2, text: String, color: Color, active: bool) -
 	draw_string(font, rect.get_center() + Vector2(-text_width * 0.5, 5.0), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, color)
 
 func _draw_layout_editor() -> void:
-	var friendly := Color("ffad5d")
-	var enemy := Color("71cfff")
+	var friendly := _friendly_color()
+	var enemy := _enemy_color()
 	draw_rect(Rect2(Vector2.ZERO, size), Color("020612", 0.62))
 	var safe := _safe_rect()
 	for x in range(int(safe.position.x), int(safe.end.x) + 1, 32):
@@ -981,19 +1063,25 @@ func _editor_button_rect(button: String) -> Rect2:
 	return Rect2(x, y, width, 44.0)
 
 func _settings_panel() -> Rect2:
-	return Rect2(size * 0.5 - Vector2(260, 180), Vector2(520, 360))
+	return Rect2(size * 0.5 - Vector2(260, 220), Vector2(520, 440))
 
 func _rift_link_rect(panel: Rect2) -> Rect2:
-	return Rect2(panel.position + Vector2(244, 276), Vector2(180, 44))
+	return Rect2(panel.position + Vector2(244, 330), Vector2(180, 44))
 
 func _stick_mode_rect(panel: Rect2) -> Rect2:
-	return Rect2(panel.position + Vector2(24, 222), Vector2(142, 44))
+	return Rect2(panel.position + Vector2(24, 276), Vector2(142, 44))
 
 func _hud_layout_rect(panel: Rect2) -> Rect2:
-	return Rect2(panel.position + Vector2(184, 222), Vector2(210, 44))
+	return Rect2(panel.position + Vector2(184, 276), Vector2(210, 44))
 
 func _reset_training_rect(panel: Rect2) -> Rect2:
-	return Rect2(panel.position + Vector2(24, 276), Vector2(210, 44))
+	return Rect2(panel.position + Vector2(24, 330), Vector2(210, 44))
+
+func _effects_rect(panel: Rect2) -> Rect2:
+	return Rect2(panel.position + Vector2(24, 222), Vector2(142, 44))
+
+func _haptics_rect(panel: Rect2) -> Rect2:
+	return Rect2(panel.position + Vector2(184, 222), Vector2(142, 44))
 
 func _safe_rect() -> Rect2:
 	var fallback := Rect2(24.0, 24.0, maxf(1.0, size.x - 48.0), maxf(1.0, size.y - 48.0))
@@ -1033,14 +1121,14 @@ func _default_layout() -> Dictionary:
 
 func _two_thumb_layout() -> Dictionary:
 	return {
-		"move": _layout_entry(Vector2(0.10, 0.79), 1.0, 0.82),
-		"left_fire": _layout_entry(Vector2(0.10, 0.20), 1.0, 0.82),
-		"right_fire": _layout_entry(Vector2(0.90, 0.79), 1.0, 0.82),
-		"ads": _layout_entry(Vector2(0.78, 0.53), 1.0, 0.78),
-		"jump": _layout_entry(Vector2(0.78, 0.79), 1.0, 0.78),
-		"crouch": _layout_entry(Vector2(0.67, 0.79), 1.0, 0.78),
-		"prone": _layout_entry(Vector2(0.56, 0.79), 1.0, 0.78),
-		"swap": _layout_entry(Vector2(0.67, 0.53), 1.0, 0.78),
+		"move": _layout_entry(Vector2(0.10, 0.80), 1.0, 0.82),
+		"left_fire": _layout_entry(Vector2(0.10, 0.22), 1.0, 0.82),
+		"right_fire": _layout_entry(Vector2(0.90, 0.80), 1.0, 0.82),
+		"ads": _layout_entry(Vector2(0.79, 0.49), 1.0, 0.78),
+		"jump": _layout_entry(Vector2(0.90, 0.59), 1.0, 0.78),
+		"crouch": _layout_entry(Vector2(0.76, 0.80), 1.0, 0.78),
+		"prone": _layout_entry(Vector2(0.64, 0.80), 1.0, 0.78),
+		"swap": _layout_entry(Vector2(0.70, 0.57), 1.0, 0.78),
 	}
 
 func _four_finger_layout() -> Dictionary:
@@ -1141,15 +1229,50 @@ func _load_control_settings() -> void:
 	ads_sensitivity = _config_float(config, "sensitivity", "ads", ads_sensitivity, 0.3, 1.7)
 	gyro_enabled = bool(config.get_value("controls", "gyro", gyro_enabled))
 	_aim_toggle = bool(config.get_value("controls", "aim_toggle", _aim_toggle))
+	effects_enabled = bool(config.get_value(FEEDBACK_SECTION, "effects", effects_enabled))
+	haptics_enabled = bool(config.get_value(FEEDBACK_SECTION, "haptics", haptics_enabled))
 	var saved_stick_mode := str(config.get_value("controls", "stick_mode", "floating")).to_lower()
 	_stick_mode = MobileTouchRouter.StickMode.FIXED if saved_stick_mode == "fixed" else MobileTouchRouter.StickMode.FLOATING
+	var has_saved_layout := config.has_section(LAYOUT_SECTION)
+	var saved_layout_version := int(config.get_value(LAYOUT_SECTION, "version", 1))
+	var migrate_legacy_default := has_saved_layout and saved_layout_version < LAYOUT_VERSION and _saved_layout_matches(_legacy_default_layout(), config)
 	for key in MOVABLE_KEYS:
-		var fallback: Dictionary = _default_layout()[key]
+		var fallback: Dictionary = _default_layout()[key] if migrate_legacy_default or not has_saved_layout else _legacy_default_layout()[key]
 		var center_x := _config_float(config, LAYOUT_SECTION, "%s_center_x" % key, fallback.center.x, 0.0, 1.0)
 		var center_y := _config_float(config, LAYOUT_SECTION, "%s_center_y" % key, fallback.center.y, 0.0, 1.0)
 		var scale := _config_float(config, LAYOUT_SECTION, "%s_scale" % key, fallback.scale, 0.7, 1.35)
 		var opacity := _config_float(config, LAYOUT_SECTION, "%s_opacity" % key, fallback.opacity, 0.35, 1.0)
 		_layout[key] = _layout_entry(Vector2(center_x, center_y), scale, opacity)
+	if migrate_legacy_default:
+		_layout = _default_layout()
+		_save_control_settings()
+	elif has_saved_layout and saved_layout_version < LAYOUT_VERSION:
+		_save_control_settings()
+
+func _legacy_default_layout() -> Dictionary:
+	return {
+		"move": _layout_entry(Vector2(0.10, 0.79), 1.0, 0.82),
+		"left_fire": _layout_entry(Vector2(0.10, 0.20), 1.0, 0.82),
+		"right_fire": _layout_entry(Vector2(0.90, 0.79), 1.0, 0.82),
+		"ads": _layout_entry(Vector2(0.78, 0.53), 1.0, 0.78),
+		"jump": _layout_entry(Vector2(0.78, 0.79), 1.0, 0.78),
+		"crouch": _layout_entry(Vector2(0.67, 0.79), 1.0, 0.78),
+		"prone": _layout_entry(Vector2(0.56, 0.79), 1.0, 0.78),
+		"swap": _layout_entry(Vector2(0.67, 0.53), 1.0, 0.78),
+	}
+
+func _saved_layout_matches(expected: Dictionary, config: ConfigFile) -> bool:
+	for key in MOVABLE_KEYS:
+		var fallback: Dictionary = expected[key]
+		if absf(_config_float(config, LAYOUT_SECTION, "%s_center_x" % key, fallback.center.x, 0.0, 1.0) - float(fallback.center.x)) > 0.01:
+			return false
+		if absf(_config_float(config, LAYOUT_SECTION, "%s_center_y" % key, fallback.center.y, 0.0, 1.0) - float(fallback.center.y)) > 0.01:
+			return false
+		if absf(_config_float(config, LAYOUT_SECTION, "%s_scale" % key, fallback.scale, 0.7, 1.35) - float(fallback.scale)) > 0.01:
+			return false
+		if absf(_config_float(config, LAYOUT_SECTION, "%s_opacity" % key, fallback.opacity, 0.35, 1.0) - float(fallback.opacity)) > 0.01:
+			return false
+	return true
 
 func _config_float(config: ConfigFile, section: String, key: String, fallback: float, minimum: float, maximum: float) -> float:
 	var value: Variant = config.get_value(section, key, fallback)
@@ -1168,6 +1291,10 @@ func _save_control_settings() -> void:
 	config.set_value("controls", "gyro", gyro_enabled)
 	config.set_value("controls", "aim_toggle", _aim_toggle)
 	config.set_value("controls", "stick_mode", "fixed" if _stick_mode == MobileTouchRouter.StickMode.FIXED else "floating")
+	config.set_value(FEEDBACK_SECTION, "version", 1)
+	config.set_value(FEEDBACK_SECTION, "effects", effects_enabled)
+	config.set_value(FEEDBACK_SECTION, "haptics", haptics_enabled)
+	config.set_value(LAYOUT_SECTION, "version", LAYOUT_VERSION)
 	for key in MOVABLE_KEYS:
 		var data: Dictionary = _layout[key]
 		config.set_value(LAYOUT_SECTION, "%s_center_x" % key, data.center.x)

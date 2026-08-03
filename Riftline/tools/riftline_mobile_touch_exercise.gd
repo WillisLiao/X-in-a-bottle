@@ -47,5 +47,25 @@ func _initialize() -> void:
 	assert(router.begin(8, Vector2(260.0, 400.0), left, 58.0) == MobileTouchRouter.Role.NONE)
 	assert(router.begin(9, Vector2(120.0, 410.0), left, 58.0) == MobileTouchRouter.Role.MOVE)
 	router.end(9)
+
+	# Untouched legacy defaults migrate, while a deliberately customized saved
+	# layout remains distinguishable and therefore stays in place.
+	var hud := DuelHud.new()
+	var legacy: Dictionary = hud._legacy_default_layout()
+	var revised: Dictionary = hud._default_layout()
+	assert(legacy.move.center != revised.move.center)
+	var config := ConfigFile.new()
+	config.set_value(DuelHud.LAYOUT_SECTION, "version", 1)
+	for key in DuelHud.MOVABLE_KEYS:
+		var entry: Dictionary = legacy[key]
+		config.set_value(DuelHud.LAYOUT_SECTION, "%s_center_x" % key, entry.center.x)
+		config.set_value(DuelHud.LAYOUT_SECTION, "%s_center_y" % key, entry.center.y)
+		config.set_value(DuelHud.LAYOUT_SECTION, "%s_scale" % key, entry.scale)
+		config.set_value(DuelHud.LAYOUT_SECTION, "%s_opacity" % key, entry.opacity)
+	assert(hud._saved_layout_matches(legacy, config))
+	config.set_value(DuelHud.LAYOUT_SECTION, "move_center_x", float(legacy.move.center.x) + 0.08)
+	assert(not hud._saved_layout_matches(legacy, config))
+	hud.free()
+
 	print("Riftline mobile touch exercise: PASS")
 	quit()
