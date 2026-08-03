@@ -18,20 +18,27 @@ var _linebreak_seed_state: Dictionary = {}
 var _friendly_gate := Vector3.ZERO
 var _enemy_gate := Vector3.ZERO
 var _route_finder := Callable()
+var _route_waypoint := Vector3.ZERO
+var _route_goal := Vector3.ZERO
+var _route_waypoint_active := false
 
 func set_linebreak_context(seed_state: Dictionary, friendly_gate: Vector3, enemy_gate: Vector3) -> void:
 	set_squad_context([self], _enemies, seed_state, friendly_gate, enemy_gate)
 
 func set_squad_context(friendlies: Array[Duelist], enemies: Array[Duelist], objective_state: Dictionary, friendly_gate: Vector3, enemy_gate: Vector3) -> void:
+	var objective_changed := str(_linebreak_seed_state.get("carrier_id", "")) != str(objective_state.get("carrier_id", "")) or int(_linebreak_seed_state.get("state", -1)) != int(objective_state.get("state", -1))
 	_friendlies = friendlies.duplicate()
 	_enemies = enemies.duplicate()
 	_linebreak_seed_state = objective_state.duplicate(true)
 	_friendly_gate = friendly_gate
 	_enemy_gate = enemy_gate
+	if objective_changed:
+		_route_waypoint_active = false
 	_select_target()
 
 func set_route_finder(route_finder: Callable) -> void:
 	_route_finder = route_finder
+	_route_waypoint_active = false
 
 func _ready() -> void:
 	_random.randomize()
@@ -52,14 +59,18 @@ func _physics_process(delta: float) -> void:
 		_move_goal = Vector2.ZERO
 		drive(Vector2.ZERO, false, false, delta)
 		return
-	if _target == null:
-		drive(Vector2.ZERO, false, false, delta)
-		return
 	_decision_remaining = maxf(0.0, _decision_remaining - delta)
 	_reaction_remaining = maxf(0.0, _reaction_remaining - delta)
 	_tracking_remaining = maxf(0.0, _tracking_remaining - delta)
 	_shot_cadence_remaining = maxf(0.0, _shot_cadence_remaining - delta)
 	_burst_remaining = maxf(0.0, _burst_remaining - delta)
+	if _target == null:
+		if _decision_remaining <= 0.0:
+			_move_goal = Vector2.ZERO
+			_decide_linebreak_movement(999.0, false)
+			_decision_remaining = 0.16
+		drive(_move_goal, false, false, delta)
+		return
 
 	var toward := _target.global_position - global_position
 	toward.y = 0.0
@@ -122,9 +133,14 @@ func _decide_linebreak_movement(distance: float, has_los: bool) -> bool:
 func _world_move_goal(goal: Vector3) -> Vector2:
 	var resolved_goal := goal
 	if _route_finder.is_valid():
-		var candidate: Variant = _route_finder.call(global_position, goal)
-		if candidate is Vector3:
-			resolved_goal = candidate
+		if not _route_waypoint_active or _route_goal.distance_to(goal) > 1.0 or _route_waypoint.distance_to(global_position) < 1.2:
+			var candidate: Variant = _route_finder.call(global_position, goal)
+			if candidate is Vector3:
+				_route_waypoint = candidate
+				_route_goal = goal
+				_route_waypoint_active = true
+		if _route_waypoint_active:
+			resolved_goal = _route_waypoint
 	var direction := resolved_goal - global_position
 	direction.y = 0.0
 	if direction.length_squared() < 0.4:

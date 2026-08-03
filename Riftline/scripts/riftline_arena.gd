@@ -49,6 +49,10 @@ var _offline_squad_size := 0
 var _squad_preview := ""
 var _capture_fixture_only := false
 var _arena_preview := ""
+var _arena_perf_sample := false
+var _perf_elapsed := 0.0
+var _perf_frame_times: Array[float] = []
+var _perf_logged := false
 var _objective_preview := ""
 var _weapon_preview := ""
 var _ballistics_preview := ""
@@ -115,6 +119,7 @@ func _physics_process(delta: float) -> void:
 		return
 	if _local_duelist == null:
 		return
+	_tick_perf_sample(delta)
 	_sync_objective_presentation()
 	_sync_squad_hud()
 	if _lan_active:
@@ -1141,6 +1146,25 @@ func _sync_objective_presentation() -> void:
 	if coach != null and not _lan_active:
 		coach.observe_objective(state)
 
+func _tick_perf_sample(delta: float) -> void:
+	if not _arena_perf_sample or _perf_logged:
+		return
+	_perf_elapsed += delta
+	if _perf_elapsed < 2.0:
+		return
+	_perf_frame_times.append(delta)
+	if _perf_frame_times.size() < 120:
+		return
+	var total := 0.0
+	var minimum := INF
+	var maximum := 0.0
+	for frame_time in _perf_frame_times:
+		total += frame_time
+		minimum = minf(minimum, frame_time)
+		maximum = maxf(maximum, frame_time)
+	print("Riftline arena perf sample: map=%s frames=%d avg_ms=%.2f min_ms=%.2f max_ms=%.2f" % [arena_map.map_id(), _perf_frame_times.size(), total / _perf_frame_times.size() * 1000.0, minimum * 1000.0, maximum * 1000.0])
+	_perf_logged = true
+
 func _update_carrier_navigation(state: Dictionary) -> void:
 	if hud == null or _local_duelist == null or arena_map == null:
 		hud.set_carrier_navigation(false)
@@ -1472,8 +1496,9 @@ func _read_capture_arguments() -> void:
 				_offline_squad_size = 3
 		elif argument.begins_with("--arena-preview="):
 			_arena_preview = argument.trim_prefix("--arena-preview=")
-			if _arena_preview in ["concourse-overview", "windwalk", "relay-basin", "service-run", "sun-bay", "void-bay", "carrier-gate"]:
-				_offline_squad_size = 5
+		elif argument == "--arena-perf-sample":
+			_arena_perf_sample = true
+			_offline_squad_size = 5
 		elif argument.begins_with("--objective-preview="):
 			_objective_preview = argument.trim_prefix("--objective-preview=")
 		elif argument.begins_with("--weapon-preview="):

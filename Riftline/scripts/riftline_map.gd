@@ -143,6 +143,8 @@ func _configure_concourse() -> void:
 	_add_route_solid(Vector3(-43.5, 1.05, 0), Vector3(2.5, 2.1, 3.6), Color("5b7993"))
 	_add_route_solid(Vector3(-40.5, 0.95, -20), Vector3(4.2, 1.9, 3.0), Color("bd7254"))
 	_add_route_solid(Vector3(-40.5, 0.95, 20), Vector3(4.2, 1.9, 3.0), Color("d39a52"))
+	for z in [-16.0, -8.0, 8.0, 16.0]:
+		_add_route_solid(Vector3(-43.5, 1.1, z), Vector3(2.4, 2.2, 2.8), Color("496f8e"))
 
 	# Void staging bay uses equivalent opportunities with a different silhouette rhythm.
 	_add_route_solid(Vector3(44, 1.35, 12), Vector3(3.2, 2.7, 7.0), Color("496f8e"))
@@ -150,6 +152,8 @@ func _configure_concourse() -> void:
 	_add_route_solid(Vector3(43.5, 1.05, 0), Vector3(2.5, 2.1, 3.6), Color("5b7993"))
 	_add_route_solid(Vector3(40.5, 0.95, 20), Vector3(4.2, 1.9, 3.0), Color("bd7254"))
 	_add_route_solid(Vector3(40.5, 0.95, -20), Vector3(4.2, 1.9, 3.0), Color("d39a52"))
+	for z in [-16.0, -8.0, 8.0, 16.0]:
+		_add_route_solid(Vector3(43.5, 1.1, z), Vector3(2.4, 2.2, 2.8), Color("496f8e"))
 
 	# Relay Basin: offset low blocks make the neutral pickup contest open but exposed.
 	_add_route_solid(Vector3(-10, 0.8, -6), Vector3(5.4, 1.6, 3.2), Color("bd7254"))
@@ -162,6 +166,7 @@ func _configure_concourse() -> void:
 	_add_route_solid(Vector3(-10, 0.8, 30), Vector3(3.2, 1.6, 3.2), Color("637e99"))
 	_add_route_solid(Vector3(12, 1.15, 25), Vector3(4.4, 2.3, 3.2), Color("496f8e"))
 	_add_route_solid(Vector3(30, 0.8, 30), Vector3(3.2, 1.6, 3.2), Color("637e99"))
+	_add_ramp(Vector3(-19.0, 0.0, 31.0), Vector3(8.0, 1.5, 6.0), 1.5, Color("637e99"))
 
 	# Service Run is warmer and lower: long troughs and broken maintenance crates.
 	_add_route_solid(Vector3(-29, 0.75, -27), Vector3(5.4, 1.5, 3.4), Color("d39a52"))
@@ -195,18 +200,36 @@ func _add_solid(position: Vector3, dimensions: Vector3, color: Color, emission: 
 func _add_route_solid(position: Vector3, dimensions: Vector3, color: Color) -> void:
 	_add_solid(position, dimensions, color, 0.0, true)
 
+func _add_ramp(position: Vector3, dimensions: Vector3, rise: float, color: Color) -> void:
+	var spec := {"position": position, "dimensions": dimensions, "color": color, "emission": 0.0, "shape": "ramp", "rise": rise}
+	_solids.append(spec)
+	_route_blockers.append(spec)
+
 func _add_solid_node(spec: Dictionary) -> void:
 	var body := StaticBody3D.new()
 	body.position = spec.position
 	add_child(body)
 	if _presentation_enabled:
 		var mesh_instance := MeshInstance3D.new()
-		mesh_instance.mesh = _box_mesh(spec.dimensions)
+		mesh_instance.mesh = _ramp_mesh(spec.dimensions, float(spec.get("rise", 0.0))) if str(spec.get("shape", "box")) == "ramp" else _box_mesh(spec.dimensions)
 		mesh_instance.material_override = _pulp_material(spec.color, float(spec.emission))
 		body.add_child(mesh_instance)
 	var collision := CollisionShape3D.new()
-	var shape := BoxShape3D.new()
-	shape.size = spec.dimensions
+	var shape: Shape3D
+	if str(spec.get("shape", "box")) == "ramp":
+		var ramp_shape := ConvexPolygonShape3D.new()
+		var half_x := float(spec.dimensions.x) * 0.5
+		var half_z := float(spec.dimensions.z) * 0.5
+		ramp_shape.points = PackedVector3Array([
+			Vector3(-half_x, 0.0, -half_z), Vector3(half_x, 0.0, -half_z),
+			Vector3(-half_x, 0.0, half_z), Vector3(half_x, 0.0, half_z),
+			Vector3(-half_x, float(spec.rise), half_z), Vector3(half_x, float(spec.rise), half_z),
+		])
+		shape = ramp_shape
+	else:
+		var box_shape := BoxShape3D.new()
+		box_shape.size = spec.dimensions
+		shape = box_shape
 	collision.shape = shape
 	body.add_child(collision)
 
@@ -309,6 +332,26 @@ func _add_pulp_cylinder(position: Vector3, radius: float, height: float, color: 
 func _box_mesh(dimensions: Vector3) -> BoxMesh:
 	var mesh := BoxMesh.new()
 	mesh.size = dimensions
+	return mesh
+
+func _ramp_mesh(dimensions: Vector3, rise: float) -> ArrayMesh:
+	var half_x := dimensions.x * 0.5
+	var half_z := dimensions.z * 0.5
+	var vertices := PackedVector3Array([
+		Vector3(-half_x, 0.0, -half_z), Vector3(half_x, 0.0, -half_z),
+		Vector3(-half_x, 0.0, half_z), Vector3(half_x, 0.0, half_z),
+		Vector3(-half_x, rise, half_z), Vector3(half_x, rise, half_z),
+	])
+	var indices := PackedInt32Array([
+		0, 2, 1, 0, 1, 5, 0, 5, 4,
+		2, 4, 5, 2, 5, 3, 0, 4, 2, 1, 3, 5,
+	])
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
 
 func _pulp_material(color: Color, glow: float) -> ShaderMaterial:
