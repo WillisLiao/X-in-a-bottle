@@ -22,6 +22,16 @@ var primary_fire_bloom := 0.0
 var camera_sensitivity := 1.0
 var ads_sensitivity := 0.72
 var gyro_enabled := false
+var _stick_mode := MobileTouchRouter.StickMode.FLOATING
+var _touch_router := MobileTouchRouter.new()
+var _stick_visual_opacity := 0.0
+var _stick_visual_target := 0.0
+var _coach_cue: Dictionary = {}
+var _coach_display_cue: Dictionary = {}
+var _coach_visual_opacity := 0.0
+var _coach_visual_target := 0.0
+var _touch_preview := ""
+var _ammo_preview_override := false
 
 var _look_delta := Vector2.ZERO
 var _jump_requested := false
@@ -29,8 +39,6 @@ var _crouch_requested := false
 var _prone_requested := false
 var _weapon_switch_requested := false
 var _reload_requested := false
-var _left_touch := -1
-var _right_touch := -1
 var _left_fire_touch := -1
 var _right_fire_touch := -1
 var _aim_touch := -1
@@ -38,7 +46,6 @@ var _jump_touch := -1
 var _crouch_touch := -1
 var _prone_touch := -1
 var _switch_touch := -1
-var _left_position := Vector2.ZERO
 var _sun_score := 0
 var _void_score := 0
 var _objective_state: Dictionary = {"state": int(RiftSeed.State.HOME), "carrier_id": "", "carrier_team": -1}
@@ -66,12 +73,14 @@ var _match_phase: LinebreakMatch.Phase = LinebreakMatch.Phase.OPENING
 var _connection_flow_active := false
 var _connection_message := ""
 var _connection_message_remaining := 0.0
+var _reset_training_requested := false
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	_layout = _default_layout()
 	_load_control_settings()
+	_touch_router.configure(_stick_mode, _control_center("move"), _stick_radius())
 	queue_redraw()
 
 func _process(delta: float) -> void:
@@ -85,10 +94,14 @@ func _process(delta: float) -> void:
 	_connection_message_remaining = maxf(0.0, _connection_message_remaining - delta)
 	if _connection_message_remaining <= 0.0:
 		_connection_message = ""
+	_stick_visual_opacity = move_toward(_stick_visual_opacity, _stick_visual_target, delta * 12.0)
+	_coach_visual_opacity = move_toward(_coach_visual_opacity, _coach_visual_target, delta * 5.5)
+	if _coach_visual_target <= 0.0 and _coach_visual_opacity <= 0.01:
+		_coach_display_cue = {}
 	queue_redraw()
 
 func take_look_delta() -> Vector2:
-	var delta := _look_delta
+	var delta := _look_delta + _touch_router.take_look_delta()
 	_look_delta = Vector2.ZERO
 	return delta * (ads_sensitivity if aim_held else camera_sensitivity)
 
@@ -116,6 +129,49 @@ func take_reload() -> bool:
 	var requested := _reload_requested
 	_reload_requested = false
 	return requested
+
+func take_reset_training() -> bool:
+	var requested := _reset_training_requested
+	_reset_training_requested = false
+	return requested
+
+func set_coach_cue(cue: Dictionary) -> void:
+	_coach_cue = cue.duplicate(true)
+	if _coach_cue.is_empty():
+		_coach_visual_target = 0.0
+	else:
+		_coach_display_cue = _coach_cue.duplicate(true)
+		_coach_visual_target = 1.0
+	queue_redraw()
+
+func set_touch_preview(preview: String) -> void:
+	_touch_preview = preview
+	_ammo_preview_override = preview in ["ammo-low", "reloading"]
+	if preview == "two-thumb":
+		_layout = _two_thumb_layout()
+	elif preview == "four-finger":
+		_layout = _four_finger_layout()
+	elif preview == "fixed-stick":
+		_stick_mode = MobileTouchRouter.StickMode.FIXED
+		_touch_router.configure(_stick_mode, _control_center("move"), _stick_radius())
+	elif preview in ["floating-left", "floating-edge"]:
+		_stick_mode = MobileTouchRouter.StickMode.FLOATING
+		_touch_router.configure(_stick_mode, _control_center("move"), _stick_radius())
+	if preview in ["floating-left", "floating-edge"]:
+		_stick_visual_target = 1.0
+		_stick_visual_opacity = 1.0
+	if preview == "ammo-low":
+		show_ammo(4, 24, 0.0)
+	elif preview == "reloading":
+		show_ammo(4, 24, Duelist.M4_RELOAD_SECONDS * 0.5)
+	if preview == "coach-move":
+		set_coach_cue({"key": "move", "text": "DRAG LEFT SIDE TO MOVE", "region": "left"})
+	elif preview == "coach-look":
+		set_coach_cue({"key": "look", "text": "DRAG RIGHT SIDE TO LOOK", "region": "right"})
+	elif preview == "coach-fire":
+		set_coach_cue({"key": "fire", "text": "HOLD FIRE TO ENGAGE", "region": "fire"})
+	elif preview == "coach-seed":
+		set_coach_cue({"key": "seed", "text": "TAKE THE SEED THROUGH THEIR RIFT", "region": "seed"})
 
 func set_score(sun: int, void_score: int) -> void:
 	_sun_score = clampi(sun, 0, 3)
@@ -153,6 +209,8 @@ func set_weapon(weapon: Duelist.Weapon) -> void:
 	_weapon = weapon
 
 func show_ammo(magazine: int, reserve: int, reload_time: float) -> void:
+	if _ammo_preview_override:
+		return
 	magazine_rounds = clampi(magazine, 0, Duelist.M4_MAGAZINE_SIZE)
 	reserve_ammo = clampi(reserve, 0, Duelist.M4_RESERVE_AMMO)
 	reload_remaining = maxf(0.0, reload_time)
@@ -275,12 +333,7 @@ func _handle_touch(index: int, point: Vector2, pressed: bool) -> void:
 	if _pressed_circle(point, _reload_center(), _reload_radius() + 12.0):
 		_reload_requested = true
 		return
-	var key := _layout_key_at(point)
-	if key == "move":
-		_left_touch = index
-		_left_position = point
-		_update_movement(point)
-		return
+	var key := _action_key_at(point)
 	if key == "left_fire":
 		_left_fire_touch = index
 		fire_held = true
@@ -309,27 +362,23 @@ func _handle_touch(index: int, point: Vector2, pressed: bool) -> void:
 		_switch_touch = index
 		_weapon_switch_requested = true
 		return
-	_right_touch = index
+	if not _safe_rect().has_point(point):
+		return
+	_touch_router.configure(_stick_mode, _control_center("move"), _stick_radius())
+	var role := _touch_router.begin(index, point, _movement_region(), _stick_radius())
+	movement = _touch_router.movement()
+	if role == MobileTouchRouter.Role.MOVE:
+		_stick_visual_target = 1.0
 
 func _handle_drag(index: int, point: Vector2, relative: Vector2) -> void:
-	if index == _left_touch:
-		_left_position = point
-		_update_movement(point)
-	elif index == _right_touch:
-		_look_delta += relative
-
-func _update_movement(point: Vector2) -> void:
-	var stick := _control_center("move")
-	var radius := _control_radius("move")
-	_left_position = stick + (point - stick).limit_length(radius)
-	movement = (_left_position - stick) / radius
+	_touch_router.drag(index, point, relative)
+	movement = _touch_router.movement()
 
 func _release_touch(index: int) -> void:
-	if index == _left_touch:
-		_left_touch = -1
-		movement = Vector2.ZERO
-	if index == _right_touch:
-		_right_touch = -1
+	_touch_router.end(index)
+	movement = _touch_router.movement()
+	if not _touch_router.has_movement_owner() and _touch_preview.is_empty():
+		_stick_visual_target = 0.0
 	if index == _left_fire_touch:
 		_left_fire_touch = -1
 	if index == _right_fire_touch:
@@ -350,8 +399,7 @@ func _release_touch(index: int) -> void:
 		_switch_touch = -1
 
 func _release_all_touch_ownership() -> void:
-	_left_touch = -1
-	_right_touch = -1
+	_touch_router.reset()
 	_left_fire_touch = -1
 	_right_fire_touch = -1
 	_aim_touch = -1
@@ -369,6 +417,7 @@ func _release_all_touch_ownership() -> void:
 	_prone_requested = false
 	_weapon_switch_requested = false
 	_reload_requested = false
+	_stick_visual_target = 0.0
 
 func _draw() -> void:
 	if _layout_editor:
@@ -382,6 +431,7 @@ func _draw_gameplay_hud() -> void:
 	var friendly := Color("ffad5d")
 	var enemy := Color("71cfff")
 	var center := size * 0.5
+	_draw_coach_cue(friendly, enemy)
 
 	# The reticle stays clean for touch aiming, with a short directional bloom that recovers quickly.
 	var bloom_radius := 14.0 + primary_fire_bloom * 3.0
@@ -400,13 +450,26 @@ func _draw_gameplay_hud() -> void:
 			var outer := center + direction * confirm_radius
 			draw_line(inner, outer, confirm_color, 2.5)
 
-	var stick_center := _control_center("move")
-	var stick_radius := _control_radius("move")
-	var knob := _left_position if _left_touch >= 0 else stick_center
-	draw_circle(stick_center, stick_radius, Color("08142a", 0.42 * _control_opacity("move")))
-	draw_arc(stick_center, stick_radius, 0.0, TAU, 32, Color(friendly, 0.38 * _control_opacity("move")), 2.0)
-	draw_circle(knob, 24.0 * _control_scale("move"), Color(friendly, 0.34 * _control_opacity("move")))
-	draw_arc(knob, 24.0 * _control_scale("move"), 0.0, TAU, 24, Color(friendly, 0.9 * _control_opacity("move")), 2.0)
+	var stick_anchor := _control_center("move")
+	var stick_radius := _stick_radius()
+	var stick_is_active := _touch_router.has_movement_owner() or _touch_preview in ["floating-left", "floating-edge"]
+	var stick_is_visible := stick_is_active or (_stick_mode == MobileTouchRouter.StickMode.FLOATING and _stick_visual_opacity > 0.01)
+	var stick_center := _touch_router.stick_origin() if stick_is_visible else stick_anchor
+	var knob := _touch_router.stick_knob() if stick_is_visible else stick_center
+	var stick_alpha := _control_opacity("move")
+	if _stick_mode == MobileTouchRouter.StickMode.FLOATING:
+		stick_alpha *= _stick_visual_opacity if stick_is_active else 0.28
+	if _touch_preview == "floating-left":
+		stick_center = _preview_stick_origin(Vector2(220.0, 410.0), stick_radius)
+		knob = stick_center + Vector2(30.0, -22.0)
+	elif _touch_preview == "floating-edge":
+		stick_center = _preview_stick_origin(Vector2(28.0, 430.0), stick_radius)
+		knob = stick_center + Vector2(32.0, -12.0)
+	draw_circle(stick_center, stick_radius, Color("08142a", 0.42 * stick_alpha))
+	draw_arc(stick_center, stick_radius, 0.0, TAU, 32, Color(friendly, 0.38 * stick_alpha), 2.0)
+	if _stick_mode == MobileTouchRouter.StickMode.FIXED or stick_is_active or _stick_visual_opacity > 0.01:
+		draw_circle(knob, 24.0 * _control_scale("move"), Color(friendly, 0.34 * stick_alpha))
+		draw_arc(knob, 24.0 * _control_scale("move"), 0.0, TAU, 24, Color(friendly, 0.9 * stick_alpha), 2.0)
 
 	_draw_button("left_fire", friendly, _left_fire_touch >= 0)
 	_draw_button("right_fire", friendly, _right_fire_touch >= 0)
@@ -419,6 +482,13 @@ func _draw_gameplay_hud() -> void:
 		_draw_button_fixed(_reload_center(), _reload_radius(), Color("e6a25b"), reload_remaining > 0.0, "RELOAD")
 	_draw_weapon_indicator(friendly)
 	_draw_button_fixed(_settings_center(), 24.0, enemy, _settings_open, "SET")
+	if _touch_preview in ["two-thumb", "four-finger"]:
+		_draw_button_preview("left_fire", friendly)
+		_draw_button_preview("right_fire", friendly)
+	if _touch_preview == "reloading":
+		_draw_reload_sweep(_reload_center(), _reload_radius(), Color("fff0b0"))
+	if _touch_preview in ["floating-left", "floating-edge"]:
+		_draw_preview_floating_stick(friendly)
 
 	var safe := _safe_rect()
 	var health_width := 210.0
@@ -494,15 +564,74 @@ func _draw_weapon_indicator(color: Color) -> void:
 		draw_line(center + Vector2(14, 4), center + Vector2(23, 11), color, 3.0)
 		draw_circle(center + Vector2(-8, 0), 3.0, Color("fff0b0"))
 		var font := ThemeDB.fallback_font
-		var ammo_label := "%02d / %02d" % [magazine_rounds, reserve_ammo]
-		var ammo_width := font.get_string_size(ammo_label, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
-		draw_string(font, center + Vector2(-ammo_width * 0.5, -29.0), ammo_label, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(color, 0.96))
+		_draw_magazine_read(center + Vector2(0.0, -28.0), color)
 		if reload_remaining > 0.0:
 			draw_string(font, center + Vector2(-32.0, 43.0), "LOADING", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("fff0b0", 0.94))
+			_draw_reload_sweep(center, 30.0, Color("fff0b0"))
 	else:
 		for offset in [-10.0, -5.0, 0.0, 5.0, 10.0]:
 			draw_circle(center + Vector2(offset, 0), 3.8, Color("c292ff"))
 		draw_line(center + Vector2(15, -10), center + Vector2(15, 10), Color("d8c4ff"), 3.0)
+
+func _draw_magazine_read(center: Vector2, color: Color) -> void:
+	var magazine_ratio := clampf(float(magazine_rounds) / float(Duelist.M4_MAGAZINE_SIZE), 0.0, 1.0)
+	var filled_segments := ceili(magazine_ratio * 5.0) if magazine_rounds > 0 else 0
+	for index in 5:
+		var segment := Rect2(center + Vector2(-28.0 + index * 12.0, -4.0), Vector2(9.0, 8.0))
+		draw_rect(segment, Color(color, 0.88 if index < filled_segments else 0.14), index < filled_segments)
+		draw_rect(segment, Color(color, 0.56), false, 1.0)
+	var reserve_ratio := clampf(float(reserve_ammo) / float(Duelist.M4_RESERVE_AMMO), 0.0, 1.0)
+	var reserve_blocks := ceili(reserve_ratio * 3.0) if reserve_ammo > 0 else 0
+	for index in 3:
+		var block := Rect2(center + Vector2(-17.0 + index * 12.0, 10.0), Vector2(8.0, 4.0))
+		draw_rect(block, Color("fff0b0", 0.7 if index < reserve_blocks else 0.12), index < reserve_blocks)
+		draw_rect(block, Color("fff0b0", 0.42), false, 1.0)
+
+func _draw_reload_sweep(center: Vector2, radius: float, color: Color) -> void:
+	var phase := fmod(Time.get_ticks_msec() / 1000.0, 1.0)
+	draw_arc(center, radius + 5.0, -PI * 0.5, -PI * 0.5 + TAU * phase, 24, Color(color, 0.92), 3.0)
+	draw_line(center + Vector2(-radius * 0.42, radius * 0.42), center + Vector2(radius * 0.42, radius * 0.42), Color(color, 0.82), 2.0)
+
+func _draw_button_preview(key: String, color: Color) -> void:
+	var center := _control_center(key)
+	draw_arc(center, _control_radius(key) + 8.0, 0.0, TAU, 32, Color(color, 0.45), 2.0)
+
+func _draw_preview_floating_stick(color: Color) -> void:
+	var radius := _stick_radius()
+	var point := Vector2(220.0, 410.0) if _touch_preview == "floating-left" else Vector2(28.0, 430.0)
+	var origin := _preview_stick_origin(point, radius)
+	var knob := origin + (Vector2(30.0, -22.0) if _touch_preview == "floating-left" else Vector2(32.0, -12.0))
+	draw_circle(origin, radius, Color("08142a", 0.42))
+	draw_arc(origin, radius, 0.0, TAU, 32, Color(color, 0.55), 2.0)
+	draw_circle(knob, 24.0 * _control_scale("move"), Color(color, 0.38))
+	draw_arc(knob, 24.0 * _control_scale("move"), 0.0, TAU, 24, Color(color, 0.95), 2.0)
+
+func _draw_coach_cue(friendly: Color, enemy: Color) -> void:
+	if _coach_display_cue.is_empty() or _coach_visual_opacity <= 0.01:
+		return
+	var safe := _safe_rect()
+	var cue_alpha := _coach_visual_opacity
+	var region := str(_coach_display_cue.get("region", ""))
+	var accent := enemy if region == "right" else friendly
+	if region == "left":
+		draw_rect(Rect2(safe.position, Vector2(safe.size.x * 0.5, safe.size.y)), Color(accent, 0.025 * cue_alpha), true)
+		draw_line(Vector2(safe.get_center().x, safe.position.y + 66.0), Vector2(safe.get_center().x, safe.end.y - 18.0), Color(accent, 0.28 * cue_alpha), 1.0)
+	elif region == "right":
+		draw_rect(Rect2(Vector2(safe.get_center().x, safe.position.y), Vector2(safe.size.x * 0.5, safe.size.y)), Color(accent, 0.025 * cue_alpha), true)
+		draw_line(Vector2(safe.get_center().x, safe.position.y + 66.0), Vector2(safe.get_center().x, safe.end.y - 18.0), Color(accent, 0.28 * cue_alpha), 1.0)
+	elif region == "fire":
+		var pulse := 0.38 + 0.32 * (0.5 + 0.5 * sin(Time.get_ticks_msec() / 180.0))
+		for key in ["left_fire", "right_fire"]:
+			draw_arc(_control_center(key), _control_radius(key) + 10.0, 0.0, TAU, 32, Color(accent, pulse * cue_alpha), 2.0)
+	var rect := Rect2(Vector2(size.x * 0.5 - 190.0, safe.position.y + 62.0), Vector2(380.0, 30.0))
+	if region == "seed":
+		rect = Rect2(Vector2(size.x * 0.5 - 260.0, safe.end.y - 148.0), Vector2(520.0, 30.0))
+	draw_rect(rect, Color("071126", 0.72 * cue_alpha), true)
+	draw_line(rect.position, rect.position + Vector2(rect.size.x, 0), Color(accent, 0.75 * cue_alpha), 1.5)
+	var font := ThemeDB.fallback_font
+	var text := str(_coach_display_cue.get("text", ""))
+	var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
+	draw_string(font, rect.get_center() + Vector2(-width * 0.5, 5.0), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f1f6ff", 0.95 * cue_alpha))
 
 func _draw_match_result() -> void:
 	var accent := Color("ffad5d") if _match_result_victory else Color("71cfff")
@@ -579,8 +708,18 @@ func _handle_settings_touch(point: Vector2, pressed: bool) -> void:
 		gyro_enabled = not gyro_enabled
 		_save_control_settings()
 		return
-	if Rect2(panel.position + Vector2(24, 222), Vector2(210, 44)).has_point(point):
+	if _stick_mode_rect(panel).has_point(point):
+		_stick_mode = MobileTouchRouter.StickMode.FIXED if _stick_mode == MobileTouchRouter.StickMode.FLOATING else MobileTouchRouter.StickMode.FLOATING
+		_touch_router.configure(_stick_mode, _control_center("move"), _stick_radius())
+		_save_control_settings()
+		return
+	if _hud_layout_rect(panel).has_point(point):
 		open_hud_layout()
+		return
+	if _reset_training_rect(panel).has_point(point):
+		_reset_training_requested = true
+		_settings_open = false
+		_release_all_touch_ownership()
 		return
 	if _rift_link_rect(panel).has_point(point):
 		_settings_open = false
@@ -601,7 +740,9 @@ func _draw_settings_panel(friendly: Color, enemy: Color) -> void:
 	_draw_setting_chip(Rect2(panel.position + Vector2(24, 168), Vector2(142, 44)), "AIM %s" % ("TAP" if _aim_toggle else "HOLD"), friendly, _aim_toggle)
 	_draw_setting_chip(Rect2(panel.position + Vector2(184, 168), Vector2(142, 44)), "GYRO %s" % ("ON" if gyro_enabled else "OFF"), Color("c292ff"), gyro_enabled)
 	_draw_setting_chip(Rect2(panel.position + Vector2(344, 168), Vector2(142, 44)), "QUICK SWAP", Color("c292ff"), true)
-	_draw_setting_chip(Rect2(panel.position + Vector2(24, 222), Vector2(210, 44)), "HUD LAYOUT", enemy, true)
+	_draw_setting_chip(_stick_mode_rect(panel), "STICK %s" % ("FLOAT" if _stick_mode == MobileTouchRouter.StickMode.FLOATING else "FIXED"), friendly, _stick_mode == MobileTouchRouter.StickMode.FLOATING)
+	_draw_setting_chip(_hud_layout_rect(panel), "HUD LAYOUT", enemy, true)
+	_draw_setting_chip(_reset_training_rect(panel), "RESET TRAINING", Color("e57c70"), false)
 	_draw_setting_chip(_rift_link_rect(panel), "RIFT LINK", Color("71cfff"), false)
 	draw_string(font, panel.position + Vector2(24, panel.size.y - 22), "Tap outside to return", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("92a7c7"))
 
@@ -638,7 +779,7 @@ func _draw_layout_editor() -> void:
 	draw_line(panel.position, panel.position + Vector2(panel.size.x, 0), friendly, 2.0)
 	var selected_label := "SELECT A CONTROL" if _selected_layout_key.is_empty() else str(_control_specs()[_selected_layout_key].label)
 	draw_string(font, panel.position + Vector2(20, 25), selected_label, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, enemy)
-	draw_string(font, panel.position + Vector2(170, 25), "GRID LOCK 8", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("92a7c7"))
+	draw_string(font, panel.position + Vector2(170, 25), "GRID LOCK", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("92a7c7"))
 	_draw_setting_chip(_editor_button_rect("size_down"), "SIZE -", friendly, false)
 	_draw_setting_chip(_editor_button_rect("size_up"), "SIZE +", friendly, false)
 	_draw_setting_chip(_editor_button_rect("opacity_down"), "FADE -", Color("c292ff"), false)
@@ -767,10 +908,19 @@ func _editor_button_rect(button: String) -> Rect2:
 	return Rect2(x, y, width, 44.0)
 
 func _settings_panel() -> Rect2:
-	return Rect2(size * 0.5 - Vector2(260, 170), Vector2(520, 340))
+	return Rect2(size * 0.5 - Vector2(260, 180), Vector2(520, 360))
 
 func _rift_link_rect(panel: Rect2) -> Rect2:
-	return Rect2(panel.position + Vector2(244, 222), Vector2(180, 44))
+	return Rect2(panel.position + Vector2(244, 276), Vector2(180, 44))
+
+func _stick_mode_rect(panel: Rect2) -> Rect2:
+	return Rect2(panel.position + Vector2(24, 222), Vector2(142, 44))
+
+func _hud_layout_rect(panel: Rect2) -> Rect2:
+	return Rect2(panel.position + Vector2(184, 222), Vector2(210, 44))
+
+func _reset_training_rect(panel: Rect2) -> Rect2:
+	return Rect2(panel.position + Vector2(24, 276), Vector2(210, 44))
 
 func _safe_rect() -> Rect2:
 	var fallback := Rect2(24.0, 24.0, maxf(1.0, size.x - 48.0), maxf(1.0, size.y - 48.0))
@@ -844,9 +994,29 @@ func _control_opacity(key: String) -> float:
 func _control_radius(key: String) -> float:
 	return float(_control_specs()[key].radius) * _control_scale(key)
 
+func _stick_radius() -> float:
+	return maxf(_control_radius("move"), 44.0)
+
 func _control_center(key: String) -> Vector2:
 	var safe := _safe_rect()
 	return safe.position + Vector2(_layout[key].center) * safe.size
+
+func _movement_region() -> Rect2:
+	var safe := _safe_rect()
+	return Rect2(safe.position, Vector2(safe.size.x * 0.5, safe.size.y))
+
+func _action_key_at(point: Vector2) -> String:
+	var closest := ""
+	var closest_distance := INF
+	for key in MOVABLE_KEYS:
+		if key == "move":
+			continue
+		var hit_radius := maxf(_control_radius(key), 22.0) + 8.0
+		var distance := point.distance_to(_control_center(key))
+		if distance <= hit_radius and distance < closest_distance:
+			closest = key
+			closest_distance = distance
+	return closest
 
 func _layout_key_at(point: Vector2) -> String:
 	var closest := ""
@@ -884,6 +1054,12 @@ func _clamp_center(point: Vector2, radius: float, safe: Rect2) -> Vector2:
 func _normalized_center(point: Vector2, safe: Rect2) -> Vector2:
 	return Vector2(clampf((point.x - safe.position.x) / safe.size.x, 0.0, 1.0), clampf((point.y - safe.position.y) / safe.size.y, 0.0, 1.0))
 
+func _preview_stick_origin(point: Vector2, radius: float) -> Vector2:
+	var region := _movement_region()
+	return Vector2(
+		clampf(point.x, region.position.x + radius, region.end.x - radius),
+		clampf(point.y, region.position.y + radius, region.end.y - radius))
+
 func _load_control_settings() -> void:
 	var config := ConfigFile.new()
 	if config.load(CONFIG_PATH) != OK:
@@ -892,6 +1068,8 @@ func _load_control_settings() -> void:
 	ads_sensitivity = _config_float(config, "sensitivity", "ads", ads_sensitivity, 0.3, 1.7)
 	gyro_enabled = bool(config.get_value("controls", "gyro", gyro_enabled))
 	_aim_toggle = bool(config.get_value("controls", "aim_toggle", _aim_toggle))
+	var saved_stick_mode := str(config.get_value("controls", "stick_mode", "floating")).to_lower()
+	_stick_mode = MobileTouchRouter.StickMode.FIXED if saved_stick_mode == "fixed" else MobileTouchRouter.StickMode.FLOATING
 	for key in MOVABLE_KEYS:
 		var fallback: Dictionary = _default_layout()[key]
 		var center_x := _config_float(config, LAYOUT_SECTION, "%s_center_x" % key, fallback.center.x, 0.0, 1.0)
@@ -916,6 +1094,7 @@ func _save_control_settings() -> void:
 	config.set_value("sensitivity", "ads", ads_sensitivity)
 	config.set_value("controls", "gyro", gyro_enabled)
 	config.set_value("controls", "aim_toggle", _aim_toggle)
+	config.set_value("controls", "stick_mode", "fixed" if _stick_mode == MobileTouchRouter.StickMode.FIXED else "floating")
 	for key in MOVABLE_KEYS:
 		var data: Dictionary = _layout[key]
 		config.set_value(LAYOUT_SECTION, "%s_center_x" % key, data.center.x)
