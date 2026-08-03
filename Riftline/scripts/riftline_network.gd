@@ -12,9 +12,12 @@ signal team_assigned(team: int)
 signal actor_assigned(actor_id: String, team: int)
 signal roster_received(records: Array[Dictionary])
 signal session_descriptor_received(descriptor: Dictionary)
+signal lobby_state_received(state: Dictionary)
+signal lobby_live_received(state: Dictionary)
+signal lobby_abandoned_received(state: Dictionary)
 
 const PROJECT_ID := "riftline-lan"
-const PROTOCOL_VERSION := 3
+const PROTOCOL_VERSION := 4
 const APP_HOST_DUEL_REMOTE_SLOTS := 1
 const APP_HOST_SQUAD_REMOTE_SLOTS := 9
 const DEDICATED_REMOTE_SLOTS := 10
@@ -40,6 +43,8 @@ var _discovered_marker := ""
 var _last_input_sequence: Dictionary = {}
 var _last_input_view: Dictionary = {}
 var roster: RiftlineRoster
+var lobby: RiftlineLobby
+var lobby_state: Dictionary = {}
 var team_size := 1
 var arena_id: RiftlineMap.Id = RiftlineMap.Id.DUEL_YARD
 var arena_override_set := false
@@ -59,11 +64,16 @@ var _sim_queue: Array[Dictionary] = []
 var _sim_unreliable_sequence := 0
 var _sim_last_unreliable_release := -1
 var _sim_reliable_release_after := 0.0
+var _lobby_auto_ready := false
+var _last_logged_lobby_phase := -1
 
 func _ready() -> void:
 	_read_command_line_options()
 	roster = RiftlineRoster.new()
 	roster.configure(team_size, session_role == SessionRole.DEDICATED_SERVER, false)
+	lobby = RiftlineLobby.new()
+	lobby.configure(team_size, arena_id, session_role == SessionRole.DEDICATED_SERVER)
+	roster = lobby.roster
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	multiplayer.connected_to_server.connect(_on_connected_to_server)
@@ -88,6 +98,7 @@ func host_lan() -> Error:
 		return ERR_INVALID_PARAMETER
 	session_role = SessionRole.APP_HOST
 	_configure_roster(false)
+	_configure_lobby(false)
 	var remote_slots := APP_HOST_SQUAD_REMOTE_SLOTS if team_size > 1 else APP_HOST_DUEL_REMOTE_SLOTS
 	_peer = ENetMultiplayerPeer.new()
 	var error := _peer.create_server(ENET_PORT, remote_slots)
@@ -96,12 +107,14 @@ func host_lan() -> Error:
 		session_status.emit("LINK ERROR")
 		return error
 	multiplayer.multiplayer_peer = _peer
-	var host_record := roster.add_host()
+	var host_record := lobby.add_host()
 	local_actor_id = str(host_record.get("actor_id", ""))
 	local_team = int(host_record.get("team", -1))
 	_session_marker = _new_session_marker()
 	session_descriptor = _descriptor_from_packet(_session_event())
 	_start_advertising()
+	if _lobby_auto_ready:
+		submit_lobby_ready(true)
 	session_status.emit("WAITING FOR RIVAL")
 	return OK
 
@@ -131,6 +144,7 @@ func stop() -> void:
 	_last_input_sequence.clear()
 	_last_input_view.clear()
 	_configure_roster(session_role == SessionRole.DEDICATED_SERVER)
+	_configure_lobby(session_role == SessionRole.DEDICATED_SERVER)
 	local_actor_id = ""
 	local_team = -1
 	_discovered_address = ""
@@ -141,6 +155,7 @@ func stop() -> void:
 	_sim_queue.clear()
 	_sim_reliable_release_after = simulation_clock
 	session_role = SessionRole.OFFLINE
+	lobby_state.clear()
 
 func send_input(frame: Dictionary) -> void:
 	if multiplayer.multiplayer_peer == null or multiplayer.is_server():
@@ -160,6 +175,58 @@ func publish_event(event: Dictionary) -> void:
 		_queue_or_send({"kind": "event", "event": event}, true)
 	else:
 		_queue_or_send({"kind": "client_event", "event": event}, true)
+
+func submit_lobby_ready(ready: bool) -> bool:
+	if lobby == null or not multiplayer.is_server():
+		return false
+	var changed := lobby.set_host_ready(ready)
+	if changed:
+		_broadcast_lobby_state()
+		_maybe_arm_lobby()
+	return changed
+
+func submit_lobby_rematch_ready(ready: bool) -> bool:
+	if lobby == null or not multiplayer.is_server():
+		return false
+	var changed := lobby.set_host_rematch_ready(ready)
+	if changed:
+		_broadcast_lobby_state()
+		_maybe_arm_rematch()
+	return changed
+
+func publish_lobby_live() -> bool:
+	if lobby == null or not multiplayer.is_server():
+		return false
+	if not lobby.commit_live(lobby.current_generation()):
+		return false
+	_broadcast_lobby_event("lobby_live", lobby.public_state())
+	return true
+
+func publish_lobby_finished() -> void:
+	if lobby == null or not multiplayer.is_server():
+		return
+	lobby.finish_match()
+	_broadcast_lobby_state()
+
+func publish_lobby_abandoned(reason: String) -> void:
+	if lobby == null or not multiplayer.is_server():
+		return
+	lobby.abandon_live(reason)
+	_broadcast_lobby_event("lobby_abandoned", lobby.public_state())
+
+func _submit_client_lobby_intent(event: Dictionary) -> void:
+	if multiplayer.multiplayer_peer == null or multiplayer.is_server():
+		return
+	_queue_or_send({"kind": "client_event", "event": event}, true)
+
+func submit_client_lobby_ready(ready: bool, revision: int) -> void:
+	_submit_client_lobby_intent({"type": "lobby_ready", "ready": ready, "revision": revision})
+
+func submit_client_lobby_rematch_ready(ready: bool, revision: int) -> void:
+	_submit_client_lobby_intent({"type": "lobby_rematch_ready", "ready": ready, "revision": revision})
+
+func submit_client_lobby_leave() -> void:
+	_submit_client_lobby_intent({"type": "lobby_leave"})
 
 func start_command_line_mode() -> bool:
 	for argument in OS.get_cmdline_user_args():
@@ -245,6 +312,8 @@ func _poll_discovery() -> void:
 			continue
 		var packet: Dictionary = parsed
 		if packet.get("project", "") != PROJECT_ID or int(packet.get("version", -1)) != PROTOCOL_VERSION:
+			if packet.get("project", "") == PROJECT_ID and int(packet.get("version", -1)) != PROTOCOL_VERSION:
+				session_status.emit("RIFT VERSION MISMATCH")
 			continue
 		var issued := int(packet.get("issued", 0))
 		if issued > 0 and Time.get_ticks_msec() - issued > int(DISCOVERY_TTL * 1000.0):
@@ -263,7 +332,7 @@ func _poll_discovery() -> void:
 
 func _on_peer_connected(peer_id: int) -> void:
 	if multiplayer.is_server():
-		var assigned := roster.assign_peer(peer_id)
+		var assigned := lobby.admit_peer(peer_id) if lobby != null else {}
 		if assigned.is_empty():
 			_peer.disconnect_peer(peer_id, true)
 			session_status.emit("RIFT FULL")
@@ -271,7 +340,7 @@ func _on_peer_connected(peer_id: int) -> void:
 		_send_server_event(peer_id, _session_event())
 		_send_server_event(peer_id, {"type": "assigned_actor", "actor_id": assigned.actor_id, "team": int(assigned.team)})
 		_broadcast_roster()
-		_stop_discovery()
+		_broadcast_lobby_state()
 		session_status.emit("RIVAL LINKED")
 	peer_joined.emit(peer_id)
 
@@ -279,8 +348,15 @@ func _on_peer_disconnected(peer_id: int) -> void:
 	_last_input_sequence.erase(peer_id)
 	_last_input_view.erase(peer_id)
 	if multiplayer.is_server():
-		roster.remove_peer(peer_id)
-		_broadcast_roster()
+		var removed := lobby.remove_peer(peer_id) if lobby != null else roster.remove_peer(peer_id)
+		if not removed.is_empty():
+			_broadcast_roster()
+			if lobby != null and int(lobby.public_state().phase) == RiftlineLobby.Phase.ABANDONED:
+				_broadcast_lobby_event("lobby_abandoned", lobby.public_state())
+				if session_role == SessionRole.DEDICATED_SERVER and lobby.reset_empty():
+					_broadcast_lobby_state()
+			else:
+				_broadcast_lobby_state()
 	peer_left.emit(peer_id)
 	session_status.emit("LINK LOST")
 
@@ -344,12 +420,25 @@ func _rpc_event(event: Dictionary) -> void:
 		arena_id = int(descriptor.get("map_id", int(arena_id))) as RiftlineMap.Id
 		team_size = clampi(int(descriptor.get("team_size", team_size)), RiftlineRoster.MIN_TEAM_SIZE, RiftlineRoster.MAX_TEAM_SIZE)
 		session_descriptor_received.emit(descriptor)
+	elif event_type == "lobby_state":
+		lobby_state = _validated_lobby_state(event.get("state", {}))
+		lobby_state_received.emit(lobby_state.duplicate(true))
+		if _lobby_auto_ready and not multiplayer.is_server() and int(lobby_state.get("phase", -1)) == RiftlineLobby.Phase.STAGING and not local_actor_id.is_empty():
+			submit_client_lobby_ready(true, int(lobby_state.get("revision", 0)))
+	elif event_type == "lobby_live":
+		lobby_state = _validated_lobby_state(event.get("state", {}))
+		lobby_live_received.emit(lobby_state.duplicate(true))
+	elif event_type == "lobby_abandoned":
+		lobby_state = _validated_lobby_state(event.get("state", {}))
+		lobby_abandoned_received.emit(lobby_state.duplicate(true))
 
 @rpc("any_peer", "reliable")
 func _rpc_client_event(event: Dictionary) -> void:
 	if not multiplayer.is_server() or event.is_empty():
 		return
 	var sender := multiplayer.get_remote_sender_id()
+	if _handle_lobby_intent(event, sender):
+		return
 	reliable_event_received.emit(event, sender)
 
 func peer_team(peer_id: int) -> int:
@@ -410,7 +499,7 @@ func _start_dedicated_server() -> Error:
 		session_status.emit("LINK ERROR")
 		return ERR_INVALID_PARAMETER
 	session_role = SessionRole.DEDICATED_SERVER
-	_configure_roster(true)
+	_configure_lobby(true)
 	_peer = ENetMultiplayerPeer.new()
 	var error := _peer.create_server(ENET_PORT, DEDICATED_REMOTE_SLOTS)
 	if error != OK:
@@ -422,6 +511,7 @@ func _start_dedicated_server() -> Error:
 	session_descriptor = _descriptor_from_packet(_session_event())
 	_start_advertising()
 	print("Riftline dedicated authority listening on LAN")
+	print("Riftline dedicated lobby: staging")
 	return OK
 
 func _validate_input(peer_id: int, frame: Dictionary) -> Dictionary:
@@ -496,6 +586,8 @@ func _read_command_line_options() -> void:
 			_sim_loss_percent = clampf(argument.trim_prefix("--net-sim-loss-percent=").to_float(), 0.0, 100.0)
 		elif argument.begins_with("--net-sim-seed="):
 			_sim_random.seed = int(argument.trim_prefix("--net-sim-seed="))
+		elif argument == "--lobby-auto-ready":
+			_lobby_auto_ready = true
 	arena_id = arena_override as RiftlineMap.Id if arena_override >= 0 else RiftlineMap.Id.CONCOURSE if arena_preview_requested else default_arena_for_team_size(team_size)
 	if _sim_latency > 0.0 or _sim_jitter > 0.0 or _sim_loss_percent > 0.0:
 		print("Riftline network test profile: latency=%dms jitter=%dms loss=%.1f%%" % [_sim_latency * 1000.0, _sim_jitter * 1000.0, _sim_loss_percent])
@@ -565,6 +657,91 @@ func _broadcast_roster() -> void:
 func _configure_roster(is_dedicated: bool) -> void:
 	roster = RiftlineRoster.new()
 	roster.configure(team_size, is_dedicated, false)
+
+func _configure_lobby(is_dedicated: bool) -> void:
+	lobby = RiftlineLobby.new()
+	lobby.configure(team_size, arena_id, is_dedicated)
+	roster = lobby.roster
+	lobby_state = lobby.public_state()
+
+func _broadcast_lobby_state() -> void:
+	if lobby == null or multiplayer.multiplayer_peer == null or not multiplayer.is_server():
+		return
+	lobby_state = lobby.public_state()
+	_broadcast_lobby_event("lobby_state", lobby_state)
+
+func _broadcast_lobby_event(event_type: String, state: Dictionary) -> void:
+	if multiplayer.multiplayer_peer == null or not multiplayer.is_server():
+		return
+	var event := {"type": event_type, "state": state.duplicate(true)}
+	_log_lobby_phase(state)
+	reliable_event_received.emit(event, multiplayer.get_unique_id())
+	_queue_or_send({"kind": "event", "event": event}, true)
+
+func _log_lobby_phase(state: Dictionary) -> void:
+	if session_role != SessionRole.DEDICATED_SERVER:
+		return
+	var phase := int(state.get("phase", -1))
+	if phase == _last_logged_lobby_phase:
+		return
+	_last_logged_lobby_phase = phase
+	var labels := ["staging", "arming", "live", "rematch", "abandoned"]
+	if phase >= 0 and phase < labels.size():
+		print("Riftline dedicated lobby: %s" % labels[phase])
+
+func _handle_lobby_intent(event: Dictionary, sender_id: int) -> bool:
+	if lobby == null or not multiplayer.is_server():
+		return false
+	var event_type := str(event.get("type", ""))
+	if event_type == "lobby_leave":
+		var removed := lobby.remove_peer(sender_id)
+		if not removed.is_empty():
+			_broadcast_roster()
+			_broadcast_lobby_event("lobby_abandoned" if int(lobby.public_state().phase) == RiftlineLobby.Phase.ABANDONED else "lobby_state", lobby.public_state())
+		return true
+	if event_type not in ["lobby_ready", "lobby_rematch_ready"]:
+		return false
+	if typeof(event.get("ready", null)) != TYPE_BOOL or typeof(event.get("revision", null)) != TYPE_INT:
+		_broadcast_lobby_state()
+		return true
+	if int(event.revision) != int(lobby.public_state().revision):
+		_broadcast_lobby_state()
+		return true
+	var changed := lobby.set_ready(sender_id, bool(event.ready)) if event_type == "lobby_ready" else lobby.set_rematch_ready(sender_id, bool(event.ready))
+	if changed:
+		_broadcast_lobby_state()
+		_maybe_arm_lobby() if event_type == "lobby_ready" else _maybe_arm_rematch()
+	else:
+		_broadcast_lobby_state()
+	return true
+
+func _maybe_arm_lobby() -> void:
+	if lobby != null and lobby.start_live():
+		_broadcast_lobby_state()
+
+func _maybe_arm_rematch() -> void:
+	if lobby != null and lobby.start_rematch():
+		_broadcast_lobby_state()
+
+func _validated_lobby_state(value: Variant) -> Dictionary:
+	if not value is Dictionary:
+		return {}
+	var state: Dictionary = value
+	var result := {
+		"phase": clampi(int(state.get("phase", RiftlineLobby.Phase.STAGING)), RiftlineLobby.Phase.STAGING, RiftlineLobby.Phase.ABANDONED),
+		"arena_id": int(state.get("arena_id", int(arena_id))),
+		"arena_name": str(state.get("arena_name", arena_name(arena_id))),
+		"team_size": clampi(int(state.get("team_size", team_size)), RiftlineRoster.MIN_TEAM_SIZE, RiftlineRoster.MAX_TEAM_SIZE),
+		"revision": maxi(0, int(state.get("revision", 0))),
+		"records": _validated_public_records(state.get("records", [])),
+		"complete": bool(state.get("complete", false)),
+		"launchable": bool(state.get("launchable", false)),
+	}
+	if state.has("launch_generation"):
+		result["launch_generation"] = maxi(0, int(state.get("launch_generation", 0)))
+	if state.has("reason"):
+		result["reason"] = str(state.get("reason", ""))
+	return result
 
 func _validated_public_records(value: Variant) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []

@@ -19,6 +19,9 @@ var _dedicated_server := false
 var _presentation_enabled := true
 var _lan_peer_ready := false
 var _authority_match_started := false
+var _lobby_arming_remaining := 0.0
+var _lobby_revision := -1
+var _lobby_generation := -1
 var _lan_phase: LinebreakMatch.Phase = LinebreakMatch.Phase.OPENING
 var _lan_tick := 0
 var _local_input_sequence := 0
@@ -61,6 +64,7 @@ var _objective_preview := ""
 var _weapon_preview := ""
 var _ballistics_preview := ""
 var _touch_preview := ""
+var _rift_link_preview := ""
 var _presentation_effects: Node3D
 var _seen_projectile_fires: Dictionary = {}
 var _seen_projectile_impacts: Dictionary = {}
@@ -93,7 +97,7 @@ func _ready() -> void:
 	else:
 		_build_environment()
 		_build_arena()
-		_capture_fixture_only = not _squad_preview.is_empty() or not _arena_preview.is_empty() or not _feedback_preview.is_empty()
+		_capture_fixture_only = not _squad_preview.is_empty() or not _arena_preview.is_empty() or not _feedback_preview.is_empty() or not _rift_link_preview.is_empty()
 		_build_match()
 		_build_hud()
 		_build_first_match_coach()
@@ -132,6 +136,7 @@ func _physics_process(delta: float) -> void:
 	_sync_squad_hud()
 	_tick_feedback_preview(delta)
 	if _lan_active:
+		_tick_lobby_arming(delta)
 		_tick_lan_duel(delta)
 		return
 	if hud.take_rematch():
@@ -465,6 +470,9 @@ func _build_network() -> void:
 	network.actor_assigned.connect(_on_actor_assigned)
 	network.roster_received.connect(_on_roster_received)
 	network.session_descriptor_received.connect(_on_session_descriptor)
+	network.lobby_state_received.connect(_on_lobby_state_received)
+	network.lobby_live_received.connect(_on_lobby_live_received)
+	network.lobby_abandoned_received.connect(_on_lobby_abandoned_received)
 
 func _build_rift_link() -> void:
 
@@ -477,6 +485,8 @@ func _build_rift_link() -> void:
 	rift_link.join_requested.connect(_on_join_requested)
 	rift_link.cancel_requested.connect(_on_rift_link_cancelled)
 	rift_link.retry_requested.connect(_on_join_retry_requested)
+	rift_link.ready_requested.connect(_on_lobby_ready_requested)
+	rift_link.rematch_requested.connect(_on_lobby_rematch_requested)
 
 func _on_player_damaged(_amount: float, remaining: float, attacker_id: String, source_position: Vector3, enemy_team: int) -> void:
 	if hud != null:
@@ -536,7 +546,9 @@ func _on_match_finished(winner: Duelist.Team) -> void:
 	if hud != null:
 		hud.show_match_result(winner)
 	if _lan_host:
+		_authority_match_started = false
 		network.publish_event({"type": "finished", "winner": int(winner)})
+		network.publish_lobby_finished()
 
 func _on_phase_changed(phase: LinebreakMatch.Phase) -> void:
 	if phase != LinebreakMatch.Phase.LIVE:
@@ -709,6 +721,8 @@ func _on_join_retry_requested() -> void:
 func _on_rift_link_cancelled() -> void:
 	_join_discovery_started = false
 	if _lan_active:
+		if not _lan_host:
+			network.submit_client_lobby_leave()
 		_restore_offline_training("RIFT CLOSED")
 	else:
 		network.stop()
@@ -719,7 +733,7 @@ func _on_network_status(status: String) -> void:
 	if rift_link != null and rift_link.visible:
 		rift_link.set_status(status)
 	if status in ["LINK LOST", "LINK FAILED"] and _lan_active and not _dedicated_server:
-		_restore_offline_training(status)
+		_show_severed_state("RIFT SEVERED")
 
 func _on_host_discovered(session: Dictionary) -> void:
 	_join_discovery_started = true
@@ -731,8 +745,7 @@ func _on_network_peer_joined(peer_id: int) -> void:
 	if not _lan_active:
 		return
 	if not _lan_host:
-		_lan_peer_ready = true
-		network.publish_event({"type": "ready"})
+		_lan_peer_ready = false
 		return
 	var actor_id := network.peer_actor_id(peer_id)
 	if actor_id.is_empty():
@@ -743,9 +756,6 @@ func _on_network_peer_joined(peer_id: int) -> void:
 	_last_sequences[actor_id] = -1
 	if _lan_host:
 		_sync_roster_records(_authority_records())
-	else:
-		_lan_peer_ready = true
-		network.publish_event({"type": "ready"})
 
 
 func _on_network_peer_left(peer_id: int) -> void:
@@ -813,13 +823,23 @@ func _on_network_event(event: Dictionary, sender_id: int) -> void:
 	if event.is_empty():
 		return
 	var event_type := str(event.get("type", ""))
+	if event_type in ["lobby_state", "lobby_live", "lobby_abandoned"]:
+		var state: Dictionary = event.get("state", {})
+		if not state.is_empty():
+			_apply_lobby_state(state)
+		if event_type == "lobby_state" and int(state.get("phase", -1)) == RiftlineLobby.Phase.ARMING and _lan_host:
+			_begin_lobby_launch()
+		elif event_type == "lobby_live":
+			_on_lobby_live_state(state)
+		elif event_type == "lobby_abandoned":
+			if _dedicated_server:
+				_clear_match_nodes()
+				_authority_match_started = false
+				_replace_match_for_lan(true)
+			else:
+				_show_severed_state(str(state.get("reason", "RIFT SEVERED")))
+		return
 	if _lan_host:
-		if event_type == "ready" and not network.peer_actor_id(sender_id).is_empty():
-			_ready_peers[sender_id] = true
-			if _authority_roster_ready():
-				_start_host_match()
-		elif event_type == "rematch_request" and not network.peer_actor_id(sender_id).is_empty() and director != null:
-			director.take_rematch()
 		return
 	match event_type:
 		"session":
@@ -879,10 +899,15 @@ func _enter_lan_runtime(host: bool, from_player_flow: bool) -> void:
 	_actor_for_peer.clear()
 	_ready_peers.clear()
 	_authority_match_started = false
+	_lobby_arming_remaining = 0.0
 	_session_ready_for_snapshots = host or _dedicated_server
 	_local_actor_id = network.local_actor_id
 	_local_team = network.local_team as Duelist.Team if network.local_team >= 0 else Duelist.Team.SUN
+	if rift_link != null:
+		rift_link.set_local_actor(_local_actor_id, host)
 	_replace_match_for_lan(host)
+	if rift_link != null and not network.lobby_state.is_empty():
+		rift_link.set_lobby_state(network.lobby_state)
 	if hud != null:
 		hud.set_connection_flow_active(false if not from_player_flow else true)
 	if from_player_flow:
@@ -959,26 +984,111 @@ func _clear_match_nodes() -> void:
 	_local_duelist = null
 
 func _start_host_match() -> void:
-	if _authority_match_started or director == null or not _authority_roster_ready():
+	if _authority_match_started or director == null:
 		return
-	if rift_link != null:
-		rift_link.hide_panel()
-	if hud != null:
-		hud.set_connection_flow_active(false)
 	_authority_match_started = true
-	director.begin()
+	if director.phase == LinebreakMatch.Phase.FINISHED:
+		director.take_rematch()
+	else:
+		director.begin()
 	print("Riftline authoritative match started")
 	for actor in _all_authority_actors():
 		network.publish_event({"type": "spawn", "actor_id": actor.actor_id, "position": actor.global_position, "yaw": actor.rotation.y})
 
+func _on_lobby_ready_requested(ready: bool) -> void:
+	if not _lan_active or network == null:
+		return
+	if _lan_host:
+		network.submit_lobby_ready(ready)
+	elif not network.lobby_state.is_empty():
+		network.submit_client_lobby_ready(ready, int(network.lobby_state.get("revision", 0)))
+
+func _on_lobby_rematch_requested() -> void:
+	if not _lan_active or network == null:
+		return
+	if _lan_host:
+		network.submit_lobby_rematch_ready(true)
+	elif not network.lobby_state.is_empty():
+		network.submit_client_lobby_rematch_ready(true, int(network.lobby_state.get("revision", 0)))
+
+func _apply_lobby_state(state: Dictionary) -> void:
+	if state.is_empty() or not _lan_active:
+		return
+	var revision := int(state.get("revision", -1))
+	var generation := int(state.get("launch_generation", _lobby_generation))
+	if revision < _lobby_revision or generation < _lobby_generation:
+		return
+	_lobby_revision = revision
+	_lobby_generation = maxi(_lobby_generation, generation)
+	if network != null and not _lan_host:
+		network.lobby_state = state.duplicate(true)
+		_sync_roster_records(state.get("records", []))
+	if rift_link != null and rift_link.visible:
+		rift_link.set_lobby_state(state)
+	var phase := int(state.get("phase", RiftlineLobby.Phase.STAGING))
+	if hud != null and phase != RiftlineLobby.Phase.LIVE:
+		hud.set_connection_flow_active(true)
+		hud.set_combat_input_enabled(false)
+	if phase == RiftlineLobby.Phase.ARMING:
+		_session_ready_for_snapshots = false
+	elif phase == RiftlineLobby.Phase.STAGING or phase == RiftlineLobby.Phase.REMATCH:
+		_session_ready_for_snapshots = false
+
+func _on_lobby_state_received(state: Dictionary) -> void:
+	_apply_lobby_state(state)
+	if int(state.get("phase", -1)) == RiftlineLobby.Phase.ARMING and _lan_host:
+		_begin_lobby_launch()
+
+func _on_lobby_live_received(state: Dictionary) -> void:
+	_apply_lobby_state(state)
+	_on_lobby_live_state(state)
+
+func _on_lobby_abandoned_received(state: Dictionary) -> void:
+	_apply_lobby_state(state)
+	_show_severed_state(str(state.get("reason", "RIFT SEVERED")))
+
+func _on_lobby_live_state(_state: Dictionary) -> void:
+	if not _lan_active:
+		return
+	if not _lan_host and director != null and director.phase == LinebreakMatch.Phase.FINISHED:
+		director.take_rematch()
+	_session_ready_for_snapshots = true
+
+func _begin_lobby_launch() -> void:
+	if not _lan_host or director == null or _lobby_arming_remaining > 0.0:
+		return
+	_lobby_arming_remaining = 0.72
+	if hud != null:
+		hud.set_combat_input_enabled(false)
+
+func _tick_lobby_arming(delta: float) -> void:
+	if not _lan_host or _lobby_arming_remaining <= 0.0:
+		return
+	_lobby_arming_remaining = maxf(0.0, _lobby_arming_remaining - delta)
+	if _lobby_arming_remaining <= 0.0:
+		_start_host_match()
+		network.publish_lobby_live()
+
+func _show_severed_state(reason: String) -> void:
+	if not _lan_active:
+		return
+	_clear_ballistics()
+	_clear_presentation_effects()
+	if combat_feedback != null:
+		combat_feedback.stop_all()
+	_clear_match_nodes()
+	if hud != null:
+		hud.set_connection_flow_active(true)
+		hud.set_combat_input_enabled(false)
+	if rift_link != null:
+		rift_link.show_severed(reason)
+	network.stop()
+	_lan_host = false
+	_lan_peer_ready = false
+
 func _tick_lan_duel(delta: float) -> void:
 	if _local_duelist == null:
 		return
-	if hud.take_rematch():
-		if _lan_host and director != null:
-			director.take_rematch()
-		elif not _lan_host:
-			network.publish_event({"type": "rematch_request"})
 	_local_duelist.apply_look(hud.take_look_delta())
 	if hud.gyro_enabled:
 		var gyroscope := Input.get_gyroscope()
@@ -1070,6 +1180,7 @@ func _update_remote_snapshot(actor_id: String, remote_state: Dictionary, host_ti
 func _tick_dedicated_server(delta: float) -> void:
 	if not _lan_active or director == null:
 		return
+	_tick_lobby_arming(delta)
 	var applied: Dictionary = {}
 	for actor_id in _authoritative_duelists.keys():
 		var target: Duelist = _authoritative_duelists[actor_id]
@@ -1153,13 +1264,7 @@ func _on_roster_received(records: Array[Dictionary]) -> void:
 	_sync_roster_records(records)
 
 func _authority_roster_ready() -> bool:
-	if network == null or network.roster == null or not network.roster.is_ready():
-		return false
-	var remote_required := 0
-	for record in network.roster.records():
-		if bool(record.get("human", false)) and int(record.get("peer_id", -1)) > 0:
-			remote_required += 1
-	return _ready_peers.size() >= remote_required
+	return network != null and network.lobby != null and network.lobby.can_launch()
 
 func _on_lan_defeat(victim: Duelist, killer: Duelist) -> void:
 	if _lan_host:
@@ -1606,6 +1711,8 @@ func _read_capture_arguments() -> void:
 			_ballistics_preview = argument.trim_prefix("--ballistics-preview=")
 		elif argument.begins_with("--touch-preview="):
 			_touch_preview = argument.trim_prefix("--touch-preview=")
+		elif argument.begins_with("--rift-link-preview="):
+			_rift_link_preview = argument.trim_prefix("--rift-link-preview=")
 	if _capture_settings and hud != null:
 		hud.open_settings()
 	if _capture_hud_layout and hud != null:
@@ -1627,6 +1734,9 @@ func _read_capture_arguments() -> void:
 	if _capture_rift_link and hud != null:
 		hud.set_connection_flow_active(true)
 		rift_link.open_menu()
+	if not _rift_link_preview.is_empty() and rift_link != null:
+		hud.set_connection_flow_active(true)
+		rift_link.apply_preview(_rift_link_preview)
 	if not _touch_preview.is_empty():
 		hud.set_touch_preview(_touch_preview)
 
