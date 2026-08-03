@@ -69,6 +69,10 @@ var _impact_cursor := 0
 func _ready() -> void:
 	_build_network()
 	var command_line_lan := network.start_command_line_mode()
+	if not network.configuration_valid():
+		push_error("Riftline rejected invalid command-line configuration")
+		get_tree().quit()
+		return
 	_read_capture_arguments()
 	_dedicated_server = network.is_dedicated_server()
 	_presentation_enabled = not _dedicated_server
@@ -802,6 +806,9 @@ func _on_session_descriptor(descriptor: Dictionary) -> void:
 		return
 	_session_ready_for_snapshots = false
 	var descriptor_map := int(descriptor.get("map_id", int(RiftlineMap.Id.DUEL_YARD))) as RiftlineMap.Id
+	if network != null:
+		network.arena_id = descriptor_map
+		network.team_size = clampi(int(descriptor.get("team_size", network.team_size)), RiftlineRoster.MIN_TEAM_SIZE, RiftlineRoster.MAX_TEAM_SIZE)
 	if arena_map == null or arena_map.map_id() != descriptor_map:
 		_clear_match_nodes()
 		_rebuild_map(descriptor_map)
@@ -1507,13 +1514,13 @@ func _apply_arena_preview() -> void:
 	var look_target := Vector3.ZERO
 	match _arena_preview:
 		"windwalk":
-			camera_position = Vector3(-16.0, 6.5, 31.0)
+			camera_position = Vector3(-18.0, 10.0, 40.0)
 			look_target = Vector3(-8.0, 0.5, 24.0)
 		"relay-basin":
 			camera_position = Vector3(0.0, 8.5, 16.0)
 			look_target = Vector3(0.0, 0.8, 0.0)
 		"service-run":
-			camera_position = Vector3(12.0, 6.5, -31.0)
+			camera_position = Vector3(18.0, 10.0, -40.0)
 			look_target = Vector3(8.0, 0.6, -24.0)
 		"sun-bay":
 			camera_position = Vector3(-51.0, 5.5, 10.0)
