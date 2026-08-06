@@ -9,7 +9,7 @@ signal fire_requested(shooter: Duelist, weapon: Weapon, origin: Vector3, directi
 signal knife_strike(shooter_id: String, origin: Vector3, end: Vector3, team: Team, hit_target: bool, target_id: String)
 signal damaged(amount: float, remaining: float, attacker_id: String, source_position: Vector3, enemy_team: int)
 
-enum Team { SUN, VOID }
+enum Team { RED, BLUE }
 enum Stance { STAND, CROUCH, PRONE }
 enum Weapon { PULSE, KNIFE }
 
@@ -26,6 +26,9 @@ const MIN_HORIZONTAL_FOV := 70.0
 const MAX_HORIZONTAL_FOV := 90.0
 const ADS_HORIZONTAL_FOV_RATIO := 0.74
 const ADS_MOVEMENT_MULTIPLIER := 0.82
+# Locomotion lean: silhouettes tilt into a strafe so movement reads as animation.
+const STRAFE_LEAN_ROLL := 0.07
+const STRAFE_BODY_OFFSET := 0.084
 const FIRST_PERSON_WEAPON_SCALE := 0.38
 const M4_IRON_SIGHT_FRONT_TIP_LOCAL := Vector3(0.0, 0.295, -1.06)
 const M4_ADS_WEAPON_ANCHOR := Vector3(0.0, -0.1121, -0.96)
@@ -54,7 +57,7 @@ const HIP_BURST_MAX_INDEX := 6
 const HIP_BURST_HORIZONTAL_STEP := 0.0085
 const HIP_BURST_VERTICAL_STEP := 0.0045
 
-var team: Team = Team.SUN
+var team: Team = Team.RED
 var actor_id := ""
 var health := HEALTH
 var eliminated := false
@@ -66,6 +69,7 @@ var _last_camera_aspect := -1.0
 var magazine_rounds := M4_MAGAZINE_SIZE
 var reserve_ammo := M4_RESERVE_AMMO
 var reload_remaining := 0.0
+var interact_progress := 0.0
 var match_active := false
 var _fire_remaining := 0.0
 var _hip_burst_reset_remaining := 0.0
@@ -271,6 +275,10 @@ func _process(delta: float) -> void:
 		if reload_remaining > 0.0 and _local_camera:
 			var reload_phase := clampf(1.0 - reload_remaining / M4_RELOAD_SECONDS, 0.0, 1.0)
 			target += Vector3(-0.04, -0.12 + sin(reload_phase * PI) * 0.06, 0.08)
+		if interact_progress > 0.0 and _local_camera:
+			var interact_arc := sin(interact_progress * PI)
+			target += Vector3(-0.06, -0.18 * interact_arc, 0.22 * interact_arc)
+			_weapon_root.rotation.x = lerpf(_weapon_root.rotation.x, -0.25 * interact_arc, clampf(delta * 12.0, 0.0, 1.0))
 		_weapon_root.position = _weapon_root.position.lerp(target, clampf(delta * 14.0, 0.0, 1.0))
 		_recoil_kick = move_toward(_recoil_kick, 0.0, delta * 5.4)
 		_recoil_lateral = move_toward(_recoil_lateral, 0.0, delta * 7.0)
@@ -292,9 +300,17 @@ func _process(delta: float) -> void:
 	if camera != null:
 		var camera_stance_offset := -0.14 if stance == Stance.CROUCH else -0.28 if stance == Stance.PRONE else 0.0
 		camera.position.y = lerpf(camera.position.y, camera_stance_offset, clampf(delta * 9.0, 0.0, 1.0))
+		# The horizon always stays parallel to the ground; the camera never rolls.
+		camera.rotation.z = 0.0
 	if _body_visual_root != null:
 		var powered_down := eliminated
-		_body_visual_root.rotation.z = lerpf(_body_visual_root.rotation.z, -0.92 if powered_down else 0.0, clampf(delta * (7.0 if powered_down else 9.0), 0.0, 1.0))
+		var strafe := 0.0
+		if not powered_down:
+			var local_velocity := global_transform.basis.orthonormalized().inverse() * velocity
+			strafe = clampf(local_velocity.x / 6.0, -1.0, 1.0)
+		var strafe_roll := 0.0 if powered_down else -strafe * STRAFE_LEAN_ROLL
+		_body_visual_root.rotation.z = lerpf(_body_visual_root.rotation.z, -0.92 if powered_down else strafe_roll, clampf(delta * (7.0 if powered_down else 9.0), 0.0, 1.0))
+		_body_visual_root.position.x = lerpf(_body_visual_root.position.x, 0.0 if powered_down else strafe * STRAFE_BODY_OFFSET, clampf(delta * 9.0, 0.0, 1.0))
 		_body_visual_root.position.y = lerpf(_body_visual_root.position.y, -0.24 if powered_down else 0.0, clampf(delta * (7.0 if powered_down else 9.0), 0.0, 1.0))
 	if _carrier_signal_root != null:
 		_carrier_signal_root.visible = is_carrying_seed()
@@ -353,6 +369,7 @@ func set_match_active(active: bool) -> void:
 		velocity.z = 0.0
 		_fire_remaining = 0.0
 		reload_remaining = 0.0
+		interact_progress = 0.0
 		_pending_jump = false
 		_hip_burst_index = 0
 		_hip_burst_reset_remaining = 0.0
@@ -364,7 +381,10 @@ func set_match_active(active: bool) -> void:
 		if _magazine_mesh != null:
 			_magazine_mesh.visible = true
 
-func make_input_frame(sequence: int, move_input: Vector2, aiming: bool, firing: bool, wants_jump: bool, crouch_edge: bool, prone_edge: bool, weapon_switch_edge: bool, reload_edge: bool, pass_seed_edge: bool = false) -> Dictionary:
+func set_interact_progress(value: float) -> void:
+	interact_progress = clampf(value, 0.0, 1.0)
+
+func make_input_frame(sequence: int, move_input: Vector2, aiming: bool, firing: bool, wants_jump: bool, crouch_edge: bool, prone_edge: bool, weapon_switch_edge: bool, reload_edge: bool, pass_seed_edge: bool = false, interact_held_value: bool = false) -> Dictionary:
 	return {
 		"sequence": sequence,
 		"move_x": clampf(move_input.x, -1.0, 1.0),
@@ -379,6 +399,7 @@ func make_input_frame(sequence: int, move_input: Vector2, aiming: bool, firing: 
 		"weapon_switch": weapon_switch_edge,
 		"reload": reload_edge,
 		"pass_seed": pass_seed_edge,
+		"interact": interact_held_value,
 	}
 
 func aim_direction() -> Vector3:
@@ -776,10 +797,10 @@ func _fire_knife(origin: Vector3, direction: Vector3) -> void:
 	knife_strike.emit(actor_id, origin, end, team, hit_target, target_id)
 
 func _team_color() -> Color:
-	return Color("ef6b3f") if team == Team.SUN else Color("4ba9ff")
+	return Color("e0463c") if team == Team.RED else Color("4ba9ff")
 
 func _team_glow() -> Color:
-	return Color("ffb15c") if team == Team.SUN else Color("7bdbff")
+	return Color("ff7a68") if team == Team.RED else Color("7bdbff")
 
 func _build_character_silhouette() -> void:
 	# Broad value groups and one asymmetric expedition tool make the adult frame readable without armor language.
@@ -803,7 +824,7 @@ func _build_character_silhouette() -> void:
 	_add_head_part(_cylinder(0.33, 0.33, 0.08), Vector3(0.0, 0.22, 0.0), cloth)
 	_add_head_part(_box(Vector3(0.38, 0.1, 0.08)), Vector3(0.0, 0.0, -0.24), brass)
 
-	if team == Team.SUN:
+	if team == Team.RED:
 		_build_signal_hauler(cloth, dark, brass, glow)
 	else:
 		_build_storm_surveyor(cloth, dark, brass, glow)

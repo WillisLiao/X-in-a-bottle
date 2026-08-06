@@ -17,7 +17,7 @@ signal lobby_live_received(state: Dictionary)
 signal lobby_abandoned_received(state: Dictionary)
 
 const PROJECT_ID := "riftline-lan"
-const PROTOCOL_VERSION := 6
+const PROTOCOL_VERSION := 9
 const APP_HOST_DUEL_REMOTE_SLOTS := 1
 const APP_HOST_SQUAD_REMOTE_SLOTS := 9
 const DEDICATED_REMOTE_SLOTS := 10
@@ -46,6 +46,7 @@ var roster: RiftlineRoster
 var lobby: RiftlineLobby
 var lobby_state: Dictionary = {}
 var team_size := 1
+var game_mode: int = 0
 var arena_id: RiftlineMap.Id = RiftlineMap.Id.DUEL_YARD
 var arena_override_set := false
 var discovered_session: Dictionary = {}
@@ -297,6 +298,7 @@ func _advertise_session() -> void:
 		"kind": "dedicated" if session_role == SessionRole.DEDICATED_SERVER else "app_host",
 		"mode": "squad" if team_size > 1 else "duel",
 		"team_size": team_size,
+		"game_mode": game_mode,
 		"map_id": arena_name(arena_id),
 		"issued": Time.get_ticks_msec(),
 	}
@@ -327,6 +329,7 @@ func _poll_discovery() -> void:
 		session_descriptor = _descriptor_from_packet(packet)
 		arena_id = int(session_descriptor.get("map_id", int(arena_id))) as RiftlineMap.Id
 		team_size = int(session_descriptor.get("team_size", team_size))
+		game_mode = clampi(int(session_descriptor.get("game_mode", game_mode)), 0, 1)
 		host_discovered.emit({"marker": marker, "address": _discovered_address, "mode": str(packet.get("mode", "duel")), "team_size": int(packet.get("team_size", 1)), "map_id": str(packet.get("map_id", "duel-yard")), "label": "RIFT FOUND"})
 		session_status.emit("RIFT FOUND")
 
@@ -427,6 +430,7 @@ func _rpc_event(event: Dictionary) -> void:
 		session_descriptor = descriptor
 		arena_id = int(descriptor.get("map_id", int(arena_id))) as RiftlineMap.Id
 		team_size = clampi(int(descriptor.get("team_size", team_size)), RiftlineRoster.MIN_TEAM_SIZE, RiftlineRoster.MAX_TEAM_SIZE)
+		game_mode = clampi(int(descriptor.get("game_mode", game_mode)), 0, 1)
 		session_descriptor_received.emit(descriptor)
 	elif event_type == "lobby_state":
 		lobby_state = _validated_lobby_state(event.get("state", {}))
@@ -486,6 +490,7 @@ func _session_event() -> Dictionary:
 	return {
 		"type": "session",
 		"team_size": team_size,
+		"game_mode": game_mode,
 		"map_id": int(arena_id),
 		"map_name": arena_name(arena_id),
 		"protocol": PROTOCOL_VERSION,
@@ -498,6 +503,7 @@ func _descriptor_from_packet(packet: Dictionary) -> Dictionary:
 		map_value = arena_id_from_name(str(packet.get("map_name", "")))
 	return {
 		"team_size": clampi(int(packet.get("team_size", team_size)), RiftlineRoster.MIN_TEAM_SIZE, RiftlineRoster.MAX_TEAM_SIZE),
+		"game_mode": clampi(int(packet.get("game_mode", game_mode)), 0, 1),
 		"map_id": map_value if map_value in [RiftlineMap.Id.DUEL_YARD, RiftlineMap.Id.CONCOURSE] else int(default_arena_for_team_size(int(packet.get("team_size", team_size)))),
 		"protocol": int(packet.get("protocol", packet.get("version", PROTOCOL_VERSION))),
 	}
@@ -539,7 +545,7 @@ func _validate_input(peer_id: int, frame: Dictionary) -> Dictionary:
 	var pitch := clampf(float(frame.pitch), -1.05, 0.9)
 	if _last_input_view.has(peer_id) and absf(angle_difference(float(_last_input_view[peer_id]), yaw)) > MAX_VIEW_TURN_PER_FRAME:
 		return {}
-	for key in ["aim", "fire", "jump", "crouch", "prone", "weapon_switch", "reload", "pass_seed"]:
+	for key in ["aim", "fire", "jump", "crouch", "prone", "weapon_switch", "reload", "pass_seed", "interact"]:
 		if not frame.has(key) or typeof(frame[key]) != TYPE_BOOL:
 			return {}
 	return {
@@ -557,6 +563,7 @@ func _validate_input(peer_id: int, frame: Dictionary) -> Dictionary:
 		"weapon_switch": bool(frame.weapon_switch),
 		"reload": bool(frame.reload),
 		"pass_seed": bool(frame.pass_seed),
+		"interact": bool(frame.interact),
 	}
 
 func _is_finite_number(value: Variant) -> bool:
@@ -582,6 +589,14 @@ func _read_command_line_options() -> void:
 				_configuration_valid = false
 				continue
 			team_size = requested_size
+		elif argument.begins_with("--mode="):
+			var mode_name := argument.trim_prefix("--mode=")
+			if mode_name == "bomb":
+				game_mode = 1
+			elif mode_name == "deathmatch":
+				game_mode = 0
+			else:
+				_configuration_valid = false
 		elif argument.begins_with("--arena="):
 			var requested_arena := arena_id_from_name(argument.trim_prefix("--arena="))
 			if requested_arena < 0:
@@ -746,6 +761,7 @@ func _validated_lobby_state(value: Variant) -> Dictionary:
 		"arena_id": int(state.get("arena_id", int(arena_id))),
 		"arena_name": str(state.get("arena_name", arena_name(arena_id))),
 		"team_size": clampi(int(state.get("team_size", team_size)), RiftlineRoster.MIN_TEAM_SIZE, RiftlineRoster.MAX_TEAM_SIZE),
+		"game_mode": clampi(int(state.get("game_mode", game_mode)), 0, 1),
 		"revision": maxi(0, int(state.get("revision", 0))),
 		"records": _validated_public_records(state.get("records", [])),
 		"complete": bool(state.get("complete", false)),
@@ -768,7 +784,7 @@ func _validated_public_records(value: Variant) -> Array[Dictionary]:
 			continue
 		var actor_id := str(candidate.get("actor_id", ""))
 		var team := int(candidate.get("team", -1))
-		if actor_id.is_empty() or team < Duelist.Team.SUN or team > Duelist.Team.VOID:
+		if actor_id.is_empty() or team < Duelist.Team.RED or team > Duelist.Team.BLUE:
 			continue
 		result.append({"actor_id": actor_id, "team": team, "human": bool(candidate.get("human", false))})
 	return result

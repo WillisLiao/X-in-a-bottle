@@ -9,7 +9,7 @@ const VERSION := 1
 const MOVE_THRESHOLD := 0.35
 const LOOK_THRESHOLD := 1.5
 
-enum Step { MOVE, LOOK, FIRE, SEED, COMPLETE }
+enum Step { MOVE, LOOK, FIRE, COMPLETE }
 
 var _step := Step.MOVE
 var _visible := false
@@ -20,7 +20,7 @@ func begin_offline_match() -> void:
 		return
 	var config := ConfigFile.new()
 	if config.load(CONFIG_PATH) == OK and int(config.get_value(SECTION, "version", -1)) == VERSION:
-		_step = clampi(int(config.get_value(SECTION, "step", int(Step.MOVE))), int(Step.MOVE), int(Step.SEED)) as Step
+		_step = clampi(int(config.get_value(SECTION, "step", int(Step.MOVE))), int(Step.MOVE), int(Step.COMPLETE)) as Step
 	else:
 		_step = Step.MOVE
 	_visible = true
@@ -36,17 +36,6 @@ func observe_look(delta: Vector2) -> void:
 
 func observe_fire() -> void:
 	if _step == Step.FIRE:
-		_advance(Step.SEED)
-
-func observe_objective(state: Dictionary) -> void:
-	if _step != Step.SEED:
-		return
-	if int(state.get("state", -1)) == int(RiftSeed.State.CARRIED):
-		# Claiming the Seed is enough to establish the objective interaction.
-		_advance(Step.COMPLETE)
-
-func observe_delivery() -> void:
-	if _step == Step.SEED:
 		_advance(Step.COMPLETE)
 
 func hide() -> void:
@@ -95,6 +84,4 @@ func _emit_cue() -> void:
 			cue = {"key": "look", "text": "DRAG RIGHT SIDE TO LOOK", "region": "right"}
 		Step.FIRE:
 			cue = {"key": "fire", "text": "HOLD FIRE TO ENGAGE", "region": "fire"}
-		Step.SEED:
-			cue = {"key": "seed", "text": "TAKE THE SEED THROUGH THEIR RIFT", "region": "seed"}
 	cue_changed.emit(cue)

@@ -8,6 +8,8 @@ config/name="WhoYouPeekin"
 run/main_scene="res://main.tscn"
 config/icon="res://icons/icon_1024.png"
 config/features=PackedStringArray("4.7", "Mobile")
+; Competitive target: render and simulate at 120 Hz where the display allows.
+run/max_fps=120
 
 [display]
 
@@ -21,6 +23,15 @@ stretch/mode="canvas_items"
 stretch/aspect="expand"
 ; Follow the device sensor while remaining landscape-only, including reverse landscape grip.
 handheld/orientation=4
+
+[display/window/ios]
+
+; Let ProMotion displays run the game above 60 Hz instead of clamping to it.
+enable_high_refresh_rate=true
+
+[physics]
+
+common/physics_ticks_per_second=120
 
 [input]
 
@@ -51,6 +62,10 @@ jump={
 reload={
 "deadzone": 0.5,
 "events": [Object(InputEventKey,"physical_keycode":82)]
+}
+interact={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"physical_keycode":70)]
 }
 
 [input_devices]

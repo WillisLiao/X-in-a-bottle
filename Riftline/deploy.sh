@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-GODOT="/Applications/Godot.app/Contents/MacOS/Godot"
+GODOT="${GODOT_BIN:-/Applications/Godot.app/Contents/MacOS/Godot}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Keep Xcode's optimized assets outside res:// so a later Godot import never
 # mistakes Apple's CgBI PNGs for game assets.

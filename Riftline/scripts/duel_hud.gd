@@ -27,7 +27,7 @@ var hit_confirm := 0.0
 var primary_fire_bloom := 0.0
 var damage_direction := Vector2.ZERO
 var damage_direction_intensity := 0.0
-var damage_enemy_team := int(Duelist.Team.VOID)
+var damage_enemy_team := int(Duelist.Team.BLUE)
 var objective_feedback_pulse := 0.0
 var objective_feedback_team := -1
 var camera_sensitivity := 1.0
@@ -73,15 +73,16 @@ var _crouch_touch := -1
 var _prone_touch := -1
 var _switch_touch := -1
 var _seed_pass_touch := -1
+# Optional drag-look: holding the ADS button and dragging that same
+# finger can also steer the camera.  Off by default.
+var ads_button_look := false
 var _settings_owner_touch := -1
-var _sun_score := 0
-var _void_score := 0
+var _red_score := 0
+var _blue_score := 0
 var _roster_state: Array[Dictionary] = []
-var _roster_local_team := int(Duelist.Team.SUN)
+var _roster_local_team := int(Duelist.Team.RED)
 var _squad_readability := false
-var _objective_state: Dictionary = {"state": int(RiftSeed.State.HOME), "carrier_id": "", "carrier_team": -1}
-var _carrier_chevron_active := false
-var _carrier_chevron_direction := Vector2.RIGHT
+var _objective_state: Dictionary = {"mode": int(RiftlineMatch.GameMode.DEATHMATCH)}
 var _objective_message := ""
 var _objective_message_remaining := 0.0
 var _score_pulse := 0.0
@@ -102,7 +103,7 @@ var _combat_input_enabled := true
 var _match_result_visible := false
 var _match_result_victory := false
 var _rematch_requested := false
-var _match_phase: LinebreakMatch.Phase = LinebreakMatch.Phase.OPENING
+var _match_phase: RiftlineMatch.Phase = RiftlineMatch.Phase.OPENING
 var _connection_flow_active := false
 var _connection_message := ""
 var _connection_message_remaining := 0.0
@@ -190,6 +191,10 @@ func take_seed_pass() -> bool:
 	_seed_pass_requested = false
 	return requested
 
+func interact_held() -> bool:
+	# The context use button (plant/defuse) is a held action.
+	return _seed_pass_touch >= 0
+
 func set_coach_cue(cue: Dictionary) -> void:
 	_coach_cue = cue.duplicate(true)
 	if _coach_cue.is_empty():
@@ -225,12 +230,10 @@ func set_touch_preview(preview: String) -> void:
 		set_coach_cue({"key": "look", "text": "DRAG RIGHT SIDE TO LOOK", "region": "right"})
 	elif preview == "coach-fire":
 		set_coach_cue({"key": "fire", "text": "HOLD FIRE TO ENGAGE", "region": "fire"})
-	elif preview == "coach-seed":
-		set_coach_cue({"key": "seed", "text": "TAKE THE SEED THROUGH THEIR RIFT", "region": "seed"})
 
-func set_score(sun: int, void_score: int) -> void:
-	_sun_score = clampi(sun, 0, 3)
-	_void_score = clampi(void_score, 0, 3)
+func set_score(red_score: int, blue_score: int) -> void:
+	_red_score = clampi(red_score, 0, 3)
+	_blue_score = clampi(blue_score, 0, 3)
 	queue_redraw()
 
 func set_roster_state(records: Array[Dictionary], local_team: int, squad_readability: bool) -> void:
@@ -254,33 +257,18 @@ func set_seed_relay_available(available: bool) -> void:
 		_seed_pass_touch = -1
 	queue_redraw()
 
-func set_carrier_navigation(active: bool, direction: Vector2 = Vector2.RIGHT) -> void:
-	_carrier_chevron_active = active
-	if direction.length_squared() > 0.01:
-		_carrier_chevron_direction = direction.normalized()
-	queue_redraw()
-
 func safe_area_rect() -> Rect2:
 	return _safe_rect()
 
 func show_objective_event(event_type: String, _state: Dictionary) -> void:
 	match event_type:
-		"objective_claimed":
-			_objective_message = "SEED CLAIMED"
-		"objective_dropped":
-			_objective_message = "SEED DROPPED"
-		"objective_returned":
-			_objective_message = "SEED RETURNS"
-		"objective_delivered":
-			_objective_message = "LINE BREACHED"
-		"objective_relay_launched":
-			_objective_message = "SEED SENT"
-		"objective_relay_caught":
-			_objective_message = "SEED RECEIVED"
-		"objective_relay_disrupted":
-			_objective_message = "SEED BROKEN"
+		"bomb_planted":
+			_objective_message = "BOMB PLANTED"
+		"bomb_dropped":
+			_objective_message = "BOMB DROPPED"
+		"round_won":
+			_objective_message = "ROUND WON"
 			_score_pulse = 1.0
-			_score_pulse_team = int(_state.get("scoring_team", -1))
 		_:
 			return
 	_objective_message_remaining = 1.4
@@ -353,9 +341,9 @@ func show_connection_message(message: String) -> void:
 func can_drive_combat() -> bool:
 	return _combat_input_enabled and not _connection_flow_active and not _settings_open and not _layout_editor and not _match_result_visible
 
-func set_match_phase(phase: LinebreakMatch.Phase) -> void:
+func set_match_phase(phase: RiftlineMatch.Phase) -> void:
 	_match_phase = phase
-	if phase != LinebreakMatch.Phase.FINISHED:
+	if phase != RiftlineMatch.Phase.FINISHED:
 		_match_result_visible = false
 		_rematch_requested = false
 	queue_redraw()
@@ -500,6 +488,9 @@ func _handle_touch(index: int, point: Vector2, pressed: bool) -> void:
 		_stick_visual_target = 1.0
 
 func _handle_drag(index: int, point: Vector2, relative: Vector2) -> void:
+	# Drag-look lets the finger holding ADS also steer the view.
+	if index == _aim_touch and ads_button_look:
+		_look_delta += relative
 	_touch_router.drag(index, point, relative)
 	movement = _touch_router.movement()
 
@@ -635,7 +626,6 @@ func _draw_gameplay_hud() -> void:
 	var safe := _safe_rect()
 	_draw_vitality_strip(safe, friendly)
 	_draw_objective_strip(safe, friendly, enemy)
-	_draw_carrier_chevron(safe, friendly)
 	if _squad_readability:
 		_draw_team_life_strip(safe, friendly, enemy)
 	if damage_direction_intensity > 0.0:
@@ -646,10 +636,10 @@ func _draw_gameplay_hud() -> void:
 		draw_arc(center, edge_radius, edge_angle - 0.18, edge_angle + 0.18, 14, Color(damage_color, damage_direction_intensity * 0.9), 7.0)
 	if _match_result_visible:
 		_draw_match_result()
-	elif _match_phase == LinebreakMatch.Phase.OPENING:
-		_draw_round_beat("BREAK THE LINE", "TAKE THE SEED THROUGH THEIR RIFT", friendly)
-	elif _match_phase == LinebreakMatch.Phase.INTERMISSION:
-		_draw_round_beat("LINE BREACHED", "THE SEED RETURNS TO CENTER", enemy)
+	elif _match_phase == RiftlineMatch.Phase.OPENING:
+		_draw_round_beat("ROUND START", "FIGHT", friendly)
+	elif _match_phase == RiftlineMatch.Phase.INTERMISSION:
+		_draw_round_beat("ROUND OVER", "NEXT ROUND STARTING", enemy)
 	if not _connection_message.is_empty():
 		var message_rect := Rect2(Vector2(size.x * 0.5 - 170.0, _safe_rect().position.y + 52.0), Vector2(340.0, 46.0))
 		draw_rect(message_rect, Color("0b1730", 0.94))
@@ -661,7 +651,7 @@ func _friendly_color() -> Color:
 	return _team_color(_roster_local_team)
 
 func _enemy_color() -> Color:
-	return _team_color(Duelist.Team.VOID if _roster_local_team == int(Duelist.Team.SUN) else Duelist.Team.SUN)
+	return _team_color(Duelist.Team.BLUE if _roster_local_team == int(Duelist.Team.RED) else Duelist.Team.RED)
 
 func _draw_vitality_strip(safe: Rect2, friendly: Color) -> void:
 	var plate_size := Vector2(20.0, 10.0)
@@ -678,66 +668,53 @@ func _draw_vitality_strip(safe: Rect2, friendly: Color) -> void:
 
 
 func _team_color(team: int) -> Color:
-	return Color("ffad5d") if team == int(Duelist.Team.SUN) else Color("71cfff")
+	return Color("ff6a57") if team == int(Duelist.Team.RED) else Color("71cfff")
 
 func _draw_objective_strip(safe: Rect2, friendly: Color, enemy: Color) -> void:
 	var center := Vector2(size.x * 0.5, safe.position.y + 18.0)
-	for index in 3:
-		_draw_seed_glyph(center + Vector2(-42.0 - index * 16.0, 0.0), friendly, index < _sun_score)
-		_draw_seed_glyph(center + Vector2(42.0 + index * 16.0, 0.0), enemy, index < _void_score)
-	if _score_pulse > 0.0 and _score_pulse_team >= 0:
-		var score := _sun_score if _score_pulse_team == int(Duelist.Team.SUN) else _void_score
-		if score > 0:
-			var score_center := center + Vector2(-42.0 - (score - 1) * 16.0, 0.0) if _score_pulse_team == int(Duelist.Team.SUN) else center + Vector2(42.0 + (score - 1) * 16.0, 0.0)
-			draw_arc(score_center, 8.0 + (1.0 - _score_pulse) * 9.0, 0.0, TAU, 24, Color("fff4c7", _score_pulse * 0.85), 2.0)
-	var state := int(_objective_state.get("state", int(RiftSeed.State.HOME)))
-	var carrier_team := int(_objective_state.get("carrier_team", -1))
-	var objective_accent := _team_color(carrier_team) if carrier_team >= 0 else Color("fff0b0")
-	if state == RiftSeed.State.DROPPED:
-		objective_accent = Color("fff0b0")
-	_draw_seed_glyph(center, objective_accent, state == RiftSeed.State.CARRIED)
-	if state == RiftSeed.State.IN_FLIGHT:
-		var relay_pulse := 0.45 + sin(Time.get_ticks_msec() * 0.01) * 0.25
-		draw_line(center + Vector2(-10, 0), center + Vector2(10, 0), Color(objective_accent, relay_pulse), 2.0)
-		draw_line(center + Vector2(5, -5), center + Vector2(10, 0), Color(objective_accent, relay_pulse), 2.0)
-		draw_line(center + Vector2(5, 5), center + Vector2(10, 0), Color(objective_accent, relay_pulse), 2.0)
+	var font := get_theme_font("font", "Label")
+	draw_string(font, center + Vector2(-56.0, 6.0), str(_red_score), HORIZONTAL_ALIGNMENT_CENTER, -1, 20, friendly)
+	draw_string(font, center + Vector2(56.0, 6.0), str(_blue_score), HORIZONTAL_ALIGNMENT_CENTER, -1, 20, enemy)
+	var mode := int(_objective_state.get("mode", int(RiftlineMatch.GameMode.DEATHMATCH)))
+	if mode == int(RiftlineMatch.GameMode.BOMB):
+		var bomb_state := int(_objective_state.get("bomb_state", -1))
+		var accent := Color("ff6b57") if bomb_state == int(RiftlineMatch.BombState.PLANTED) else Color("fff0b0")
+		_draw_bomb_glyph(center, accent, bomb_state)
+	else:
+		draw_arc(center, 7.0, 0.0, TAU, 20, Color("fff4c7", 0.7), 2.0)
+		draw_line(center + Vector2(-11, 0), center + Vector2(-4, 0), Color("fff4c7", 0.7), 2.0)
+		draw_line(center + Vector2(4, 0), center + Vector2(11, 0), Color("fff4c7", 0.7), 2.0)
+	if _score_pulse > 0.0:
+		draw_arc(center, 10.0 + (1.0 - _score_pulse) * 14.0, 0.0, TAU, 24, Color("fff4c7", _score_pulse * 0.85), 2.0)
 	if objective_feedback_pulse > 0.0:
 		var feedback_color := _team_color(objective_feedback_team) if objective_feedback_team >= 0 else Color("fff0b0")
 		draw_arc(center, 10.0 + (1.0 - objective_feedback_pulse) * 18.0, 0.0, TAU, 24, Color(feedback_color, objective_feedback_pulse * 0.9), 2.5)
 
-func _draw_carrier_chevron(safe: Rect2, color: Color) -> void:
-	if not _carrier_chevron_active:
-		return
-	var direction := _carrier_chevron_direction
-	var center := Vector2(safe.position.x + safe.size.x * 0.5, safe.position.y + safe.size.y * 0.42)
-	if absf(direction.x) >= absf(direction.y):
-		center.x = safe.end.x - 30.0 if direction.x >= 0.0 else safe.position.x + 30.0
-	if absf(direction.x) < absf(direction.y):
-		center.y = safe.position.y + 86.0 if direction.y < 0.0 else safe.end.y - 164.0
-	var tip := center + direction * 15.0
-	var wing := Vector2(-direction.y, direction.x) * 9.0
-	var chevron := PackedVector2Array([tip, center - direction * 8.0 + wing, center - direction * 8.0 - wing])
-	var pulse := 0.75 + sin(Time.get_ticks_msec() * 0.006) * 0.15
-	draw_colored_polygon(chevron, Color(color, 0.16 * pulse))
-	draw_polyline(PackedVector2Array([tip, center - direction * 8.0 + wing, center - direction * 8.0 - wing, tip]), Color(color, 0.92 * pulse), 2.4)
+func _draw_bomb_glyph(center: Vector2, color: Color, bomb_state: int) -> void:
+	var body := Rect2(center + Vector2(-6.0, -5.0), Vector2(12.0, 10.0))
+	draw_rect(body, Color(color, 0.8))
+	draw_line(center + Vector2(0.0, -5.0), center + Vector2(0.0, -9.0), Color(color, 0.9), 2.0)
+	if bomb_state == int(RiftlineMatch.BombState.PLANTED) or bomb_state == int(RiftlineMatch.BombState.DEFUSING):
+		var blink := 0.5 + sin(Time.get_ticks_msec() * 0.02) * 0.5
+		draw_circle(center + Vector2(0.0, -9.0), 2.0, Color("ff3b30", blink))
 
 func _draw_team_life_strip(safe: Rect2, friendly: Color, enemy: Color) -> void:
 	var center := Vector2(size.x * 0.5, safe.position.y + 45.0)
-	var sun_index := 0
-	var void_index := 0
+	var red_index := 0
+	var blue_index := 0
 	for record in _roster_state:
 		var team := int(record.get("team", -1))
 		var eliminated := bool(record.get("eliminated", false))
 		var is_local_team := team == _roster_local_team
-		var color := friendly if team == int(Duelist.Team.SUN) else enemy
-		var slot := sun_index if team == int(Duelist.Team.SUN) else void_index
-		var direction := -1.0 if team == int(Duelist.Team.SUN) else 1.0
+		var color := friendly if team == int(Duelist.Team.RED) else enemy
+		var slot := red_index if team == int(Duelist.Team.RED) else blue_index
+		var direction := -1.0 if team == int(Duelist.Team.RED) else 1.0
 		var point := center + Vector2(direction * (34.0 + slot * 15.0), 0.0)
 		_draw_team_marker(point, color, not eliminated, is_local_team)
-		if team == int(Duelist.Team.SUN):
-			sun_index += 1
+		if team == int(Duelist.Team.RED):
+			red_index += 1
 		else:
-			void_index += 1
+			blue_index += 1
 
 func _draw_team_marker(center: Vector2, color: Color, living: bool, friendly_marker: bool) -> void:
 	var half_width := 5.0 if friendly_marker else 4.0
@@ -752,14 +729,6 @@ func _draw_team_marker(center: Vector2, color: Color, living: bool, friendly_mar
 	else:
 		draw_polyline(chevron, Color(color, 0.72), 1.4)
 		draw_line(center + Vector2(-half_width * 0.5, 0.0), center + Vector2(half_width * 0.5, 0.0), Color("f1f6ff", 0.76), 1.0)
-
-func _draw_seed_glyph(center: Vector2, color: Color, filled: bool) -> void:
-	var diamond := PackedVector2Array([center + Vector2(0, -6), center + Vector2(6, 0), center + Vector2(0, 6), center + Vector2(-6, 0)])
-	if filled:
-		draw_colored_polygon(diamond, Color(color, 0.82))
-	else:
-		draw_polyline(diamond, Color(color, 0.55), 1.5)
-	draw_line(center + Vector2(-2, 0), center + Vector2(2, 0), Color("fff4c7", 0.85 if filled else 0.34), 1.2)
 
 func _draw_button(key: String, color: Color, active: bool) -> void:
 	var spec: Dictionary = _control_specs()[key]
@@ -1012,6 +981,10 @@ func _handle_settings_touch(index: int, point: Vector2, pressed: bool) -> void:
 		_touch_router.configure(_stick_mode, _control_center("move"), _stick_radius())
 		_save_control_settings()
 		return
+	if _ads_look_rect(panel).has_point(point):
+		ads_button_look = not ads_button_look
+		_save_control_settings()
+		return
 	if _hud_layout_rect(panel).has_point(point):
 		open_hud_layout()
 		return
@@ -1043,6 +1016,7 @@ func _draw_settings_panel(friendly: Color, enemy: Color) -> void:
 	_draw_setting_chip(Rect2(panel.position + Vector2(344, 188), Vector2(142, 44)), "QUICK SWAP", Color("c292ff"), true)
 	_draw_setting_chip(_effects_rect(panel), "EFFECTS %s" % ("ON" if effects_enabled else "OFF"), friendly, effects_enabled)
 	_draw_setting_chip(_stick_mode_rect(panel), "STICK %s" % ("FLOAT" if _stick_mode == MobileTouchRouter.StickMode.FLOATING else "FIXED"), friendly, _stick_mode == MobileTouchRouter.StickMode.FLOATING)
+	_draw_setting_chip(_ads_look_rect(panel), "ADS LOOK %s" % ("ON" if ads_button_look else "OFF"), Color("c292ff"), ads_button_look)
 	_draw_setting_chip(_hud_layout_rect(panel), "HUD LAYOUT", enemy, true)
 	_draw_setting_chip(_reset_training_rect(panel), "RESET TRAINING", Color("e57c70"), false)
 	_draw_setting_chip(_rift_link_rect(panel), "RIFT LINK", Color("71cfff"), false)
@@ -1234,16 +1208,19 @@ func _settings_panel() -> Rect2:
 	return Rect2(safe.get_center() - Vector2(width, height) * 0.5, Vector2(width, height))
 
 func _rift_link_rect(panel: Rect2) -> Rect2:
-	return Rect2(panel.position + Vector2(244, 362), Vector2(180, 44))
+	return Rect2(panel.position + Vector2(244, 418), Vector2(180, 44))
 
 func _stick_mode_rect(panel: Rect2) -> Rect2:
 	return Rect2(panel.position + Vector2(184, 250), Vector2(142, 44))
 
+func _ads_look_rect(panel: Rect2) -> Rect2:
+	return Rect2(panel.position + Vector2(24, 306), Vector2(142, 44))
+
 func _hud_layout_rect(panel: Rect2) -> Rect2:
-	return Rect2(panel.position + Vector2(24, 306), Vector2(210, 44))
+	return Rect2(panel.position + Vector2(184, 306), Vector2(210, 44))
 
 func _reset_training_rect(panel: Rect2) -> Rect2:
-	return Rect2(panel.position + Vector2(24, 362), Vector2(210, 44))
+	return Rect2(panel.position + Vector2(24, 418), Vector2(210, 44))
 
 func _effects_rect(panel: Rect2) -> Rect2:
 	return Rect2(panel.position + Vector2(24, 250), Vector2(142, 44))
@@ -1398,6 +1375,7 @@ func _load_control_settings() -> void:
 	horizontal_fov = _config_float(config, VIEW_SECTION, "horizontal_fov", Duelist.DEFAULT_HORIZONTAL_FOV, Duelist.MIN_HORIZONTAL_FOV, Duelist.MAX_HORIZONTAL_FOV)
 	gyro_enabled = bool(config.get_value("controls", "gyro", gyro_enabled))
 	_aim_toggle = bool(config.get_value("controls", "aim_toggle", _aim_toggle))
+	ads_button_look = bool(config.get_value("controls", "ads_button_look", ads_button_look))
 	var feedback_preferences := load_feedback_preferences(config, effects_enabled, haptics_enabled)
 	effects_enabled = bool(feedback_preferences.effects_enabled)
 	haptics_enabled = false
@@ -1463,6 +1441,7 @@ func _save_control_settings() -> void:
 	config.set_value(VIEW_SECTION, "horizontal_fov", horizontal_fov)
 	config.set_value("controls", "gyro", gyro_enabled)
 	config.set_value("controls", "aim_toggle", _aim_toggle)
+	config.set_value("controls", "ads_button_look", ads_button_look)
 	config.set_value("controls", "stick_mode", "fixed" if _stick_mode == MobileTouchRouter.StickMode.FIXED else "floating")
 	save_feedback_preferences(config, effects_enabled, haptics_enabled)
 	config.set_value(LAYOUT_SECTION, "version", LAYOUT_VERSION)
