@@ -96,6 +96,7 @@ static func read(island: int) -> Dictionary:
 		"rest": float(cfg.get_value(k, "rest", 0.0)),
 		"feed": float(cfg.get_value(k, "feed", 0.0)),
 		"haste": float(cfg.get_value(k, "haste", 0.0)),
+		"rally": float(cfg.get_value(k, "rally", 0.0)),
 		"seeds": PackedInt32Array(cfg.get_value(k, "seeds", PackedInt32Array())),
 		"affinity": cfg.get_value(k, "affinity", {}),
 		"wear": cfg.get_value(k, "wear", ""),
@@ -113,6 +114,7 @@ static func write(island: int, state: Dictionary) -> void:
 	cfg.set_value(k, "rest", state["rest"])
 	cfg.set_value(k, "feed", state["feed"])
 	cfg.set_value(k, "haste", state["haste"])
+	cfg.set_value(k, "rally", state.get("rally", 0.0))
 	cfg.set_value(k, "seeds", state["seeds"])
 	cfg.set_value(k, "affinity", state["affinity"])
 	cfg.set_value(k, "wear", state["wear"])

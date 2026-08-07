@@ -494,6 +494,8 @@ var _focus := 0.0
 var _feed := 0.0
 var _haste := 1.0
 var _haste_left := 0.0
+var _rally_cooldown := 0.0
+var _rally_boost_left := 0.0
 var _meal_goal := 0
 var _meals_eaten := 0
 
@@ -518,6 +520,13 @@ const FOOD_RAIN := 24
 ## not quietly weakened here.
 const HASTE_MULTIPLIER := 3.0
 const HASTE_SECONDS := 10.0 * 60.0
+
+## A bell becomes available after a stretch of focus, then returns once an
+## hour has passed. It is a small encouragement rather than another economy.
+const RALLY_FIRST_SECONDS := 45.0 * 60.0
+const RALLY_COOLDOWN_SECONDS := 60.0 * 60.0
+const RALLY_MULTIPLIER := 1.35
+const RALLY_SECONDS := 5.0 * 60.0
 
 
 func _init(island := 0) -> void:
@@ -589,6 +598,14 @@ func build() -> void:
 
 func held() -> int:
 	return _elves.size()
+
+
+func focus_seconds() -> float:
+	return _focus
+
+
+func rest_seconds_remaining() -> float:
+	return _rest_left
 
 ## The fable can borrow the residents' stable identity without borrowing the
 ## builder's queue or tick. This keeps a migration recognisable after reload.
@@ -723,7 +740,13 @@ func _tick(delta: float) -> void:
 	if _haste_left > 0.0:
 		_haste_left = maxf(0.0, _haste_left - delta)
 		_dirty = true
-	var haste_target := HASTE_MULTIPLIER if _haste_left > 0.0 else 1.0
+	if _rally_cooldown > 0.0:
+		_rally_cooldown = maxf(0.0, _rally_cooldown - delta)
+		_dirty = true
+	if _rally_boost_left > 0.0:
+		_rally_boost_left = maxf(0.0, _rally_boost_left - delta)
+	var haste_target := HASTE_MULTIPLIER if _haste_left > 0.0 else \
+		(RALLY_MULTIPLIER if _rally_boost_left > 0.0 else 1.0)
 	# A short settling avoids the visible cut a direct 3x-to-1x change made to
 	# gait and hammering. The duration is still counted at full speed.
 	_haste = lerpf(_haste, haste_target, clampf(delta * 2.8, 0.0, 1.0))
@@ -793,6 +816,17 @@ func feed_ready() -> bool:
 	return _feed >= Feast.FILL_SECONDS and not resting()
 
 
+func rally_ready() -> bool:
+	return not resting() and _focus >= RALLY_FIRST_SECONDS \
+		and _rally_cooldown <= 0.0
+
+
+func rally_seconds_until_ready() -> float:
+	if _rally_cooldown > 0.0:
+		return _rally_cooldown
+	return maxf(0.0, RALLY_FIRST_SECONDS - _focus)
+
+
 func force_feed(at: float) -> void:
 	_feed = Feast.FILL_SECONDS * clampf(at, 0.0, 1.0)
 	_sync_feast()
@@ -816,6 +850,23 @@ func call_feast() -> bool:
 		add_child(meal.node)
 		_meals.append(meal)
 
+	return true
+
+
+func call_rally() -> bool:
+	if not rally_ready():
+		return false
+
+	_rally_cooldown = RALLY_COOLDOWN_SECONDS
+	_rally_boost_left = RALLY_SECONDS
+	var hearth := _on(_spot("hearth")) + Vector3(0.0, 0.25, 0.0)
+	_note(hearth)
+	for e in _elves:
+		_cheer(e, 0.35)
+		if _gap(e.at, _spot("hearth")) < 4.2:
+			e.stop_left = maxf(e.stop_left, 0.65)
+			e.stop_at = hearth
+	_dirty = true
 	return true
 
 
@@ -2578,6 +2629,7 @@ func _restore() -> void:
 	_rest_left = float(state["rest"])
 	_feed = float(state["feed"])
 	_haste_left = float(state["haste"])
+	_rally_cooldown = float(state.get("rally", 0.0))
 	_haste = HASTE_MULTIPLIER if _haste_left > 0.0 else 1.0
 	_residents = state["seeds"]
 	_resident_affinity = state["affinity"]
@@ -2642,7 +2694,7 @@ func _state() -> Dictionary:
 	return {
 		"done": done, "stock": stock, "focus": _focus,
 		"cycle": _cycle, "rest": _rest_left, "feed": _feed,
-		"haste": _haste_left,
+		"haste": _haste_left, "rally": _rally_cooldown,
 		"seeds": _residents, "affinity": _resident_affinity,
 		"wear": _wear.to_text(), "journey": _journey,
 	}

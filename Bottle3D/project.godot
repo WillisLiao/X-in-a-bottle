@@ -16,6 +16,7 @@ boot_splash/show_image=false
 window/size/viewport_width=2622
 window/size/viewport_height=1206
 window/stretch/mode="viewport"
+window/energy_saving/keep_screen_on=true
 
 ; Sensor landscape: either way up, following the phone, but never portrait. The
 ; phone lies on a desk while you work, so width is the axis with room in it -

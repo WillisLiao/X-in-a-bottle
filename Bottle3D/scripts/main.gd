@@ -1,22 +1,12 @@
 extends Node3D
 
-## Hobbitle.
+## Hobbitle is a free focus app.
 ##
-## The phone is the bottle, so nothing draws a vessel.
-## One world of five regions grows while its current place is open.
-## The hobbits build whether the phone is still, in a pocket, or being carried.
-##
-## **Nothing that has been built ever comes apart.**
-## Against a build that takes a week, a mechanic that can undo an evening is a
-## mechanic that teaches people not to open the app.
-##
-## Every hour of building they stop for a quarter of an hour, and that break only
-## runs down while you are here watching it. See `ElfWorld.WORK_PERIOD`.
-##
-## Device gravity only supplies the small tilt parallax.
-## It never changes the crew, work rate, or what the hobbits decide to do.
-## Drag turns the region and pinch comes in close enough to watch one elf's
-## hands.
+## Open it, leave it on the desk, and watch the hobbits and trolls build.
+## There is no account, score, purchase, or productivity system to manage.
+## The only useful state is the work the crew completes while this place is open.
+## The older map and expedition code stays dormant behind `FOCUS_ONLY`; it is
+## not part of the user's focus session.
 ##
 ## ## Zoom out is the map
 ##
@@ -34,6 +24,7 @@ extends Node3D
 ## worlds. See `Region`, `Country`, and `handoffs/DESIGN-one-world.md`.
 
 const TARGET_FPS := 30
+const FOCUS_ONLY := true
 
 enum ViewMode { FIELD, VILLAGE }
 
@@ -166,7 +157,7 @@ var _key_energy := 1.0
 var _fill_energy := 1.0
 var _ambient_energy := 1.0
 var _menu: Menu
-var _mode_label: Label
+var _focus_hud: FocusHud
 var _field_marks: FieldMarks
 var _expedition_marks: ExpeditionMarks
 var _sleeping_hill: SleepingHillVisual
@@ -280,6 +271,7 @@ func _ready() -> void:
 	_country = Country.new()
 	add_child(_country)
 	_field_marks.set_context(_camera, _country)
+	_apply_focus_mode()
 
 	_menu = Menu.new()
 	add_child(_menu)
@@ -299,7 +291,7 @@ func _ready() -> void:
 	if not _arg_fable.is_empty():
 		_apply_act_capture()
 
-	if _capture_screen == "world":
+	if FOCUS_ONLY or _capture_screen == "world":
 		_enter_village(_island)
 	elif _capture_screen == "map" or _capture_screen == "field":
 		_enter_field(_island)
@@ -338,6 +330,10 @@ func _process(delta: float) -> void:
 		_expedition_marks.queue_redraw()
 	_fade_back(delta)
 	_rest_light(delta)
+	if _focus_hud and _world != null and not _menu.showing():
+		_focus_hud.update_state(_world.focus_seconds(), _world.resting(),
+			_world.rest_seconds_remaining(), _world.feed_ready(),
+			_world.rally_ready())
 	_maybe_capture()
 
 	if _world == null or _menu.showing():
@@ -351,6 +347,15 @@ func _process(delta: float) -> void:
 
 
 # --- moving between places ---------------------------------------------------
+
+func _on_food_requested() -> void:
+	if _world != null and _world.call_feast():
+		_focus_hud.show_feedback("FOOD IS FALLING")
+
+
+func _on_rally_requested() -> void:
+	if _world != null and _world.call_rally():
+		_focus_hud.show_feedback("THE BELL IS RINGING")
 
 func _on_begin() -> void:
 	_enter_field(_island)
@@ -367,6 +372,9 @@ func _on_dismissed() -> void:
 ## rather than arriving at it. That is the difference between travelling and
 ## changing screens, and it is most of what the picker was deleted for.
 func _enter_field(region: int) -> void:
+	if FOCUS_ONLY:
+		_enter_village(region)
+		return
 	_prepare_region(region)
 	_view_mode = ViewMode.FIELD
 	_zoom = ZOOM_MAX
@@ -397,6 +405,8 @@ func _prepare_region(region: int) -> void:
 		_world._grow()
 
 	_country.show_from(_island)
+	if FOCUS_ONLY:
+		_country.visible = false
 	_apply_lighting(_world)
 	_camera.fov = _world.lens
 	_pan = Vector3.ZERO
@@ -423,6 +433,8 @@ func _enter_village(region: int) -> void:
 	_view_mode = ViewMode.VILLAGE
 	_zoom_to = 1.0
 	_menu.hide_all()
+	if _focus_hud:
+		_focus_hud.visible = true
 
 
 func _enter(region: int) -> void:
@@ -473,6 +485,21 @@ func _on_expedition_completed() -> void:
 	_sleeping_hill.raise_seed()
 	_expedition_marks.set_stage(_expedition_stage)
 
+
+func _apply_focus_mode() -> void:
+	# The builder is the product surface. The map and story layers remain in the
+	# project for their captures, but they do not interrupt a focus session.
+	if not FOCUS_ONLY:
+		return
+	_country.visible = false
+	_field_marks.visible = false
+	_expedition_marks.visible = false
+	_act_marks.visible = false
+	_sleeping_hill.visible = false
+	_rooted_gate.visible = false
+	_lost_lights.visible = false
+
+
 func _resolve_expedition(outcome: String) -> void:
 	if _expedition_stage != "choosing" or not _fable_state.resolve("sleeping_hill", outcome):
 		return
@@ -488,6 +515,16 @@ func _resolve_expedition(outcome: String) -> void:
 	_sync_act_state()
 
 func _sync_act_state() -> void:
+	if FOCUS_ONLY:
+		_act_fable = ""
+		_act_stage = ""
+		if _rooted_gate:
+			_rooted_gate.visible = false
+		if _lost_lights:
+			_lost_lights.visible = false
+		if _act_marks:
+			_act_marks.visible = false
+		return
 	_act_fable = FableCatalog.available(_fable_state)
 	_rooted_gate.visible = FableCatalog.unlocked(_fable_state, FableCatalog.ROOTED_GATE)
 	_lost_lights.visible = FableCatalog.unlocked(_fable_state, FableCatalog.LOST_LIGHTS)
@@ -728,6 +765,10 @@ func _pinch(span: float) -> void:
 		return
 	_dragged = true
 	_zoom_to = -1.0
+	if FOCUS_ONLY:
+		_zoom = clampf(_pinch_zoom * (_pinch_from / span), 0.72, 1.25)
+		_view_mode = ViewMode.VILLAGE
+		return
 	_zoom = clampf(_pinch_zoom * (_pinch_from / span), ZOOM_MIN, ZOOM_MAX)
 	if _view_mode == ViewMode.FIELD and _zoom < MAP_FROM:
 		_view_mode = ViewMode.VILLAGE
@@ -786,6 +827,10 @@ func _finish_press(at: Vector2) -> void:
 	if _dragged or _elapsed - _press_time > 0.6:
 		return
 	if at.distance_to(_press_at) > 40.0:
+		return
+	if FOCUS_ONLY:
+		if _focus_hud and _focus_hud.tap(at):
+			return
 		return
 
 	if _menu.showing():
@@ -961,16 +1006,11 @@ func _rest_light(delta: float) -> void:
 		clampf(delta * 1.6, 0.0, 1.0))
 
 
-## The one control left in the corner.
+## The focus layer.
 ##
-## There were two, stacked: "Islands", which went back to the picker, and
-## "Turn"/"Move" under it. The picker is gone and so is the word for it - the
-## way out is now pinching the world open, which is a gesture rather than a
-## button, and leaving a dead label there pointing at nothing would have been
-## worse than the gesture being quiet.
-##
-## Both of these are still owed as drawn icons in the top right rather than as
-## words in the bottom left. See `NEXT-SESSION-hobbitle-for-real.md`.
+## The scene gets only the small timer/status overlay it needs to read as a
+## focus app. Camera gestures stay available for looking around, but no map,
+## story target, or control label competes with the build.
 func _build_back() -> void:
 	var layer := CanvasLayer.new()
 	layer.layer = 110
@@ -987,20 +1027,14 @@ func _build_back() -> void:
 	_act_marks.lost_destination_chosen.connect(_resolve_lost_lights)
 	_act_marks.migration_tapped.connect(_begin_migration)
 	layer.add_child(_act_marks)
+	_field_marks.visible = not FOCUS_ONLY
+	_expedition_marks.visible = not FOCUS_ONLY
+	_act_marks.visible = not FOCUS_ONLY
 
-	# Which mode dragging is in right now, not which one the tap switches to -
-	# that is the way round people actually read a toggle.
-	_mode_label = Label.new()
-	_mode_label.text = "Turn"
-	_mode_label.position = Vector2(170.0, 1054.0)
-	_mode_label.add_theme_font_size_override("font_size", 40)
-	_mode_label.add_theme_color_override("font_color", Color("EFE3CB"))
-	_mode_label.add_theme_constant_override("shadow_offset_y", 2)
-	_mode_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.6))
-	_mode_label.modulate.a = 0.0
-	_mode_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-
-	layer.add_child(_mode_label)
+	_focus_hud = FocusHud.new()
+	_focus_hud.food_requested.connect(_on_food_requested)
+	_focus_hud.rally_requested.connect(_on_rally_requested)
+	add_child(_focus_hud)
 	add_child(layer)
 
 
@@ -1009,15 +1043,8 @@ func _build_back() -> void:
 ## minutes. It never goes to zero: a control you cannot see is a control that is
 ## not there.
 func _fade_back(delta: float) -> void:
-	if _mode_label == null:
-		return
-	var want := 0.0
-	if _world != null and not _menu.showing():
-		want = 0.34 if _drift > 0.0 else 0.13
+	# Focus mode has no persistent camera control label competing with the scene.
 	_drift = maxf(0.0, _drift - delta)
-	_mode_label.text = "Move" if _pan_mode else "Turn"
-	_mode_label.modulate.a = lerpf(_mode_label.modulate.a, want,
-		clampf(delta * 2.0, 0.0, 1.0))
 
 
 ## How far back the camera has to stand for the whole arc of regions to fit

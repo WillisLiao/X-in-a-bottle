@@ -69,14 +69,14 @@ func show_title() -> void:
 	rule.size = Vector2(2.0, 2.0)
 	root.add_child(rule)
 
-	var under := _label("The paths you walk become roads.", 46, Color(INK, 0.48))
+	var under := _label("Leave the app open. They will build.", 46, Color(INK, 0.48))
 	under.anchor_left = 0.0
 	under.anchor_right = 1.0
 	under.offset_top = 664.0
 	under.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	root.add_child(under)
 
-	_action = _label("Continue" if Progress.seen_title() else "Begin", 58,
+	_action = _label("Continue" if Progress.seen_title() else "Start", 58,
 		Color(INK, 0.86))
 	_action.anchor_left = 0.0
 	_action.anchor_right = 1.0
@@ -85,7 +85,7 @@ func show_title() -> void:
 	root.add_child(_action)
 
 	# The title names the premise, then gets out of the way before the field.
-	_hint = _label("Find what the road leaves behind.", 40, Color(INK, 0.30))
+	_hint = _label("A free focus timer with a living build scene.", 40, Color(INK, 0.30))
 	_hint.anchor_left = 0.0
 	_hint.anchor_right = 1.0
 	_hint.offset_top = 1000.0
