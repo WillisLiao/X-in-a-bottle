@@ -22,3 +22,8 @@ Bottle3D/.godot/
 Bottle3D/build/
 Riftline/.godot/
 Riftline/build/
+
+# Godot MCP dev tooling (local editor plugin, not game content)
+Riftline/addons/godot_ai/
+Riftline/.godot-ai-local.json
+/.setup-backups/
