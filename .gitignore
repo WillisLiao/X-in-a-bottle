@@ -18,8 +18,6 @@ xcuserdata/
 .DS_Store
 
 # Godot
-Bottle3D/.godot/
-Bottle3D/build/
 Riftline/.godot/
 Riftline/build/
 
