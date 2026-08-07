@@ -13,6 +13,18 @@ config/features=PackedStringArray("4.7", "Mobile")
 ; Competitive target: render and simulate at 120 Hz where the display allows.
 run/max_fps=120
 
+; Editor tooling only (godot-ai MCP plugin). The plugin registers this helper
+; itself when enabled; it is written here so the *running game process*, which
+; boots from this file rather than the editor's in-memory settings, actually
+; loads it. Ships in exported builds as a no-op when the addon is absent.
+[autoload]
+
+_mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/godot_ai/plugin.cfg")
+
 [display]
 
 [display/window]
